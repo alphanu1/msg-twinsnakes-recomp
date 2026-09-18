@@ -41,7 +41,7 @@ phase 3.
 |---|---|---|---|---|
 | 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
 | 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **boots — Konami logo at ~43 fps**; one interpreter fallback remains |
-| 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | blocked on 1 |
+| 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **started** — runtime skeleton, patch table, first OS shims |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
 | 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
 | 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 4 |
@@ -213,6 +213,15 @@ and its `OSReport` output matches Dolphin's.*
 
 Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 
+- [x] **Runtime skeleton and build** — `runtime/` with the design document's
+      layout, root CMake tree, `ctest` wired.
+- [x] **Guest memory** with explicit byte-swap accessors and the cached/uncached
+      alias folded, plus tests. Nothing casts a guest structure.
+- [x] **Patch table generated from `config/symbols/`** — the mechanism the
+      design document calls the single most important decision, using the same
+      `DOLRECOMP_ENABLE_REPLACEMENTS` hook phase 1 proved.
+- [x] **First OS shims**: `OSReport`, `OSGetTime`, `OSGetTick`,
+      `OSDisableInterrupts`, `OSEnableInterrupts`, `OSRestoreInterrupts`.
 - [ ] **OS** — fiber/ucontext scheduler running exactly one guest thread at a
       time, arena allocator over guest memory, monotonic clock scaled to the
       40.5 MHz timebase, alarms driven from the frame loop, REL loader with

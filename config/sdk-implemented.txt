@@ -1,0 +1,28 @@
+# SDK functions the native runtime implements.
+#
+# Each name here is looked up in config/symbols/ and routed to mgs_<name> via
+# the patch table, so the translated original never runs. Adding a name here
+# without writing mgs_<name> is a link error, which is the intended failure:
+# the table should never claim a function the runtime cannot service.
+#
+# Order follows the design document's phase 2: OS and DVD first because they
+# block boot, then PAD, with GX logged and discarded until phase 3.
+
+# --- OS: reporting -----------------------------------------------------------
+# OSReport first, and not for convenience. The phase 1 harness compares our
+# OSReport stream against Dolphin's at fixed frames; until this is native we
+# have no output channel to compare.
+OSReport
+
+# --- OS: time ----------------------------------------------------------------
+# The guest timebase runs at 40.5 MHz (162 MHz bus / 4). Everything the game
+# schedules derives from these.
+OSGetTime
+OSGetTick
+
+# --- OS: interrupts ----------------------------------------------------------
+# Not real interrupt masking: guest threads are cooperative and only one runs
+# at a time, so these maintain the flag the game reads back and nothing more.
+OSDisableInterrupts
+OSEnableInterrupts
+OSRestoreInterrupts

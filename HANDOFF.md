@@ -1195,5 +1195,58 @@ exactly the independent check phase 1 is for.
 
 *Recorded as a decision to take, not taken.*
 
+**F38 — phase 2 started: the runtime is ours from here.**
+Decision taken deliberately (F37): phase 1 proved what it exists to prove —
+1,232,487 instructions translated with none unknown, 147M executed natively,
+zero interpreter fallback — and its remaining blocker is inside ModernGekko's
+FIFO emulation, which phases 2–5 delete. Everything built from now survives
+into the port.
+
+*Standing:* `runtime/` in the design document's layout, root CMake tree, tests
+under `ctest`, first tests passing.
+
+**Guest memory** (`runtime/memory/`) is the foundation everything else sits on,
+so it was built carefully rather than quickly. Every accessor byte-swaps
+explicitly; the cached `0x8...` and uncached `0xC...` aliases fold to the same
+storage, because the game uses both for one buffer and an accessor that knew
+only the cached form would fail on display lists and DMA specifically; and out
+of range access returns zero rather than walking the block, since a guest
+pointer is not trusted. **Nothing casts a guest structure to a host one** — a
+host struct has host endianness and host padding, and the guest's does not.
+
+*Tested first and properly, for a specific reason:* a wrong-endian access does
+not crash, it returns a plausible number. That class of bug surfaces hours
+later as a divergence from Dolphin rather than as a failure at the point of
+the mistake.
+
+**The patch table** (`tools/gen-patch-table.py`) is generated straight from
+`config/symbols/` and is the mechanism the design document calls the single
+most important decision in the architecture. It reuses the exact hook phase 1
+proved: `dolrecomp_dispatch_replacement`, consulted before the translated
+code's own table, so returning a native implementation means the original
+never runs. Sorted and binary-searched rather than switched, because it sits in
+the hot dispatch path.
+
+Adding a name to `config/sdk-implemented.txt` without writing `mgs_<name>` is a
+link error by design: the table must never claim a function the runtime cannot
+service.
+
+**First six OS shims.** `OSReport` came first, and not for convenience — the
+design document's whole test strategy is diffing `OSReport` streams against
+Dolphin at fixed frames, so until it is native and captured there is nothing to
+compare. It walks the PowerPC EABI varargs by hand (r3 the format, r4–r10, then
+the guest stack) because the arguments are in guest memory in guest byte order
+and cannot be handed to the host's `vprintf`.
+
+*A gap left visible rather than papered over:* float arguments travel in f1..
+under the EABI, not the GPRs, and are not wired yet. They print as `<f>` so a
+message stays readable and the gap is obvious, instead of silently printing a
+wrong number.
+
+*Time is a tick count the frame loop advances, never a host clock reading.*
+That is a correctness requirement: replaying a recorded input sequence and
+comparing guest memory at fixed frames only works if guest time is a function
+of frames rather than of how fast the host ran.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
