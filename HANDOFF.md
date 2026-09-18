@@ -664,5 +664,34 @@ recompiler consumes.
 **29.5% of the SDK boundary is the real progress number**, and the honest read
 is that phase 0 is roughly a third done by the measure that matters.
 
+**F22 — library-locality attribution tops out at 17%. Do not retry it.**
+SDK libraries link contiguously, so an unnamed function bracketed by named
+functions of one library should be attributable to it.
+`tools/attribute-library.py` does that, and reaches **40 of 237** unnamed SDK
+entry points.
+
+*The useful part:* **29 unnamed GX functions carrying 199 call sites** —
+renderer entry points the engine demonstrably uses, which phase 3 must
+implement whatever they are called.
+
+*Why it stops there, and why tuning will not help:*
+
+- **Libraries genuinely interleave.** `SI` sits entirely inside `OS`'s span.
+  Only `TRK`, `EXI` and `SI` have ranges overlapping nothing, and they are the
+  libraries that matter least.
+- **Naming density is too low.** At 40% of the DOL named, consecutive named
+  functions often belong to different libraries, so the bracket test refuses —
+  197 of 237 landed on an apparent boundary.
+
+*Two fixes that were necessary but not sufficient, recorded so they are not
+re-derived:* `DBG` and `EXI2_` had to be split from `DB` and `EXI` (they are
+the debugger mailbox library, 190 KB away), and ranges had to be trimmed so one
+misfiled symbol could not stretch a library across the binary — `__DBVECTOR`
+alone was swallowing DVD, VI and GX.
+
+**The remaining 237 need dynamic information**, not more static inference. A
+Dolphin SDK-call log names an entry point from the call itself rather than from
+its neighbours, and phase 2 needs it regardless. That is the next move.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -249,6 +249,56 @@ Accepted, each verified instruction-for-instruction against the SDK source:
 **Provenance:** the name comes from a public clean-room decompilation; the
 confirmation that it belongs at that address comes from our own binary.
 
+## Stage 5c — Attribute by library locality · **DONE (limited result)**
+
+**In:** the symbol map + the engine's call sites. **Out:** a library for 40 of
+the 237 unnamed SDK entry points. **Assigns no names.**
+
+SDK libraries link contiguously, so an unnamed function surrounded by named
+functions of one library is probably in it.
+
+```sh
+tools/attribute-library.py --symbols config/symbols/main.dol.symbols.txt \
+    --asm build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s
+```
+
+```
+SDK entry points the engine calls, unnamed     237
+  attributed to a library                       40  (17%)
+  on a library boundary (left alone)           197
+
+library    functions  call sites
+GX                29         199
+OS                 7          13
+PS                 2          32
+VI                 1           2
+DVD                1           1
+```
+
+**The useful part: 29 unnamed GX functions carrying 199 call sites.** Those are
+renderer entry points the engine demonstrably uses, and phase 3 has to
+implement them whatever they turn out to be called.
+
+**The honest part: 17% is this technique's ceiling, and it is recorded so it is
+not retried.** Two things defeat it, and neither is fixable by tuning:
+
+- **Libraries genuinely interleave.** `SI` sits entirely inside `OS`'s address
+  span. Only `TRK`, `EXI` and `SI` have ranges that overlap nothing, and those
+  are the libraries we care least about.
+- **Naming density is too low.** With 40% of the DOL named, consecutive named
+  functions frequently belong to different libraries, so the bracket test
+  refuses — 197 of 237 landed on an apparent boundary.
+
+Two fixes were tried and are worth not repeating: separating `DBG`/`EXI2_` from
+`DB`/`EXI` (they are the debugger mailbox library and live 190 KB away), and
+trimming range outliers so one misfiled symbol could not stretch a range across
+the binary — `__DBVECTOR` alone was swallowing DVD, VI and GX. Both were
+necessary and neither was sufficient.
+
+**The remaining 237 need dynamic information.** A Dolphin SDK-call log gives
+each entry point a name from the call itself rather than from its neighbours,
+and it is required for phase 2 regardless.
+
 ## How complete is this?
 
 "Percent decompiled" has no single honest answer for a recompilation, because
