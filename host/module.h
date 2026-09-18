@@ -51,6 +51,8 @@ void      mgs_module_set_pc(void* cpu_state, uint32_t pc);
 
 /* Host-side handling of instructions DolRecomp defers - SPR access and cache
  * maintenance. Installed onto a CPU state before running it. */
+struct MgsMmio;
+struct MgsMmio* mgs_host_mmio(void);
 void          mgs_host_install_spr_handler(void* cpu);
 unsigned long mgs_host_spr_handled(void);
 unsigned long mgs_host_spr_unknown(void);

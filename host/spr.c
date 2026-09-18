@@ -17,6 +17,7 @@
  * call came from.
  */
 #include "module.h"
+#include "platform/mmio.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,11 +108,39 @@ static void host_instruction_fallback(void* cpu, uint32_t insn, uint32_t cia)
 }
 
 #define CPU_INSTRUCTION_FALLBACK 3432u
+/* DolRecomp routes any access outside RAM through these. Without them every
+ * hardware register reads as zero, and the SDK's boot is full of loops
+ * waiting for a bit to change - some exit on zero by luck, the rest spin. */
+#define CPU_EXTERNAL_READ        3400u
+#define CPU_EXTERNAL_WRITE       3408u
+
+static MgsMmio s_mmio;
+
+MgsMmio* mgs_host_mmio(void);
+MgsMmio* mgs_host_mmio(void) { return &s_mmio; }
+
+static uint32_t host_external_read(void* cpu, uint32_t addr, unsigned size)
+{
+    (void)cpu;
+    return mgs_mmio_read(&s_mmio, addr, size);
+}
+
+static void host_external_write(void* cpu, uint32_t addr, uint32_t value, unsigned size)
+{
+    (void)cpu;
+    mgs_mmio_write(&s_mmio, addr, value, size);
+}
 
 void mgs_host_install_spr_handler(void* cpu)
 {
     void (*fn)(void*, uint32_t, uint32_t) = host_instruction_fallback;
+    uint32_t (*rd)(void*, uint32_t, unsigned) = host_external_read;
+    void (*wr)(void*, uint32_t, uint32_t, unsigned) = host_external_write;
+
     memcpy((uint8_t*)cpu + CPU_INSTRUCTION_FALLBACK, &fn, sizeof fn);
+    memcpy((uint8_t*)cpu + CPU_EXTERNAL_READ, &rd, sizeof rd);
+    memcpy((uint8_t*)cpu + CPU_EXTERNAL_WRITE, &wr, sizeof wr);
+    mgs_mmio_init(&s_mmio);
 
     /* HID0 and HID2 come out of reset with the cache and paired singles
      * already enabled on a GameCube; the SDK reads them, sets bits and writes

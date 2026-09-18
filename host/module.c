@@ -11,6 +11,7 @@
  * patch table.
  */
 #include "module.h"
+#include "platform/mmio.h"
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -191,6 +192,12 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 
         recent[recent_n % RECENT] = pc;
         ++recent_n;
+
+        /* Advance the video beam on a cadence, so a guest polling for retrace
+         * sees time pass at the rate the host runs rather than as fast as it
+         * can spin. Tied to steps rather than wall clock for now: a replayed
+         * run must be reproducible, and wall clock is not. */
+        if ((r.steps % 2000ull) == 0ull) mgs_mmio_tick_frame(mgs_host_mmio());
 
         if (r.steps < trace_steps)
             fprintf(stderr, "  step %4llu  pc = 0x%08X\n",

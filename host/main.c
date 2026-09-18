@@ -15,6 +15,7 @@
 #include "platform/jobs.h"
 #include "module.h"
 #include "platform/sdl_video.h"
+#include "platform/mmio.h"
 #include <SDL3/SDL.h>
 
 #include <stdio.h>
@@ -282,7 +283,7 @@ int main(int argc, char** argv)
                     if (!headless) { overlay_draw(1); mgs_video_present(); }
                     printf("\nrunning from 0x%08X ...\n\n", mod.entry_point);
                     {
-                        MgsRunResult r = mgs_module_run(&mod, cpu, 2000000ull);
+                        MgsRunResult r = mgs_module_run(&mod, cpu, 40000000ull);
                         static const char* why[] = {
                             "no code for that address",
                             "guest is spinning",
@@ -314,6 +315,17 @@ int main(int argc, char** argv)
                         overlay_line("STOP: %s", why[r.stop]);
                         printf("SDK calls served natively: %lu\n",
                                mgs_host_patched_calls());
+                        {
+                            struct MgsMmio* mm = mgs_host_mmio();
+                            printf("mmio: %llu reads, %llu writes, %llu GX FIFO bytes\n",
+                                   (unsigned long long)mm->reads,
+                                   (unsigned long long)mm->writes,
+                                   (unsigned long long)mm->wgpipe_bytes);
+                            overlay_line("MMIO R:%llu W:%llu FIFO:%llu",
+                                   (unsigned long long)mm->reads,
+                                   (unsigned long long)mm->writes,
+                                   (unsigned long long)mm->wgpipe_bytes);
+                        }
                         printf("host instructions handled: %lu  (unhandled: %lu)\n",
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
                         printf("system calls serviced: %llu\n",

@@ -1868,5 +1868,62 @@ is waiting for hardware that does not exist yet.
 the CP registers are what the remaining OS init, the frame loop and eventually
 GX all talk to.
 
+**F56 — a memory-mapped I/O layer, and the pattern that runs through it.**
+`runtime/platform/mmio.c` services everything at `0xCC000000` through the
+`external_read`/`external_write` hooks DolRecomp routes non-RAM access to.
+Nothing had filled them, so every hardware register read as zero.
+
+*Unmodelled registers read back their last written value*, which is a better
+default than zero: a great deal of SDK code writes a register and reads it back
+to confirm, and honouring that removes a whole class of false stalls for free.
+
+**The pattern that keeps recurring: set-a-bit-and-wait.** Software sets a start
+bit, hardware clears it — or sets a completion flag — when the operation
+finishes. A register that merely remembers what was written never completes
+anything, and the SDK spins. Three of these were found by walking into them one
+at a time:
+
+| register | bit | what spun on it |
+|---|---|---|
+| `EXIxCR` | TSTART | `EXISync` |
+| `DSPCR` | RES | `__OSInitAudioSystem`'s reset wait |
+| `AR_DMA_CNT` → `DSPCR` ARINT | completion | the ARAM DMA wait |
+
+Completing these instantly is honest rather than a shortcut: there is no
+physical device on the other end and no bus latency to reproduce. ARAM in
+particular is a real 16 MB store in this runtime, so a DMA has genuinely
+already happened by the time the guest looks.
+
+*One register must MOVE rather than merely be plausible:* the video
+interface's half-line counter, which the SDK polls to wait for retrace. It is
+advanced by the host's own cadence rather than by reads, so a guest polling it
+sees time pass at the rate the host runs — not as fast as it can spin.
+
+**F57 — where the boot is actually blocked now, and it is not MMIO.**
+
+With MMIO in, the boot runs **40,000,000 steps without faulting**, serving
+**13,328,496 SDK calls natively**, with 173 host instructions and nothing
+unhandled. It sits in `__OSInitAudioSystem +0xE8`.
+
+*The counter that identified the real problem:* **32 MMIO reads** across those
+40 million steps. A loop polling a hardware register would have produced
+millions. So the loop is **not** reading hardware — it is polling a location in
+RAM, waiting for a value that only an **interrupt handler** would write.
+
+**This host delivers no interrupts.** That is the gap: the SDK's boot sets
+hardware in motion and then waits for the completion interrupt to run a handler
+that updates memory. Servicing the register is not enough; something has to
+deliver the interrupt.
+
+*What that needs, and it is well defined:* the host's frame loop raises VI
+retrace, DSP and DVD interrupts on a cadence; `__OSInterruptInit`'s registered
+handlers are invoked through the same dispatch path everything else uses; and
+`OSDisableInterrupts`/`OSRestoreInterrupts` — already native — gate delivery so
+the guest's critical sections still mean something.
+
+**That is the next piece, and it is the last structural one before the frame
+loop.** Everything after it — VI presenting an XFB, the game reaching its main
+loop — depends on interrupts existing.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

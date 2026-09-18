@@ -12,6 +12,7 @@ add_library(mgs_runtime STATIC
   os/ppc_shims.c
   os/patch_table.c
   platform/jobs.c
+  platform/mmio.c
   dvd/fst.c
   dvd/disc.c
   dvd/disc_locate.c
