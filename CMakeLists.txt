@@ -14,6 +14,15 @@ endif()
 # Clang is preferred for the generated code - the design document notes MSVC is
 # slow on the multi-MB generated files - but the runtime itself builds with
 # anything C11.
+# Discovered here, not in runtime/, so tests/ and tools/ can see the result.
+# A find_package() in a subdirectory sets SDL3_FOUND only in that scope.
+find_package(SDL3 QUIET)
+if(SDL3_FOUND)
+  message(STATUS "SDL3 found: gamepad input enabled")
+else()
+  message(STATUS "SDL3 not found: building without the SDL input backend")
+endif()
+
 add_subdirectory(runtime)
 
 # game/ holds game-specific glue: the module dispatch router, and later the

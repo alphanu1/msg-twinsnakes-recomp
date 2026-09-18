@@ -1626,5 +1626,36 @@ game can tell "no controller" from "controller at rest".
 input backend compiles; absent, the runtime still builds and every test still
 runs. The mapping layer has no SDL dependency at all.
 
+**F50 — live controller probe, and what it proved on this machine.**
+`tools/probes/pad_probe.c`, built alongside the tests but **not a test** — it
+needs hardware, and a test that needs hardware is a test that does not run in
+CI. `--sample N` records the extremes reached over N seconds rather than
+printing a live line, because the live display overwrites itself with a
+carriage return and is unreadable once piped, and because "did every axis
+reach full range and did the trigger click latch" is the question worth
+answering.
+
+*On this machine, with a Razer Wolverine V2 Pro connected:* SDL3 enumerates it,
+names it correctly and reports it connected — but every axis reads 0.
+**Traced below SDL: reading `/dev/input/js1` raw for six seconds while the
+stick was moved produced no events at all.** The device node exists and is
+readable (logind ACLs, so the earlier "not in the input group" reading was a
+red herring), but the hardware is not transmitting on that interface.
+
+So this is the controller's mode or interface, not the port. Likely the
+Wolverine's PC/PS5 mode switch, a sleeping wireless dongle, or the axes
+arriving on a different one of the several interfaces it exposes.
+
+**Nothing about it blocks the runtime.** The mapping layer is pure and tested
+without hardware; SDL3 integration is verified as far as enumerating and
+opening a device and correctly reporting `PAD_ERR_NO_CONTROLLER` for an empty
+port. The probe is committed so the end-to-end check can be re-run the moment a
+controller does report.
+
+*Build note:* `find_package(SDL3)` moved to the top-level `CMakeLists.txt`.
+In a subdirectory it sets `SDL3_FOUND` only in that scope, so `tests/` could
+not see it and the probe target was silently never created — no error, just a
+missing binary.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

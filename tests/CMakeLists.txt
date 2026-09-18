@@ -34,3 +34,9 @@ add_test(NAME disc_swap COMMAND test_disc_swap WORKING_DIRECTORY ${CMAKE_SOURCE_
 add_executable(test_pad test_pad.c)
 target_link_libraries(test_pad PRIVATE mgs_runtime m)
 add_test(NAME pad COMMAND test_pad)
+
+# Not a test: needs hardware. Built so it is always compilable, run by hand.
+if(SDL3_FOUND)
+  add_executable(pad_probe ${CMAKE_SOURCE_DIR}/tools/probes/pad_probe.c)
+  target_link_libraries(pad_probe PRIVATE mgs_runtime m)
+endif()

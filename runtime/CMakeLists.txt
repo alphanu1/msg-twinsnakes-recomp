@@ -3,13 +3,6 @@
 # No game knowledge and no ModernGekko dependency: phase 1 borrowed a
 # Dolphin-derived runtime to prove the translated CPU code, and this replaces
 # it. Nothing here includes a ModernGekko or Dolphin header.
-find_package(SDL3 QUIET)
-if(SDL3_FOUND)
-  message(STATUS "SDL3 found: gamepad input enabled")
-else()
-  message(STATUS "SDL3 not found: building without the SDL input backend")
-endif()
-
 add_library(mgs_runtime STATIC
   memory/guest.c
   os/os_report.c
