@@ -854,5 +854,45 @@ want of the overlay. **That is the expected outcome**, and it still proves the
 translation and the runtime work along the boot path. With `--map` in place the
 failure will name the SDK function rather than an address.
 
+**F28 — phase 1 boots. The game renders.** `tools/phase1-setup.sh` then
+`tools/phase1-run.sh`: ModernGekko loads `gGGSPA4_recomp.so` at
+`entry=0x80005240` — which is `__start` in our symbol map, so the entry point
+agrees — and the game reaches the **Konami logo at roughly 43 fps**.
+
+That is recompiled PowerPC executing as native code and driving a real
+renderer. The CPU-side feasibility question is now answered in practice, not
+just on paper.
+
+**This is not our runtime.** ModernGekko is Dolphin-derived: the log shows
+`radv`, Dolphin's Vulkan backend. **No SDL3 is involved yet** — SDL3 and our own
+SDK shims are phase 2. Phase 1 is deliberately throwaway and exists only to
+prove the translated CPU code before our own code can be blamed for anything.
+
+**F29 — one chunk falls back to the interpreter, and it is worth fixing.**
+
+```
+[staticrecomp] SMC: chunk [0x800455E0,0x800495E0) hash mismatch;
+               interpreter until next invalidation
+```
+
+Phase 1's exit criterion is *no interpreter fallback on the boot path*, so this
+is exactly what phase 1 is for. The symbol map identifies the cause precisely:
+
+- The chunk holds **46 named functions**, opening with `GXSetFogRangeAdj`,
+  `GXSetBlendMode`, `GXSetColorUpdate`, `GXSetZMode` and closing with the
+  `EXI2_*` debugger-mailbox functions, `AMC_IsStub` and `Hu_IsStub`.
+- **All 10 of DolRecomp's SMC-flagged addresses inside it sit in the
+  `Hu_IsStub` region** (`0x80048ED4`–`0x80048FE0`).
+
+So the runtime patching is **stub replacement in the AMC/Hu area** — the SDK
+overwriting its own stubs, which is legitimate and expected. The cost is that
+it invalidates the whole 16 KB chunk, dragging **a dozen GX functions into the
+interpreter with it** purely because they share a chunk with the patched stubs.
+
+*Two routes, and neither needs the game changed:* finer chunk granularity so a
+stub patch invalidates only its own neighbourhood, or treating the AMC/Hu stub
+region as data rather than code so its hash is not covered. The second looks
+cleaner and matches what the stubs actually are.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

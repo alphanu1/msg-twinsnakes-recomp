@@ -40,7 +40,7 @@ phase 3.
 | Phase | Goal | Exit criterion | Estimate | State |
 |---|---|---|---|---|
 | 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
-| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **in progress** — both modules recompile, 0 unknown instructions |
+| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **boots — Konami logo at ~43 fps**; one interpreter fallback remains |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | blocked on 1 |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
 | 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
@@ -193,8 +193,12 @@ fallback hits on the boot path.*
       reimplement first (F27).
 - [ ] Wire the REL: ModernGekko hardcodes `files/_Main.rel`; ours is
       `files/shared/mgso_pal.rel`.
-- [ ] Log every interpreter-fallback hit. The boot path must reach zero; the
-      list of everything else is the phase-2 and phase-3 backlog.
+- [x] **It boots.** Module loads at `entry=0x80005240` (`__start`), Konami logo
+      renders at ~43 fps.
+- [ ] **One interpreter fallback to clear**: chunk `[0x800455E0,0x800495E0)`,
+      caused by SDK stub patching in the `Hu_IsStub`/`AMC_IsStub` region, which
+      invalidates 16 KB and drags a dozen GX functions into the interpreter
+      with it (F29). Exit criterion needs this at zero.
 - [ ] Stand up the differential harness: `OSReport` diff and guest-memory
       checksums at fixed frames, Dolphin vs. port. When it reports a
       divergence, decompile the *caller* and read what it does with the value —
