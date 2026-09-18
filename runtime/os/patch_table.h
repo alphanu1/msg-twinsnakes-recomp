@@ -22,5 +22,7 @@ void mgs_DVDOpen(CPUState* ctx);
 void mgs_DVDClose(CPUState* ctx);
 void mgs_DVDReadAsyncPrio(CPUState* ctx);
 void mgs_DVDGetCommandBlockStatus(CPUState* ctx);
+void mgs_DVDGetCurrentDiskID(CPUState* ctx);
+void mgs_DVDCompareDiskID(CPUState* ctx);
 
 #endif

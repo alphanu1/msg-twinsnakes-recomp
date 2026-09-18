@@ -244,8 +244,10 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 - [x] **DVD shims wired into the patch table** — `DVDConvertPathToEntrynum`,
       `DVDOpen`, `DVDFastOpen`, `DVDClose`, `DVDReadAsyncPrio`,
       `DVDGetCommandBlockStatus`. 12 SDK functions patched (F47).
-- [ ] **Virtual two-disc mount** — mount both images, report cover open /
-      disc 2 / cover closed on the SDK's timing when the game asks.
+- [x] **Virtual two-disc mount** — and it needed no drive-state machine. The
+      engine uses `DVDGetCurrentDiskID` + `DVDCompareDiskID`, not cover
+      polling, so the swap is answering differently (F48). Phase 0 open
+      question closed.
 - [ ] Disc path resolution: explicit argument, then config, then conventional
       locations. The image is never required to sit beside the executable. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.

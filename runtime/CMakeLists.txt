@@ -14,7 +14,8 @@ add_library(mgs_runtime STATIC
   dvd/disc.c
   dvd/disc_locate.c
   dvd/dvd.c
-  dvd/dvd_shims.c)
+  dvd/dvd_shims.c
+  dvd/disc_swap.c)
 
 target_include_directories(mgs_runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"

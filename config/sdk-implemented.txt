@@ -42,3 +42,11 @@ DVDReadAsyncPrio
 DVDGetCommandBlockStatus
 # DVDGetFileInfoStatus is a real function but is not yet in the symbol map -
 # a genuine gap, not a macro. Restore this line once alignment reaches it.
+
+# --- DVD: the two-disc swap -------------------------------------------------
+# MEASURED, not assumed: of every DVD function in the binary the engine calls
+# five, and the disc-change path is these two. No cover polling, no drive
+# state machine - the game asks which disc is present and compares. So the
+# swap is answering differently. See runtime/dvd/disc_swap.c.
+DVDGetCurrentDiskID
+DVDCompareDiskID

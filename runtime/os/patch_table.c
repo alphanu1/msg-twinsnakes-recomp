@@ -21,9 +21,11 @@ static const MgsPatch k_patches[] = {
     {0x80026DA0u, mgs_DVDClose},   /* DVDClose */
     {0x80026FE8u, mgs_DVDReadAsyncPrio},   /* DVDReadAsyncPrio */
     {0x80029360u, mgs_DVDGetCommandBlockStatus},   /* DVDGetCommandBlockStatus */
+    {0x80029804u, mgs_DVDGetCurrentDiskID},   /* DVDGetCurrentDiskID */
+    {0x80029DE8u, mgs_DVDCompareDiskID},   /* DVDCompareDiskID */
 };
 
-#define MGS_PATCH_COUNT 12u
+#define MGS_PATCH_COUNT 14u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {

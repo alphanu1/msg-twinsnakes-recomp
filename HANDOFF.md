@@ -1549,5 +1549,45 @@ resolves the offset back to an FST entry to learn which file to read. That
 works because a file's offset is unique on the disc, and it avoids keeping
 host-side state keyed on a guest pointer the game is free to move or reuse.
 
+**F48 — the two-disc swap is far simpler than planned, because the engine
+was measured rather than assumed.**
+
+Phase 0 left this open: *"which SDK disc-change path it uses
+(`DVDGetCurrentDiskID`, cover-status polling)"*, and the design document
+budgeted for the hard answer — reporting cover-open, disc-inserted and
+cover-closed on the SDK's own timing.
+
+The call graph settles it. Of every DVD function in the binary, **the engine
+calls five**, and the disc-change path is two of them:
+
+| | call sites |
+|---|---|
+| `DVDGetCurrentDiskID` | 2 |
+| `DVDCompareDiskID` | 2 |
+
+**No cover polling. No `DVDGetDriveStatus`, no `DVDLowWaitCoverClose`.** The
+game asks which disc is present and compares it against the one it wants. So
+the swap is: *answer differently*. There is no drive-state machine to model and
+no timing to match — and both would have been guesswork, since the SDK's real
+timing is not documented anywhere we have.
+
+**This closes a phase-0 open question and deletes a planned piece of work.**
+
+*Implementation:* `DVDDiskID` is 32 bytes at the start of MEM1, where the
+apploader leaves the boot header; `diskNumber` is one byte at offset 6.
+`DVDCompareDiskID` compares the six identity bytes only — **`gameVersion` and
+the streaming fields are deliberately excluded**, because the SDK ignores them
+and a game asking for "disc 2" would otherwise be refused by a version byte it
+never set. When the ids differ *only* in disc number and the other disc is
+mounted, that is the swap request: satisfy it, republish the identity, answer
+yes.
+
+*Tested both ways*, since not every checkout will have disc 2 extracted:
+mounted, the swap succeeds and the published identity follows it; unmounted,
+it is refused and the active disc does not change. A different game is never a
+match whatever the disc number.
+
+**14 SDK functions now patched.**
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
