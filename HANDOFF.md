@@ -784,5 +784,44 @@ built alongside it. DolRecomp supports RELs directly (`--rel-base`, and a REL
 or REL folder as input), so this is a wiring problem rather than a missing
 capability.
 
+**F25 — the symbol map feeds DolRecomp's patch table directly, and that is
+the mechanism the design document describes.** `tools/make-map.py` emits a
+linker MAP from `config/symbols/`; `dolrecomp --map` consumes it and emits
+`generated_symbols.h`, a name-to-address table the runtime hooks to route SDK
+calls to native implementations instead of translated ones.
+
+**68 of the 69 GX functions the game uses are exposed in that table.** So the
+path from symbol recovery to native SDK replacement is wired end to end, and
+phase 2 has its hook points already.
+
+`--map` is DOL input only, which suits us exactly: the REL has no names to
+give it, and the SDK boundary we want to hook is entirely in the DOL (F9).
+
+A practical benefit for phase 1: generated code and backtraces name the SDK
+function rather than `fn_8003F070`, so a boot failure says where it failed.
+
+**F26 — a bigger symbol map doubled what the classifier can see.** Re-running
+`tools/classify-rel.py` against the 1,067-symbol map:
+
+| | before | after |
+|---|---|---|
+| engine functions calling named SDK | 249 | **528** |
+| distinct SDK functions called | 106 | **151** |
+| GX surface known to be used | 69 | **81** |
+
+**`GXCallDisplayList` is now visible**, which closes a gap that was previously
+only a caveat: display lists were known to bypass the API and were therefore
+unmeasurable. They are used, so the FIFO command parser is confirmed necessary
+rather than merely prudent. Also newly visible: `GXLoadPosMtxImm`,
+`GXSetProjection`, `GXProject`, `GXInitLightSpot`, `GXInitLightDistAttn` — the
+transform and lighting pipeline.
+
+**And a whole category appeared: 265 engine functions doing matrix maths**,
+which no previous pass could see. The heaviest callers are `PSVECDotProduct`
+(127 sites), `PSVECScale` (80), `PSVECSubtract` (46), `PSVECAdd` (44),
+`PSMTXConcat` (16). The design document mentions optionally replacing the
+paired-single matrix library with SSE/NEON; this says that is a performance
+lever with real weight behind it, not a footnote.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

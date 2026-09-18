@@ -16,16 +16,25 @@
 #       --symbols config/symbols/main.dol.symbols.txt --out build/phase0/rel-areas.txt
 #
 GXBegin
+GXCallDisplayList
 GXClearVtxDesc
 GXCopyTex
 GXEnableTexOffsets
 GXFlush
+GXGetProjectionv
 GXGetScissor
 GXGetTexBufferSize
+GXGetTexObjData
 GXGetTexObjFmt
+GXGetTexObjHeight
+GXGetTexObjWidth
 GXInitLightAttn
 GXInitLightColor
+GXInitLightDir
+GXInitLightDistAttn
 GXInitLightPos
+GXInitLightSpot
+GXInitSpecularDir
 GXInitTexObj
 GXInitTexObjCI
 GXInitTexObjLOD
@@ -33,9 +42,11 @@ GXInitTlutObj
 GXInvalidateTexAll
 GXInvalidateVtxCache
 GXLoadLightObjImm
+GXLoadPosMtxImm
 GXLoadTexObj
 GXLoadTlut
-GXPixModeSync
+GXProject
+GXResetWriteGatherPipe
 GXSetAlphaCompare
 GXSetAlphaUpdate
 GXSetArray
@@ -61,6 +72,7 @@ GXSetNumTevStages
 GXSetNumTexGens
 GXSetPixelFmt
 GXSetPointSize
+GXSetProjection
 GXSetScissor
 GXSetScissorBoxOffset
 GXSetTevAlphaIn

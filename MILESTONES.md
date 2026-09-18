@@ -126,8 +126,12 @@ more.
 - [x] **221 engine functions classified by SDK usage**, 177 of them renderer
       code. Signature matching and debug strings both proved dead ends there
       (only ~25 names in strings); cross-module SDK calls are what scales.
-- [x] **The GX surface the game actually uses is known: 69 functions** of the
+- [x] **The GX surface the game actually uses is known: 81 functions** of the
       SDK's ~200 — `config/gx-surface-used.txt`. This is the phase 3 scope.
+- [x] **Display lists confirmed used** (`GXCallDisplayList`), so the FIFO
+      command parser is required rather than merely prudent.
+- [x] **The symbol map feeds DolRecomp's patch table** via `tools/make-map.py`
+      and `--map`; 68 of 69 used GX functions are exposed as hook points.
 - [ ] Name the 266 unnamed DOL functions the REL calls directly. Each is an SDK
       entry point the engine demonstrably uses; these are the highest-value
       naming targets left.
