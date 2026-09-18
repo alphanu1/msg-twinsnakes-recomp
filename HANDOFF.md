@@ -341,5 +341,67 @@ Disc layout for reference: `demo.dat` 426 MB, `stage.dat` 199 MB,
 `shared/vox.dat` 97 MB, `shared/movie.dat` 95 MB, `shared/codec.dat` 12 MB,
 `shared/face.dat` 7 MB.
 
+**F11 — Mario Kart Double Dash's decomp is our signature source, and it is an
+exact SDK-build match.** This answers the GX gap from F9.
+
+`doldecomp/mkdd` links **the same Dolphin SDK `0x2301`, with the same component
+build dates** (AI/AR/ARQ/CARD/DSP all 2003-04-17, as ours). Its
+`config/MarioClub_us/symbols.txt` carries **183 GX symbols with addresses and
+sizes**, 177 of them functions, against our 13 named.
+
+Verified rather than assumed: of **287 symbols named in both**, **264 have
+byte-identical sizes (92%)**. Every mismatch is a C-runtime function — `exit`,
+`fwrite`, `memchr`, `vprintf` — which varies with CodeWarrior options, not an
+SDK function. `GXInit` is 0x798 in both; `GXInitFifoBase` 0x6C in both.
+
+**The deltas are piecewise constant, not global.** `GXInit` through
+`GXSetGPFifo` — five consecutive functions — all sit at exactly `-0x82098`, then
+the offset shifts to `-0x81f74`, `-0x822a8`, `-0x82200` and so on. That is the
+expected shape: each game links only the SDK functions it references, so runs
+present in both stay contiguous and identically ordered while dropped functions
+shift the offset. **A single constant offset would be wrong; ordered run
+alignment is right.**
+
+The recipe that follows:
+
+1. Recover complete function boundaries for our `.text` (dtk full analysis or
+   Ghidra) — we currently have boundaries only for the 501 named symbols.
+2. Walk both symbol lists in address order and align runs, anchored on the
+   symbols already named in both.
+3. Within an aligned run, transfer names by position; confirm each with the
+   size match before accepting it.
+
+`extern/dolsdk2004` is pinned alongside as a cross-check: it carries **267 GX
+function names** in source form, which is the authoritative list of what the GX
+surface contains. Its `baserom/` is empty by design — the SDK `.a` files are not
+distributed, so it cannot be used for direct byte-signature generation, only for
+names and prototypes.
+
+**F12 — what exists publicly for this game, and one thing to stay away from.**
+
+*No Twin Snakes decompilation exists.* The design document's premise holds:
+searching turns up no symbol map, no decomp, no reverse-engineering project for
+`mgso_pal.rel`. The engine side is ours to do.
+
+*The `.kms` model format has partial prior art* — `Jayveer/MGS-KMS-EVM-Noesis`,
+a Noesis plugin reading MGS2 KMS/EVM models and MAR animations. Caveats: it
+targets **PS2 MGS2**, not GameCube, its own README calls the format handling
+incomplete, and it carries **no licence file**. Useful as documentation of the
+format's shape; not a component to depend on, and not to be copied given the
+unclear licence.
+
+*`FoxdieTeam/mgs_reversing`* is an active MGS1 **PSX** reimplementation. Wrong
+platform and wrong engine for us, but Twin Snakes is MGS1's *content* on MGS2's
+*engine*, so its naming of stages and game logic may map onto ours. Worth a look
+when the REL's engine functions need names, not before.
+
+**Stay away from the leaked MGS2 source.** MGS2's source code leaked publicly in
+2026 and **Konami is actively litigating to identify the leaker**. That code is
+the engine in this very game. Project rule 9 already forbids verbatim leaked SDK
+source; this is the same category with far more legal heat, and touching it
+would put the project in exactly the position the design document's legal
+section is written to avoid. Everything we need is obtainable from clean-room
+decomps and our own analysis.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

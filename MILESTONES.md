@@ -101,9 +101,11 @@ more.
 - [x] **The DOL/REL split is the translated/native boundary.** `main.dol` is
       7.9% of the code and is almost entirely SDK + runtime + debugger; the REL
       is 92.1% and is the whole engine, with no SDK copy. See F9.
-- [ ] Name the remaining GX surface. Only 17 GX functions matched by signature
-      but the SDK's GX is ~200 — the rest are in the DOL and unnamed. This is
-      the largest remaining gap in the symbol map and it blocks phase 3.
+- [ ] Name the remaining GX surface — ~164 functions. **The signature source is
+      found and verified**: `doldecomp/mkdd` links the same SDK `0x2301` build,
+      92% of shared symbols are byte-identical in size, and it names 177 GX
+      functions. Needs complete `.text` function boundaries, then ordered run
+      alignment (F11). This blocks phase 3.
 - [ ] Recover engine function boundaries in `mgso_pal.rel` — 4.3 MB, and `dtk`
       found only `_prolog`, `_epilog` and `_unresolved` there, as expected for
       game-specific code with no signatures.

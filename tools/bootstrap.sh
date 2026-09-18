@@ -6,7 +6,8 @@
 # the licence position for each entry.
 #
 #   tools/bootstrap.sh              fetch the core group
-#   tools/bootstrap.sh --all        core + reference (Dolphin, libogc, ww, ...)
+#   tools/bootstrap.sh --all        core + reference + signature sources
+#   tools/bootstrap.sh --signatures SDK decomps used only for symbol names
 #   tools/bootstrap.sh --update     re-fetch to the pinned commit, discarding
 #                                   any local state in extern/
 #
@@ -22,7 +23,8 @@ update=0
 
 for arg in "$@"; do
   case "$arg" in
-    --all)    groups="core reference" ;;
+    --all)    groups="core reference signatures" ;;
+    --signatures) groups="signatures" ;;
     --update) update=1 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;

@@ -18,3 +18,8 @@ libogc                        49b62a0dc6c8915229c4f40f04b2a18ce30aea82  https://
 dolphin                       ee018d00e60b9eb727489908a8daec5c537f44a8  https://github.com/dolphin-emu/dolphin                            sparse   reference
 ww                            b9fcecd24ee25c75d18c6bcba18a10f449c5b68a  https://github.com/sp00nznet/ww                                   full     reference
 RecompCore                    283baee01e54b6c3f71e441bb78fc77b260512fa  https://github.com/aharonahdoot/RecompCore                        full     reference
+# Signature sources: decomps of the same-era Dolphin SDK, used to name the GX
+# functions dtk's built-in database misses. We take NAMES and byte signatures,
+# not code (project rules 9 and 11).
+dolsdk2004                    2328b4164b1a98422a2255d83ce9a5a7548990cc  https://github.com/doldecomp/dolsdk2004                           full     signatures
+mkdd                          ffc513c5326d1a883d4b35dd7ee1634500354763  https://github.com/doldecomp/mkdd                                 full     signatures
