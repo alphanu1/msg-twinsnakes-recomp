@@ -10,6 +10,11 @@
  * fires. Mapping the click from "axis > 0" would fire the moment you touch
  * the trigger; mapping pressure from the button would remove aiming entirely.
  *
+ * RESTING VALUES. Zero is centre for a thumbstick, and a resting trigger
+ * reads FULL NEGATIVE on the joystick interface rather than zero. So an
+ * all-zero reading at rest is correct, and a trigger that reads -32767 is
+ * released, not broken. Both look like faults if you go looking for one.
+ *
  * STICK RANGE. The SDK's sticks are signed 8-bit but do NOT use the full
  * range: the hardware's usable travel is about +/-72 after the SDK's own
  * clamping, and games are calibrated against that. Feeding a full -128..127

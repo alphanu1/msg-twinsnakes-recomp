@@ -1626,31 +1626,35 @@ game can tell "no controller" from "controller at rest".
 input backend compiles; absent, the runtime still builds and every test still
 runs. The mapping layer has no SDL dependency at all.
 
-**F50 — live controller probe, and what it proved on this machine.**
+**F50 — live controller probe, and a wrong diagnosis corrected.**
 `tools/probes/pad_probe.c`, built alongside the tests but **not a test** — it
-needs hardware, and a test that needs hardware is a test that does not run in
-CI. `--sample N` records the extremes reached over N seconds rather than
-printing a live line, because the live display overwrites itself with a
-carriage return and is unreadable once piped, and because "did every axis
-reach full range and did the trigger click latch" is the question worth
-answering.
+needs hardware, and a test that needs hardware does not run in CI. `--sample N`
+records the extremes reached over N seconds rather than printing a live line,
+because the live display overwrites itself with a carriage return and is
+unreadable once piped.
 
-*On this machine, with a Razer Wolverine V2 Pro connected:* SDL3 enumerates it,
-names it correctly and reports it connected — but every axis reads 0.
-**Traced below SDL: reading `/dev/input/js1` raw for six seconds while the
-stick was moved produced no events at all.** The device node exists and is
-readable (logind ACLs, so the earlier "not in the input group" reading was a
-red herring), but the hardware is not transmitting on that interface.
+*The correction, recorded because it was written down wrong first:* I
+concluded from a raw `dd` read that the Razer Wolverine V2 Pro "sent zero
+events at the kernel level" and that the hardware was not transmitting. **That
+was wrong, and the test was at fault.** `dd bs=8 count=40` blocks until forty
+events arrive and is then killed by the timeout with its buffer discarded, so
+it reports nothing whether the device is silent or not.
 
-So this is the controller's mode or interface, not the port. Likely the
-Wolverine's PC/PS5 mode switch, a sleeping wireless dongle, or the axes
-arriving on a different one of the several interfaces it exposes.
+A proper non-blocking read of `/dev/input/js1` shows the opposite: **22
+synthetic init events and all 22 controls enumerated**, with axes 3 and 4 at
+−32767, which is simply the two triggers at rest. The device works. Nothing
+had been moved during the sampling window.
 
-**Nothing about it blocks the runtime.** The mapping layer is pure and tested
-without hardware; SDL3 integration is verified as far as enumerating and
-opening a device and correctly reporting `PAD_ERR_NO_CONTROLLER` for an empty
-port. The probe is committed so the end-to-end check can be re-run the moment a
-controller does report.
+*Two things worth keeping from it:* zero is centre for a thumbstick, so an
+all-zero reading at rest is correct rather than suspicious; and a resting
+trigger reads full-negative on the joystick interface, which `trigger_norm`
+already clamps to 0 — so the resting state maps to no pressure, as it should.
+
+**Windows input needs no second implementation.** SDL3 is the platform layer
+precisely so that `sdl_input.c` gets XInput, DirectInput and RawInput on
+Windows unchanged. All the GameCube-specific behaviour — trigger click point,
+inverted Y, SDK stick ranges — lives in `pad/pad.c`, which has no OS
+dependency and is the only part that could be got wrong per platform.
 
 *Build note:* `find_package(SDL3)` moved to the top-level `CMakeLists.txt`.
 In a subdirectory it sets `SDL3_FOUND` only in that scope, so `tests/` could
