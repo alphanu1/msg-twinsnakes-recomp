@@ -263,7 +263,62 @@ TEV configuration space is used broadly, including `GXSetTevSwapModeTable`,
 raw FIFO writes bypass the API, so the FIFO command parser is still required.
 The Dolphin SDK-call log (stage 9's harness) will confirm the remainder.
 
-### 6e. Next: name the entry points the engine actually uses · **PLANNED**
+### 6e. Ghidra cross-check and audit trail · **DONE**
+
+An independent analyser, run for two reasons: to check stage 4 and 5's results
+against something that shares no code with `dtk`, and to leave an auditable
+record of the analysis.
+
+```sh
+tools/ghidra-analyse.sh discs/GGSPA4/disc1/sys/main.dol main_dol
+```
+
+Output lands in [`docs/evidence/`](evidence/): a function inventory, the full
+analysis log, and a SHA-256 of both plus the input binary, so anyone can re-run
+this and compare.
+
+**`-loader-autoloadMaps false` is required, not cosmetic.** With map autoloading
+on, the GameCube loader pops a GUI "load a symbol map?" dialog during import,
+which throws in headless mode and fails the run outright.
+
+**The cross-check:**
+
+| | |
+|---|---|
+| functions found by Ghidra | 1,687 |
+| functions found by `dtk` | 1,818 |
+| agreement | **92.8%** |
+
+| | |
+|---|---|
+| symbols we had named | 773 |
+| confirmed by Ghidra at the same address | **606 (78.4%)** |
+| not confirmed | 167 — all **data** symbols (`__GXData`, `__PADSpec`, `__DVDVersion`), correctly not functions |
+
+So every named symbol Ghidra classifies as a function agrees with ours, and the
+disagreements are entirely the expected code/data split. Two analysers sharing
+no code reaching the same answer is the point.
+
+### What `docs/evidence/` contains, and what it does not
+
+**It contains facts:** addresses, sizes, names, incoming-call counts. The same
+class of information as a symbol map — which is what every decompilation
+project publishes, `doldecomp/mkdd`'s `symbols.txt` included, the file stage 5
+depends on.
+
+**It does not contain decompiled source.** Ghidra's pseudo-C is a reconstruction
+of the game's own code — a translation, and so a derivative work. Project rule 8
+keeps it out, `README.md` states publicly that no game code is here, and the
+same reasoning already excludes DolRecomp's generated C at stage 7. The
+distinction is not where the data came from — all of it comes from analysing the
+game — but whether it is **fact or expression**.
+
+**The audit trail without the distribution:** the Ghidra project and any
+decompiler output stay under `build/`, which is git-ignored. The committed
+SHA-256 is what makes the run checkable — re-run the command and the hashes
+either match or they do not.
+
+### 6f. Next: name the entry points the engine actually uses · **PLANNED**
 
 Of **336 DOL functions called directly from the REL**, 70 are named and **266
 are not**. Those 266 are the highest-value naming targets in the project: each

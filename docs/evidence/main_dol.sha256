@@ -1,0 +1,4 @@
+# SHA-256 of this analysis run's outputs.
+# Re-run tools/ghidra-analyse.sh and compare to verify.
+41dc43d78ff045ddc9f1f9c22394ff8ebb9bfc403c7b7a5c47251ef0fe72d0db  discs/GGSPA4/disc1/sys/main.dol
+580898e6e658a063929986bac0314d32db80605462321a736703803db9b9cdbc  docs/evidence/main_dol.functions.txt
