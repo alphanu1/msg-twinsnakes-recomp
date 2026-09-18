@@ -62,6 +62,21 @@ layout" section is the target, not the current state.
 - **Not a Dolphin fork.** A native runtime is both the better port and the safer
   legal shape.
 - **US release GGSEA4 is the bring-up target.** PAL and JP come later.
+- **Analysis evidence is committed; decompiled pseudo-C is not.** Decided
+  2026-09-18 after weighing it explicitly. `docs/evidence/` carries Ghidra's
+  function inventories, the run logs and hashes — facts, and enough to
+  corroborate the symbol map independently. Ghidra's reconstructed source stays
+  under `build/`, git-ignored. The reason is not caution: `Sega v. Accolade`
+  and `Sony v. Connectix` both turned on intermediate copies **not being
+  distributed**, so the case law protects producing that output, not publishing
+  it. Committing it would also add no evidential weight — anyone can re-derive
+  it from their own disc — while falsifying the README's notice.
+- **The README states the statutory basis in full**, not just conclusions:
+  CDPA s.50B / s.50BA / s.296A, EU Directive 2009/24/EC Art. 5(3) and 6,
+  17 U.S.C. §102(b) and §107, Feist, Accolade, Connectix, Google v. Oracle, and
+  why §1201 is not engaged. Each is stated with how this project meets its
+  conditions, because a bare assertion is worth nothing to whoever has to
+  evaluate it quickly. A rights-holder contact line is included.
 - **The port is GPL-3.0** (2026-09-18). Dolphin's texture decoder and
   `PixelShaderGen.cpp` are lifted rather than reimplemented — months off phase
   3, the longest phase in the plan. RecompCore's interpreter fallback and

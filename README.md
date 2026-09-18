@@ -97,9 +97,55 @@ does not substitute for the game.
 **Nothing here derives from leaked source code.** See Provenance above. Every
 symbol carries an origin recording which analysis produced it.
 
-The reasoning behind this position, the provisions it relies on, the conditions
-attached to them, and the places this project is exposed anyway, are set out in
-[docs/legal-position.md](docs/legal-position.md). None of it is legal advice.
+### Legal basis relied on
+
+This project is reverse engineering for interoperability, and it relies on the
+following. Each is stated with how this project meets its conditions, so the
+claim can be checked rather than taken on trust.
+
+**United Kingdom — a statutory right, not a defence**
+
+- **CDPA 1988 s.50B** — decompilation is lawful to obtain information necessary
+  to create an independently written program that interoperates. The conditions
+  are met: the information is necessary (the SDK's API must be known to
+  reimplement it), it is not otherwise readily available (no public
+  decompilation of this game exists), and it is not used to create a program
+  substantially similar to the game — the runtime reimplements the *console's
+  SDK*, and is no substitute for the game itself.
+- **CDPA 1988 s.50BA** — observing, studying and testing a program to determine
+  the ideas and principles underlying it is lawful.
+- **CDPA 1988 s.296A** — any term purporting to prohibit the above is void.
+
+**European Union**
+
+- **Directive 2009/24/EC Art. 6** (decompilation for interoperability) and
+  **Art. 5(3)** (observe, study, test); **Art. 8** makes these unwaivable.
+
+**United States**
+
+- **17 U.S.C. §102(b)** — copyright does not extend to any procedure, process,
+  system or method of operation. The addresses, sizes and API names published
+  here are facts about a system, not expression. **Feist v. Rural** (1991):
+  facts are not copyrightable.
+- **17 U.S.C. §107** — fair use. **Sega v. Accolade** (9th Cir. 1992) and
+  **Sony v. Connectix** (9th Cir. 2000): intermediate copying during reverse
+  engineering is fair use where necessary to reach unprotected functional
+  elements. Consistent with both, **no decompiled output is distributed here**.
+- **Google v. Oracle** (2021) — reimplementing an API so independently written
+  code can interoperate is transformative fair use. That is what this runtime
+  does.
+- **17 U.S.C. §1201** is not engaged: nothing here circumvents any technical
+  protection measure. The software reads a disc image the user already has.
+
+**None of this is legal advice**, and invoking a provision is not the same as
+being covered by it — each depends on this project continuing to behave as
+described above. The reasoning, the conditions in full, and an honest account of
+where this project is exposed regardless, are in
+[docs/legal-position.md](docs/legal-position.md).
+
+**Rights holders:** if you believe something here exceeds the above, please open
+an issue or contact the maintainer. The intent is to stay within these
+provisions, and anything that does not will be removed.
 
 ## Licence
 
