@@ -185,7 +185,14 @@ fallback hits on the boot path.*
       maintenance, exception-vector installation or DMA writes in SDK
       routines. No self-modifying game code.
 - [ ] Build under the ModernGekko/RecompCore template, Dolphin providing GX,
-      audio and HLE.
+      audio and HLE. Submodules are ~1 GB; ModernGekko is a Dolphin-derived
+      C++ build.
+- [x] **REL dispatch route confirmed**: the game loads its overlay via `OSLink`
+      (one call site, from `rel_loader_LoadRel` at `0x800066F8`), so the
+      runtime's existing REL machinery can hook it. No custom loader to
+      reimplement first (F27).
+- [ ] Wire the REL: ModernGekko hardcodes `files/_Main.rel`; ours is
+      `files/shared/mgso_pal.rel`.
 - [ ] Log every interpreter-fallback hit. The boot path must reach zero; the
       list of everything else is the phase-2 and phase-3 backlog.
 - [ ] Stand up the differential harness: `OSReport` diff and guest-memory

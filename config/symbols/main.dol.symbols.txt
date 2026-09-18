@@ -45,6 +45,7 @@
 .init 0x80005510 0x34 __flush_cache dtk-sig
 .init 0x80005544 0x6C _rom_copy_info dtk-sig
 .init 0x800055B0 0x18 _bss_init_info dtk-sig
+.text 0x800066F8 0xE8 rel_loader_LoadRel own
 .text 0x80006954 0x4 calc__7GameAppFv mkdd-align
 .text 0x80006958 0x24 main dtk-sig
 .text 0x800072CC 0xF8 TRKNubMainLoop dtk-sig

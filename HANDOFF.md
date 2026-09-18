@@ -823,5 +823,36 @@ which no previous pass could see. The heaviest callers are `PSVECDotProduct`
 paired-single matrix library with SSE/NEON; this says that is a performance
 lever with real weight behind it, not a footnote.
 
+**F27 — the game loads its REL through `OSLink`, which makes phase 1 a
+wiring job rather than an unknown.** This was the open risk in the boot
+estimate: Twin Snakes ships its own `rel_loader.c`, so it might have bypassed
+the SDK entirely and loaded the overlay by hand, leaving nothing for a runtime
+to hook.
+
+It does not. `rel_loader.c`'s strings are in **`main.dol`**, not the REL, and
+`OSLink` at `0x80020AD8` has **exactly one call site** — `0x800067C4`, inside
+`fn_800066F8`, which sits beside `main` at `0x80006958` in the game's own boot
+code. Named `rel_loader_LoadRel`, origin `own`: our own analysis, from the call
+graph plus the `rel_loader.c` string.
+
+**Why that matters:** `OSLink` is a standard SDK function, so ModernGekko's
+existing REL machinery can intercept it and dispatch to recompiled REL code.
+No custom loader to reverse and reimplement before anything boots.
+
+*Still to wire, and these are known rather than discovered:*
+
+- ModernGekko looks for **`files/_Main.rel`**, hardcoded — Luigi's Mansion's
+  name. Ours is `files/shared/mgso_pal.rel`. A symlink, or a patch.
+- The REL is optional in `game.cpp` (`if is_regular_file`), so without it the
+  runtime boots `main.dol` alone and the game stops when it wants the overlay.
+- `MODERNGEKKO_REQUIRED_*_SHA256` pins default to empty in CMake, so a normal
+  build is not locked to Luigi's Mansion.
+
+*Expectation for the first boot, so it is not mistaken for failure:* `main.dol`
+runs `__start` → `OSInit` → DVD init → reaches `rel_loader_LoadRel` → stops for
+want of the overlay. **That is the expected outcome**, and it still proves the
+translation and the runtime work along the boot path. With `--map` in place the
+failure will name the SDK function rather than an address.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
