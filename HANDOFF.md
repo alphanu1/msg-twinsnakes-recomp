@@ -1160,5 +1160,40 @@ emulation, or the CP registers the game polls are not being updated. The
 `hook_fb=16132` counter says SDK calls *are* reaching the host, so the HLE path
 is live — it is specifically the FIFO plumbing that is not.
 
+**F37 — the MMIO path is wired, so the FIFO stall is not a missing hook.**
+`StaticRecompCore.cpp` installs `external_read`/`external_write` on the guest
+CPU state, and `mem_write32` routes any non-RAM address to them. So writes to
+the write-gather pipe at `0xCC008000` and reads of the CP registers at
+`__cpReg` do reach Dolphin's MMIO emulation. Whatever stops the FIFO draining
+is inside that emulation or in how the FIFO was configured, not a hole in the
+plumbing.
+
+**The strategic question this raises, which is worth answering deliberately.**
+
+Phase 1 exists for one purpose, in the design document's words: to prove the
+recompiled CPU code is correct *before* our own SDK shims exist to be blamed.
+Measured against that, it has largely delivered:
+
+| | |
+|---|---|
+| instructions translated | 1,232,487 of 1,234,136, **0 unknown** |
+| executed natively in one run | **147,000,000** |
+| interpreter fallback | **0** |
+| decode or compile errors | **0** across 305 objects |
+| self-modifying code | 124 flags, all explained as SDK cache and vector work |
+
+The remaining blocker is **ModernGekko's GX FIFO emulation** — someone else's
+Dolphin-derived runtime, which phases 2–5 replace wholesale with our own SDK on
+SDL3 and Vulkan. Time spent fixing it buys a prettier phase 1 and nothing that
+survives into the port.
+
+*The counter-argument, and it is real:* a title screen under ModernGekko would
+exercise the REL dispatch path end to end, which our own runtime will need too,
+and the `OSLink` hook and address translation are already written and untested.
+Reaching it would validate that work against a runtime we did not write —
+exactly the independent check phase 1 is for.
+
+*Recorded as a decision to take, not taken.*
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
