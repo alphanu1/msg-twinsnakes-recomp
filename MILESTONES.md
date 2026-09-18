@@ -263,6 +263,10 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       (F58). Needed a host-to-guest call primitive with a sentinel return.
 - [x] **Guest time advances** — the timebase at 40.5 MHz, driven by the run
       loop. Without it every timed wait in the SDK spun forever (F59).
+- [ ] **Get the patch table to see intra-chunk calls.** The highest-leverage
+      item: this limit has blocked three SDK functions so far and every future
+      shim inherits it. Likely a DolRecomp change — emit a dispatch call, not
+      a `goto`, for addresses named in `--map` (F60).
 - [ ] **VI** — stubs, plus the frame loop, presenting the XFB the game writes.
 - [x] **PAD mapping** — GC layout, analog triggers with a late digital click,
       C-stick, inverted Y, SDK-clamped stick ranges. Pure layer, tested with

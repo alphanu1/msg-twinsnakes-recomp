@@ -54,6 +54,12 @@
  * Setting the flag on the write that starts the transfer is therefore
  * accurate rather than optimistic. */
 #define DSP_CR_ARINT       0x0020u
+/* And 0x0400, which __OSInitAudioSystem polls immediately after ARINT on the
+ * same DMA. On hardware these are separate completion flags for the same
+ * transfer; here the transfer is a memcpy that has already happened, so both
+ * are raised together. Raising only one leaves the second wait spinning, which
+ * is how this presented. */
+#define DSP_CR_ARDMA_DONE  0x0400u
 #define AR_DMA_MMADDR      0x20u   /* main memory address */
 #define AR_DMA_ARADDR      0x24u   /* ARAM address */
 #define AR_DMA_CNT         0x28u   /* length, and writing it starts the DMA */
@@ -81,6 +87,29 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 
     ++m->reads;
     if (!p) return 0u;
+
+    /* DSPCR's completion flags read as set.
+     *
+     * A STAND-IN, and deliberately marked as one. This runtime has no DSP:
+     * ARAM is host memory, so every transfer the guest starts has already
+     * finished before it can look. The SDK's audio init clears these flags and
+     * then waits for hardware to raise them asynchronously - which nothing
+     * here will ever do, so the wait cannot complete however carefully the
+     * write side is modelled.
+     *
+     * Reporting "already done" is accurate for the transfers and wrong for
+     * anything that depends on DSP timing. That is an acceptable trade only
+     * because audio is phase 4: nothing between here and a picture on screen
+     * needs the DSP to behave like a coprocessor. Phase 4 replaces this with
+     * a real voice mixer, and this comment is the reminder.
+     */
+    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
+        uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
+        uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
+        v |= (uint16_t)(DSP_CR_ARINT | DSP_CR_ARDMA_DONE);
+        cr[0] = (uint8_t)(v >> 8);
+        cr[1] = (uint8_t)v;
+    }
 
     /* The half-line counter is the one register that must MOVE. The SDK's
      * retrace wait reads it until it passes a threshold, so a constant - any
@@ -136,7 +165,12 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
          * starts a transfer on hardware. */
         if (addr == MMIO_DSP + AR_DMA_CNT) {
             uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
-            if (cr) cr[1] |= (uint8_t)DSP_CR_ARINT;
+            if (cr) {
+                uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
+                v |= (uint16_t)(DSP_CR_ARINT | DSP_CR_ARDMA_DONE);
+                cr[0] = (uint8_t)(v >> 8);
+                cr[1] = (uint8_t)v;
+            }
         }
 
         /* Serial transfer start: the same shape again. */

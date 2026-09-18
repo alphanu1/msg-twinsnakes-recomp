@@ -1968,5 +1968,47 @@ the host clock, because a replayed run has to be reproducible.
 is now genuinely talking to hardware rather than waiting on a clock that never
 ticked.
 
+**F60 — the intra-chunk limit cannot be flagged away, and audio init is a
+genuine tunnel.**
+
+*Two routes tried and closed, recorded so they are not re-attempted:*
+
+- **`--partition-instructions` does not help.** It sizes the LLVM backend's
+  object partitions, not the C backend's chunk splitting — the DOL still
+  emits 25 chunks at any value. So making SDK calls cross-chunk, and therefore
+  visible to the patch table, is not available as a build flag.
+- **Patching the loaded image does not help either.** For a *static*
+  recompilation the instructions are already compiled into the module;
+  rewriting guest memory changes what the game reads, not what executes. That
+  technique belongs to emulators and does not transfer.
+
+*Where the boot sits:* `__OSInitAudioSystem +0x134`, waiting on DSPCR bit
+`0x400`. The guest **clears that bit itself and then waits for hardware to
+raise it asynchronously**, so no amount of care on the write side completes it:
+there is no DSP here to raise it. Making reads report the completion flags as
+set was tried and is retained as a documented stand-in, but it is not
+sufficient on its own.
+
+**The judgement call, stated plainly:** audio is **phase 4**, and nothing
+between here and a picture on screen needs the DSP to behave like a
+coprocessor. Continuing to model it now is work against the wrong phase. The
+options worth weighing next time this is picked up:
+
+1. **Model the DSP mailbox properly** — honest, and phase 4 needs it anyway,
+   but it is phase 4's work being done early.
+2. **Get the patch table to see intra-chunk calls** — the general fix, and it
+   would unblock every future SDK function, not just this one. Likely needs a
+   DolRecomp change: emitting a dispatch call rather than a `goto` for
+   addresses named in the `--map`.
+3. **Compare against Dolphin** — it boots this game, so its DSP register
+   behaviour at exactly this point is observable rather than guessable. The
+   oracle argument (F45) applies to hardware behaviour just as much as to
+   rendering.
+
+**Option 2 is the one with leverage.** The intra-chunk limit has now blocked
+three separate things — `ICFlashInvalidate`, `DCFlushRange`, and
+`__OSInitAudioSystem` — and every future SDK shim inherits it. Fixing it once
+is worth more than working around it a fourth time.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
