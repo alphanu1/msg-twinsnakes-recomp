@@ -1032,5 +1032,41 @@ tables, never by direct reference, so a normal static link would discard every
 one of them — plus the router, behind upstream's unmodified `module_export.c`
 and version script.
 
+**F33 — the combined module loads. Two link gaps found by running it.**
+`build/phase1/module/gGGSPA4_recomp.so`, 150 MB, **25 DOL + 278 REL chunk
+symbols**, router and both bridges linked, `staticrecomp_get_module` exported.
+
+Descriptor, against the template's DOL-only module:
+
+| | ours | template |
+|---|---|---|
+| abi / cpu_abi / state_size | 3 / 4 / 3536 | 3 / 4 / 3536 |
+| game_id / entry | GGSPA4 / 0x80005240 | GGSPA4 / 0x80005240 |
+| code ranges | **3** | 2 |
+| smc ranges | **161** | 117 |
+| chunk ranges | **303** | 25 |
+
+Every ABI field matches; the coverage fields are larger because they include
+the REL.
+
+*Both failures were link-time omissions that a clean link did not catch*, and
+both are recorded because the symptom pointed nowhere useful:
+
+- **`undefined symbol: g_mem_write_journal`.** The **GXRuntime CPU sources
+  belong to the module, not the host** — `cpu.c`, `cpu_exception.c`,
+  `cpu_interpreter{,_table,_float,_integer}.c`. They supply the write journal,
+  the interpreter used for SMC fallback, and the exception path. Nothing in the
+  module references them directly, so omitting them links cleanly and fails at
+  `dlopen`.
+- **`undefined symbol: fmod`.** The generated float paths call libm, which is
+  not implicit for a shared object here.
+
+*The useful technique:* `moderngekko-run` reports only "native module was
+rejected", which names neither symbol. A twenty-line `dlopen` harness that
+calls `staticrecomp_get_module` and prints the descriptor gave the real error
+immediately, and then let the descriptor be diffed field-by-field against the
+template's. Worth reaching for first next time rather than reading validation
+code.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

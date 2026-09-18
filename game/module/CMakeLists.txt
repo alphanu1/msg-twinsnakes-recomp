@@ -77,7 +77,18 @@ add_custom_command(
   COMMENT "Generating module tables for main.dol + mgso_pal.rel")
 add_custom_target(mgs_tables DEPENDS "${TABLES}")
 
-add_library(mgs_module SHARED "${MODULE_TEMPLATE}/module_export.c")
+# The GXRuntime CPU sources come with the module, not the host: they provide
+# g_mem_write_journal, the interpreter used for SMC fallback, and the exception
+# path. Omitting them links cleanly and then fails at dlopen with an undefined
+# symbol, because nothing in the module references them directly.
+add_library(mgs_module SHARED
+  "${MODULE_TEMPLATE}/module_export.c"
+  "${GXRUNTIME_DIR}/src/core/cpu.c"
+  "${GXRUNTIME_DIR}/src/core/cpu_exception.c"
+  "${GXRUNTIME_DIR}/src/core/cpu_interpreter.c"
+  "${GXRUNTIME_DIR}/src/core/cpu_interpreter_table.c"
+  "${GXRUNTIME_DIR}/src/core/cpu_interpreter_float.c"
+  "${GXRUNTIME_DIR}/src/core/cpu_interpreter_integer.c")
 add_dependencies(mgs_module mgs_tables)
 target_include_directories(mgs_module PRIVATE
   "${CMAKE_CURRENT_BINARY_DIR}"      # module_tables.inc, ours not upstream's
@@ -91,7 +102,8 @@ target_compile_definitions(mgs_module PRIVATE
 # drop every one of them as unused.
 target_link_libraries(mgs_module PRIVATE
   -Wl,--whole-archive mgs_dol_code mgs_rel_code -Wl,--no-whole-archive
-  $<TARGET_OBJECTS:mgs_dispatch>)
+  $<TARGET_OBJECTS:mgs_dispatch>
+  m)   # the generated float paths call fmod/sqrt; libm is not implicit here
 set_target_properties(mgs_module PROPERTIES
   OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
   LINK_FLAGS "-Wl,--version-script=${MODULE_TEMPLATE}/module.exports")
