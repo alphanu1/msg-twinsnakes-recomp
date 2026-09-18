@@ -238,8 +238,12 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       disc FST, which independently recovers the REL's recorded size (F41).
 - [x] **Disc layer** — image and extracted-folder backends behind one
       interface, kind detected not declared, short reads honest (F42).
-- [ ] **DVD** — `DVDOpen`/`DVDReadAsync` over the disc layer, reads on the
-      worker pool, callbacks fired on the guest thread.
+- [x] **Asynchronous reads** — on the worker pool, data copied into guest
+      memory on the guest thread's drain, `DVDCommandBlock` status moving
+      BUSY → END, tested with 32 reads in flight (F46).
+- [ ] **DVD** — the guest-facing shims themselves: `DVDOpen`,
+      `DVDConvertPathToEntrynum`, `DVDReadAsync`, `DVDGetCommandBlockStatus`,
+      wired into the patch table.
 - [ ] Disc path resolution: explicit argument, then config, then conventional
       locations. The image is never required to sit beside the executable. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.

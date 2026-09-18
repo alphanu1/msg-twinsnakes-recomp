@@ -1483,5 +1483,39 @@ for the three exit-criterion scenes and commit **the tooling** to replay them �
 never the recordings themselves, which contain the game's own graphics data
 (rule 8).
 
+**F46 — asynchronous DVD reads, and the rule that decides the design.**
+`runtime/dvd/dvd.c`. The SDK's contract is that a `DVDReadAsync` callback runs
+on the **guest** thread, not on whatever finished the read — because callbacks
+touch game state, and game state has exactly one legal writer (F39/F40).
+
+So a read is three steps across two places:
+
+| where | step |
+|---|---|
+| guest thread | **submit**: allocate a host buffer, queue the job |
+| worker | **read**: fill the *host* buffer. Touches no guest memory, runs no callback |
+| guest thread | **drain**: copy into guest RAM, then run the callback |
+
+**The copy into guest memory happens on the drain, not in the worker.** That
+is the whole point: the middle step is where the cores go, and the other two
+are serialised with everything else the guest does.
+
+*Details that are load-bearing rather than tidy:*
+
+- **`done` is published with a release store and read with an acquire load.**
+  Without that ordering a drain could observe `done == 1` while `result` is
+  still the old value — on a weakly-ordered host, or after the optimiser gets
+  involved.
+- **`DVD_STATE_BUSY` is written before the job is queued**, so the game can
+  never poll a request that is neither busy nor finished.
+- **A refused submission runs the read inline** rather than failing.
+  Correctness never depended on the read being elsewhere; only throughput did.
+
+*The test that would catch the mistake worth making:* 32 reads in flight at
+once, each to its own guest destination, then every destination checked against
+an independent synchronous read of the same slice. A worker writing guest
+memory directly, or a shared scratch buffer, shows up there as crossed data —
+and nowhere else, because a single read would look perfect either way.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

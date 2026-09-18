@@ -22,3 +22,7 @@ add_test(NAME disc COMMAND test_disc WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_executable(test_disc_locate test_disc_locate.c)
 target_link_libraries(test_disc_locate PRIVATE mgs_runtime)
 add_test(NAME disc_locate COMMAND test_disc_locate WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_executable(test_dvd test_dvd.c)
+target_link_libraries(test_dvd PRIVATE mgs_runtime)
+add_test(NAME dvd COMMAND test_dvd WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

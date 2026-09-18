@@ -12,7 +12,8 @@ add_library(mgs_runtime STATIC
   platform/jobs.c
   dvd/fst.c
   dvd/disc.c
-  dvd/disc_locate.c)
+  dvd/disc_locate.c
+  dvd/dvd.c)
 
 target_include_directories(mgs_runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
