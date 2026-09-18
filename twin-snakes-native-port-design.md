@@ -1,0 +1,226 @@
+# Twin Snakes Native Port — Design Document
+
+2026-09-17
+
+## Overview
+
+The project is a **static recompilation** of Metal Gear Solid: The Twin Snakes (GameCube, 2004) into native Windows and Linux builds. The game's PowerPC code is translated ahead of time into C, compiled with a normal host compiler, and linked against a runtime that reimplements the GameCube SDK on SDL3 and Vulkan. At runtime there is no PowerPC, no interpreter and no JIT; the game's own logic runs as native machine code, so behaviour, saves and physics match the original disc exactly.
+
+Matching decompilation is out of scope. The generated C is a build artefact, never hand-edited, and readability is not a goal; a hand-written replacement is only ever introduced for a specific function when a port feature (widescreen, a bug fix) needs it.
+
+Why this is the right shape for Twin Snakes specifically:
+
+- Twin Snakes has no public decompilation, so a matching decomp would start from zero symbols and take years. Static recompilation needs function boundaries and SDK symbols only, which can be recovered from the DOL in weeks.
+- The Gekko is an in-order 32-bit PowerPC with no self-modifying code in retail titles, the ideal input for static translation, and [DolRecomp](https://github.com/ExpansionPak/DolRecomp) already handles it.
+- The engine is Silicon Knights' own (shared lineage with Eternal Darkness) sitting on the standard Nintendo SDK, so the translated/native boundary can be drawn at the SDK's public API, which is the same for every GameCube game.
+
+The finished port has three parts: generated code from both discs' executables, a runtime library that implements the GameCube SDK natively, and a loader that reads assets from the user's own disc images.
+
+## Target game: Metal Gear Solid: The Twin Snakes
+
+The bring-up target is the North American release, disc IDs GGSEA4 (both discs share the ID; the disc number field distinguishes them). Every address, symbol and hash in the project is tied to that build; PAL (GGSPA4) and Japanese (GGSJA4) support are a later addition once the US build is complete.
+
+What is known and what phase 0 must establish:
+
+| Property | Known | To verify in phase 0 |
+| --- | --- | --- |
+| Developer / engine | Silicon Knights, in-house engine descended from Eternal Darkness; published by Konami, 2004 | Whether the engine uses Nintendo's standard SDK libraries directly or wraps them; SDK version string in `main.dol` |
+| Discs | Two discs; the game prompts for a swap mid-story | Which SDK disc-change path it uses (`DVDGetCurrentDiskID`, cover-status polling) so the runtime can present disc 2 without a physical swap |
+| Decomp status | No public decompilation or symbol map exists | Function boundaries and SDK symbols must be recovered by signature matching against known SDK builds (Ghidra with the Gekko spec plus dtk's analyser) |
+| Code layout | Unknown | Single `main.dol` or REL overlays; approximate function count |
+| Audio | Voice-over and music streamed from disc; Dolby Pro Logic II output | Whether it uses stock AX or a custom DSP microcode; stream codec (DSP-ADPCM is most likely) |
+| Video | Cutscenes are real-time in-engine, not pre-rendered | Any use of Bink or THP for logos or the intro |
+| Memory card | Psycho Mantis reads other games' save files (Eternal Darkness, Wind Waker, Sunshine, Melee) | CARD enumeration API surface used; the runtime must expose a directory of save files, not just the game's own |
+| Frame rate | 30 fps, 480p and progressive-scan supported | Whether game logic is frame-locked at 30 |
+
+The absence of a decomp is the main cost of this choice. Budget the first 2–4 weeks purely for symbol recovery: identify the SDK by string, match its \~400 public functions by byte signature (the same SDK build appears in many other games whose decomps *do* name them), and map the remaining engine functions by address only. The recompiler needs nothing more than that to produce correct code.
+
+The two-disc structure is the other Twin Snakes-specific design point. The runtime should mount both disc images at startup and present a virtual disc-swap: when the game polls for disc 2, the DVD shim reports the cover opened, disc 2 inserted, and cover closed, on the timing the SDK expects.
+
+## Toolchain and existing projects to build on
+
+Start from [DolRecomp](https://github.com/ExpansionPak/DolRecomp) for the CPU side and write your own native runtime; do not start from a Dolphin-derived runtime if the goal is a true native port. As of September 2026 no GameCube recomp is fully playable, and the two tracks in the field make the trade-off clear:
+
+| Project | Runtime | Status | Lesson |
+| --- | --- | --- | --- |
+| [DolRecomp + ModernGekko-Template](https://github.com/ExpansionPak/ModernGekko-Template) | Dolphin-derived core for video, audio and HLE | Luigi's Mansion reaches its title screen; LLVM object backend available | Fastest bring-up; DolRecomp is CPU-only and emits split C or LLVM objects, so its output is reusable under your own runtime |
+| [RingOut (SoulCalibur II)](https://github.com/jackpoison-prog/RingOut) / [RecompCore](https://github.com/aharonahdoot/RecompCore) | Dolphin fork with a static-recomp CPU core and interpreter fallback | Runs; Steam Deck packaging | Interpreter fallback for uncovered code is the pragmatic answer to indirect branches and REL overlays |
+| [sp00nznet/ww (Wind Waker)](https://github.com/sp00nznet/ww) | Fully native: own recompiler, GX to Direct3D 11, TEV to HLSL, J3D parsing from the disc | Renders real geometry at 60 fps but stuck at the title screen (archive mounting) | This is the shape of a true native port. Windows-only D3D11 is why it is not your template |
+| [Wiicompiled (Mario Kart Wii)](https://nio03.github.io/unricopie/en/recomp/mario-kart-wii) | Native, no PowerPC at runtime | Beta, most-starred PowerPC-native recomp | Wii Broadway is the same ISA as Gekko; its SDK-replacement approach carries over directly |
+| [XenonRecomp / UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp) | Native, Win/Linux, D3D12 and Vulkan | Fully playable | The reference architecture: recompiled code, a kernel/SDK shim layer, a native renderer, a launcher. Copy its structure |
+
+Tools by stage:
+
+| Stage | Tool | Role |
+| --- | --- | --- |
+| Disc extraction | Dolphin (Properties → Filesystem → Extract), or DolRecomp's built-in extractor (`.iso` only) | `sys/main.dol` from both discs, any `.rel` files, the asset filesystem |
+| Symbols and analysis | Ghidra with the Gekko/Broadway processor spec; decomp-toolkit (`dtk`) for function-boundary analysis; SDK signature files derived from other games' decomps on decomp.dev | Function boundaries, SDK function names, jump tables, data vs code. Twin Snakes has no decomp, so this is built from scratch |
+| Decompiling for understanding | Ghidra's decompiler view on the same project, with the paired-single and `OSReport` format strings as anchors | Reading engine functions in pseudo-C when writing a patch or diagnosing a shim bug. Output is for humans only; it is never compiled into the port |
+| PowerPC to C | DolRecomp (C11 or LLVM 19/20 objects) | Generated code; treat as a build artefact, never edit |
+| Native runtime | Your own C++20 library (see next sections) | SDK reimplementation |
+| Platform layer | SDL3 | Window, input, audio device, gamepad, filesystem |
+| Graphics | Vulkan with a D3D12 backend later, or SDL3 GPU if you want one code path | GX translation target |
+| Build | CMake + Ninja, vcpkg or system packages on Linux | One tree, both platforms |
+| Reference | Dolphin source (GPL) for exact hardware semantics; libogc headers for the public GX/OS API shapes | Read for behaviour, do not copy code unless you accept GPL for the whole port |
+
+The DolRecomp discord and the [Recompendium catalog](https://nio03.github.io/unricopie/en/) are where the active GameCube work is coordinated; check both before building anything the ww or Wiicompiled authors have already solved.
+
+## Architecture
+
+The port is four layers. Generated game code sits on top of a guest memory model, calls into an SDK shim layer through a patch table, and the shim layer calls a platform layer that is the only code that knows about the host OS.
+
+```mermaid
+flowchart TD
+    G[Generated C from main.dol + RELs<br/>never hand-edited] --> M[Guest memory + CPU context<br/>24 MB MEM1, 16 MB ARAM, big-endian]
+    G --> P[Patch table<br/>SDK symbol → native function]
+    P --> S[SDK shim layer<br/>OS, GX, DVD, PAD, AX, CARD, VI]
+    S --> R[Renderer<br/>GX state machine → Vulkan / D3D12]
+    S --> A[Audio mixer<br/>AX voices → float PCM]
+    S --> F[Asset loader<br/>disc image or extracted folder]
+    R --> H[Platform layer: SDL3<br/>window, input, audio device, files]
+    A --> H
+    F --> H
+```
+
+The generated code layer is the whole game translated mechanically: every function becomes `void fn_80xxxxxx(PPCContext* ctx, uint8_t* mem)`. Indirect calls go through a function table keyed by guest address, which is also how REL overlays and the patch table plug in.
+
+**Guest memory model.** Allocate one 24 MB block for MEM1 at a fixed host address and keep every guest pointer as a 32-bit offset into it. All loads and stores byte-swap, because the Gekko is big-endian and both targets are little-endian. Structures the SDK shims read from guest memory (GX display lists, OS threads, file info blocks) are read through explicit swap accessors, never cast.
+
+**Patch table.** For each SDK function in the symbol map, the recompiler emits a call to the native implementation instead of translating the original body. The game sees identical behaviour; you get to write `GXBegin` in C++ once rather than emulate the write-gather pipe. This is the single most important design decision: the boundary between "translated" and "native" is the SDK's public API, which is documented, stable across games, and around 400 functions.
+
+**Threads.** GameCube OS threads are cooperative on a single core with priority scheduling. Implement `OSThread` on a fiber or ucontext scheduler that runs exactly one guest thread at a time, so the game's own assumptions about atomicity hold. Host threads are used only inside the platform layer (audio callback, file prefetch, GPU submission).
+
+**Renderer.** Keep the GX state machine (TEV stages, vertex descriptors, matrix memory, texture cache) as a faithful software model, and emit host draw calls from it. Shaders are generated from TEV configuration and cached by hash, as Dolphin and the ww project both do. Rendering at native GameCube resolution with a scale factor is the first milestone; widescreen and higher-quality upscaling are later.
+
+**Determinism.** The game's logic is unchanged, so save data, RNG and physics match the original disc exactly. Treat any divergence from Dolphin's behaviour as a bug in the shim layer.
+
+## Replacing the GameCube SDK
+
+The SDK shim layer is where most engineering hours go. Order the work by what blocks boot: OS and DVD first, then GX, then PAD, with audio last because the game runs silently without it.
+
+| SDK library | What the game calls | Native replacement | Difficulty |
+| --- | --- | --- | --- |
+| OS | `OSInit`, `OSAlloc`/arenas, `OSCreateThread`, `OSSleepThread`, mutexes, alarms, `OSGetTime`, interrupt handlers, `OSReport`, `OSLink` for RELs | Fiber scheduler, arena over guest memory, monotonic clock scaled to 40.5 MHz timebase, alarms driven from the frame loop, REL loader with relocation | High: threading semantics must be exact |
+| DVD | `DVDOpen`, `DVDReadAsync`, `DVDGetCommandBlockStatus`, FST lookup by path | Read from the user's disc image (`.iso`/`.gcm`, or RVZ via a small decoder) or an extracted folder; complete reads on a worker thread and fire callbacks on the guest thread | Low |
+| GX | \~200 functions: `GXSetVtxDesc`, `GXLoadPosMtxImm`, `GXSetTevOp`, `GXBegin`/write-gather immediate mode, display lists via `GXCallDisplayList`, `GXCopyDisp`, `GXSetZMode`, texture and TLUT loading | GX state model, FIFO command parser (games write raw FIFO commands too), TEV-to-GLSL/HLSL shader generator, texture decoder for I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR, EFB copy emulation | Very high: this is the port |
+| VI | `VIConfigure`, `VIFlush`, `VIWaitForRetrace`, XFB address | Present the last EFB copy; drive the frame loop from vsync or a timer | Low |
+| PAD | `PADInit`, `PADRead`, `PADClamp`, rumble | SDL3 gamepad; map GC layout, handle the GC's analog trigger and C-stick semantics | Low |
+| AX / DSP | `AXInit`, `AXAcquireVoice`, `AXSetVoice*`, `AXRegisterCallback` at 5 ms; DSP ARAM DMA | Native voice mixer: ADPCM (DSP-ADPCM/AFC) and PCM decoders, per-voice SRC, mix at 32 kHz into SDL audio | Medium if the game uses stock AX; high if custom ucode |
+| ARAM / AR | `ARAlloc`, `ARStartDMA` | A second 16 MB host buffer; DMA is a memcpy with a completion callback | Low |
+| CARD | Memory card open/read/write/create | Files in a per-user save directory; keep the 8 KB block format so saves stay compatible with Dolphin | Low |
+| DSP init, EXI, SI | Low-level bus setup | Stubs that return success | Low |
+| MTX / MTXVec, PSMTX | Paired-single matrix maths | Translated as ordinary code; optionally replaced with SSE/NEON versions for speed | Low |
+
+Supported disc inputs (physical GameCube discs cannot be read by PC drives; users dump with CleanRip on a Wii):
+
+- `.iso` / `.gcm`: raw dumps, \~1.4 GB per disc, mounted directly
+- `.rvz`: Dolphin's compressed format, supported through a small built-in decoder
+- `.nkit`: refused; not guaranteed byte-exact
+- Extracted folder: for development, assets editable in place
+
+Twin Snakes needs both discs; the launcher asks for two images and hash-checks each against the known-good US dump.
+
+Two GX details decide whether the renderer is tractable:
+
+1. **Vertex formats.** GX vertices are described by a per-attribute descriptor (direct vs 8-bit or 16-bit index) and format table (position as s8/s16/f32 with a fractional shift). Build one converter that turns any GX vertex stream into a fixed host layout, then the host renderer only ever sees one vertex format.
+2. **TEV.** Up to 16 combiner stages with per-stage input selection, bias, scale and clamp, plus indirect texturing and alpha compare. Generate one fragment shader per unique TEV configuration; a full game produces a few hundred to a few thousand. Dolphin's `PixelShaderGen.cpp` is the definitive reference for the semantics, and the ww project has an HLSL version.
+
+Everything above the SDK, meaning Silicon Knights' engine and the game itself, stays translated. Individual functions get hand-written replacements only when a port feature needs it, for example widening the culling frustum for widescreen.
+
+## Build system and repository layout
+
+One CMake tree builds both platforms; the recompiler runs as a build step on the user's own DOL, so the repository never contains game code. This is the pattern every shipped recomp uses and it is what keeps the project distributable.
+
+```
+recomp/
+├── CMakeLists.txt
+├── cmake/            toolchain files: msvc-x64, clang-linux, mingw cross
+├── extern/           DolRecomp, SDL3, volk, VMA, spdlog (submodules or vcpkg)
+├── config/
+│   ├── GGSEA4.toml   per-disc config: entry point, symbol map path, SDK patch list, hash of main.dol
+│   └── symbols/      symbols.txt and splits.txt recovered in phase 0
+├── runtime/          the native SDK (no game knowledge)
+│   ├── os/  dvd/  gx/  vi/  pad/  ax/  card/  aram/
+│   ├── memory/       guest memory, byte-swap accessors, PPCContext
+│   ├── gfx/          Vulkan backend, shader cache, texture decoder
+│   └── platform/     SDL3 window, input, audio, paths
+├── game/             game-specific glue: asset paths, REL list, hooks, enhancements
+├── patches/          hand-written replacements for individual translated functions
+├── tools/            extract-disc, verify-hash, gen-patch-table, shader-dump
+└── build/            generated/  (recompiler output, gitignored)
+```
+
+Build flow, run by `cmake --build`:
+
+1. `verify-hash` checks the user's `main.dol` against the hash in `config/<disc>.toml`; any other revision fails early.
+2. DolRecomp emits split C (or LLVM objects) into `build/generated/`, with SDK symbols routed to the patch table instead of translated.
+3. `gen-patch-table` produces the guest-address to native-function table from `symbols.txt` and the runtime's exported shims.
+4. Normal compile and link: generated code, runtime, game glue, patches.
+
+Platform decisions:
+
+| Concern | Windows | Linux |
+| --- | --- | --- |
+| Compiler | Clang (clang-cl) preferred; MSVC works but is slower on the multi-MB generated files | Clang or GCC 13+ |
+| Graphics | Vulkan first; D3D12 later only if driver problems surface | Vulkan |
+| Packaging | Portable zip with a launcher that asks for the ISO | AppImage or Flatpak; Steam Deck is a first-class target given the ecosystem |
+| CI | GitHub Actions matrix; the CI builds the runtime and tools only, never the game (no DOL available) | Same |
+
+Compile-time notes: the generated C for a 3 MB DOL is 50–150 MB of source. Split it per function group so incremental builds stay under a minute, compile with `-O2` not `-O3`, and disable `-ffast-math` because paired-single semantics need exact rounding. Enable unity builds for the runtime only.
+
+## Phased plan
+
+Each phase ends at something you can run. Phase 0 through 2 are a few weeks each for one experienced developer; phase 3 is the long one.
+
+| Phase | Goal | Exit criterion | Estimate |
+| --- | --- | --- | --- |
+| 0. Ground truth and symbols | Dump both discs, identify the SDK build from `main.dol` strings, signature-match SDK functions, run the game in Dolphin and log every SDK call for the first 60 s | A symbol map covering every SDK entry point the game calls, plus function boundaries for the engine code | 2–4 weeks |
+| 1. Boot in ModernGekko | Run DolRecomp on both `main.dol` files; run under the ModernGekko/RecompCore template so Dolphin provides GX and audio | Title screen renders through recompiled CPU code with no interpreter fallback hits for the boot path | 1–2 weeks |
+| 2. Native OS + DVD + PAD, headless | Replace the Dolphin runtime with your own for OS, DVD (including the virtual two-disc mount), VI stubs, PAD; GX calls log and discard | Game runs its main loop headless, reads assets, responds to input, `OSReport` output matches Dolphin's | 3–4 weeks |
+| 3. GX renderer | Vertex converter, TEV shader generator, texture decoder, EFB copies, Vulkan backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
+| 4. Audio | AX voice mixer, ADPCM, disc streaming for voice-over and music | Music, codec calls and SFX match Dolphin output within tolerance | 3–6 weeks |
+| 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
+| 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
+
+```mermaid
+flowchart LR
+    A[0 Ground truth + symbols] --> B[1 Boot in ModernGekko]
+    B --> C[2 Native OS/DVD/PAD]
+    C --> D[3 GX renderer]
+    D --> E[4 Audio]
+    E --> F[5 Complete]
+    F --> G[6 Port features]
+```
+
+Phase 1 is deliberately a throwaway: running under the Dolphin-derived runtime first proves the recompiled CPU code is correct before you can blame your own SDK shims. Diff the two runtimes' `OSReport` logs and memory snapshots at fixed frame counts; that harness stays useful for the rest of the project.
+
+Test strategy throughout: record input sequences in Dolphin, replay them in the port, and compare guest-memory checksums at fixed frames. Because the game logic is unchanged, any divergence localises to a shim.
+
+## Risks, legal considerations and open questions
+
+The biggest technical risk is the GX renderer; the biggest project risk is a takedown. Both are manageable if you follow the conventions the community has settled on.
+
+| Risk | Likelihood | Mitigation |
+| --- | --- | --- |
+| GX edge cases (indirect texturing, EFB peek/poke, Z-textures, bump mapping) take far longer than planned | High | Phase 3 targets the first playable area only; keep a list of unsupported GX features and gate them by game screen |
+| Indirect branches the recompiler cannot resolve (jump tables, virtual calls) | Medium | Function table keyed by address covers all of them; add an interpreter fallback (as RecompCore does) for anything missed, and log every hit so it can be fixed |
+| Threading bugs from cooperative-to-host mismatch | Medium | Single guest thread at a time, always; no host thread ever touches guest memory except through queued events |
+| Floating-point divergence from paired-single semantics | Medium | Exact rounding, no fast-math; unit-test the recompiler's PS instruction output against Dolphin's interpreter |
+| Performance worse than Dolphin's JIT | Low | Static translation with LLVM is usually 2–4x faster than a JIT; profile before optimising |
+| Legal takedown | Real, not hypothetical | See below |
+
+**Legal.** I am not a lawyer; the following is how existing projects operate, not advice. Nintendo has pursued projects that distribute game code or assets; the recomps that have survived share these rules:
+
+- The repository contains only your own code, the recompiler configuration and symbol names. No DOL, no generated C, no assets, no extracted textures, no screenshots with copyrighted art in the README if you want to be conservative.
+- The user supplies their own disc image; the build hashes it and refuses anything else.
+- Symbol names and struct layouts from a decomp project are the community's own naming and are considered fine; verbatim SDK source (leaked Dolphin SDK) must never be referenced or included. Use libogc's headers for API shapes, or write your own from the decomp's headers.
+- If you copy from Dolphin the whole port becomes GPL-2.0-or-later; if you want a permissive licence, read Dolphin for semantics and write your own implementation.
+- Nintendo's position on this category is hostile; that is why a native runtime, not a Dolphin fork, is also the safer legal shape. A GitHub takedown of a Nintendo-title recomp is a plausible outcome regardless of how careful you are.
+
+**Open questions to settle before phase 0:**
+
+- [ ] Permissive (MIT) runtime written from scratch, or GPL and freely reuse Dolphin's texture decoder and shader generator? The GPL route is months faster on the renderer.
+- [ ] Vulkan-only, or SDL3 GPU for one code path across Vulkan/D3D12/Metal at the cost of some GX features being harder to express?
+- [ ] Is a Steam Deck build a launch target? It changes the packaging and controller work in phase 6.
+- [ ] Do you want to contribute the runtime back as a shared GameCube runtime (the way N64ModernRuntime works for N64Recomp), or keep it Twin Snakes-specific? Shared is more work up front and more valuable.
+- [ ] Is Konami's ownership of the Twin Snakes code (as opposed to Nintendo's of the SDK and platform) a factor in how public the project is? Konami has historically been quieter than Nintendo about fan projects, but this is a licensed title on Nintendo hardware.
