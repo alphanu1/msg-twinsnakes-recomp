@@ -6,7 +6,7 @@ a commit message is lost.
 
 ---
 
-## STATE, 2026-09-18: TOOLCHAIN BUILT AND VERIFIED, AWAITING A DISC
+## STATE, 2026-09-18: DISCS EXTRACTED, SDK IDENTIFIED, TARGET IS PAL
 
 The repository holds the design document, the project configuration, and a
 pinned dependency set. `extern/` has all ten upstreams (146 MB, git-ignored).
@@ -21,9 +21,12 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-**Blocking phase 0: a disc dump, and nothing else.** Every tool is installed
-and verified. The dump needs a Wii running CleanRip — PC drives cannot read
-GameCube discs.
+**The target is now PAL, GGSPA4** — retargeted 2026-09-18 because that is the
+dump that exists. The design document is updated to match (rule 12).
+
+Both discs are extracted, the SDK build is identified, and
+`config/GGSPA4.toml` holds the hashes. **Nothing is blocking phase 0 any
+more** — what remains is the symbol recovery itself.
 
 ### What is in the tree
 
@@ -37,6 +40,8 @@ GameCube discs.
 | `deps.lock` | The ten upstream pins. Committed; `extern/` itself is not. |
 | `tools/bootstrap.sh` | Fetches them. `--all` for the reference group, `--update` to re-pin. |
 | `THIRD_PARTY.md` | Licence and group per dependency, and the system packages. |
+| `config/GGSPA4.toml` | The target build: SDK, executable hashes, disc paths. |
+| `discs/GGSPA4/disc{1,2}/` | Extracted discs, 2.5 GB. **Git-ignored**, never committed. |
 | `tools/ghidra.sh` | Headless Ghidra against the flatpak install. |
 | `tools/dolphin.sh` | Dolphin via flatpak: `tool` (extract/verify/header), `nogui`, `gui`. |
 
@@ -246,6 +251,50 @@ wants. Wrapper: `tools/dolphin.sh`.
 The additive packages installed fine and are not a partial upgrade — `volk`,
 `llvm20`, `llvm20-libs`, `jdk21-openjdk` (the last only to build the Ghidra
 extension; Ghidra itself bundles its own JDK).
+
+**F7 — the disc contradicted the design document twice, both in our favour.**
+
+*Audio is Ogg Vorbis, not DSP-ADPCM.* The document predicted "DSP-ADPCM is most
+likely". The DOL carries the full Tremor source-file list — `floor0.c`,
+`floor1.c`, `codebook.c`, `mapping0.c`, `res012.c`, `sharedbook.c`, `framing.c`
+— beside the engine's own `sd_ogg.c`, `sd_stream2.c`, `sd_sound.c`. The game
+decodes Vorbis **in software**, which means the translated code may simply run
+as-is and phase 4 may not need a native stream decoder at all. Combined with
+stock AX (no custom microcode), phase 4 is the cheap branch of the estimate on
+both counts.
+
+*Most of the code is in the overlay, not the executable.* `main.dol` is 1.9 MB;
+`files/shared/mgso_pal.rel` is **5.7 MB**. Analysing only `main.dol` would miss
+the majority of the game. Both must go through Ghidra, `dtk` and DolRecomp. The
+engine also ships its own `rel_loader.c`, so it may not be using `OSLink`
+directly — worth reading before writing the REL loader in phase 2.
+
+*And one simplification:* the two discs carry **byte-identical** `main.dol`,
+`mgso_pal.rel` and `apploader.img` (SHA-1 verified). The recompiler runs once,
+not once per disc as the plan assumed; the disc swap is purely a DVD/asset
+concern. The disc-number field at `boot.bin` offset 0x06 is 0x00 and 0x01, as
+the document predicted.
+
+**F8 — the target is PAL, and the dumps are NKit. Both accepted knowingly.**
+
+*Region.* The dumps are `GGSPA4` (PAL/Europe), not the `GGSEA4` (US) build the
+document specified. Retargeted to PAL on 2026-09-18 rather than waiting for a US
+dump. Every address and symbol recovered from here is PAL-specific and would not
+transfer to a US build; US and JP remain later additions, now from the other
+direction. **PAL carries one cost the US build would not**: 50 Hz and 576i are
+its native modes, which tangles with the "is the logic frame-locked at 30" and
+widescreen questions. Check for a 60 Hz boot option before assuming 50 Hz timing
+is what the logic runs on.
+
+*Container.* The images are NKit-scrubbed, which the document refuses as "not
+guaranteed byte-exact". Accepted because NKit rewrites junk and padding
+*between* files rather than the files themselves, and because the hash check
+that matters is on the **extracted executables**, not the image — which also
+makes it container-independent. **This is unverified**, and it is the one open
+risk in the current setup: it stays unverified until someone with a
+redump-clean dump confirms `main.dol` SHA-1
+`124bca49886033df5053d3be1f8748a218ddf60f`. If it ever fails to match, every
+address recovered before that point is suspect.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

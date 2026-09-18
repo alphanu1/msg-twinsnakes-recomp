@@ -1,0 +1,82 @@
+# Metal Gear Solid: The Twin Snakes — PAL (Europe)
+#
+# The bring-up target. Every address and symbol in this project is tied to this
+# build; US (GGSEA4) and Japanese (GGSJA4) are a later addition.
+#
+# Hashes are of the EXTRACTED executables, not of the disc image. That is what
+# the design document's verify-hash step checks, and it is what matters: the
+# recompiler consumes main.dol and the REL, not the ISO. It also makes the
+# check independent of the container format (.iso/.gcm/.rvz/NKit).
+
+[paths]
+# Extracted discs live in the repository under discs/, which is git-ignored.
+# Nothing disc-derived is ever committed (project rule 8).
+disc1 = "discs/GGSPA4/disc1"
+disc2 = "discs/GGSPA4/disc2"
+
+[game]
+id          = "GGSPA4"
+name        = "Metal Gear Solid: The Twin Snakes"
+region      = "PAL"
+revision    = 0
+developer   = "Silicon Knights"
+publisher   = "Konami"
+year        = 2004
+discs       = 2
+
+[sdk]
+# Identified from main.dol strings. This is the key that unlocks signature
+# matching against other games' decomps that share the build.
+version     = "0x2301"
+newest_component_build = "2003-08-06"
+# Every component found, with its own release build date:
+#   AI ARQ AR   2003-04-17    EXI SI VI   2003-04-17
+#   CARD DSP    2003-04-17    OS GX DVD   2003-07-23
+#   AX          2003-07-29    PAD         2003-08-06
+# AX is present and stock: no custom DSP microcode. Phase 4 is the cheaper
+# branch of the design document's estimate.
+compiler    = "Metrowerks CodeWarrior"
+
+[executables]
+# IDENTICAL on both discs -- verified by SHA-1. The recompiler runs ONCE, not
+# once per disc. Only the asset filesystem differs between them.
+[executables.main_dol]
+path        = "sys/main.dol"
+size        = 1988128
+sha1        = "124bca49886033df5053d3be1f8748a218ddf60f"
+md5         = "c2c0f0a652751c2e7e42440828b8699f"
+
+[executables.rel]
+# 5.7 MB against the DOL's 1.9 MB: most of the game's code is in the overlay,
+# not the executable. The REL must be recompiled too, and the engine has its
+# own rel_loader.c rather than using OSLink directly.
+path        = "files/shared/mgso_pal.rel"
+size        = 5737716
+sha1        = "99910b99144cf1c1cf7f8a2183b6ca5e595f65d4"
+
+[executables.apploader]
+path        = "sys/apploader.img"
+size        = 119332
+sha1        = "1e30e91a7412677ff82f99cc437898ac811a3cb6"
+
+[discs.1]
+# The disc number lives at offset 0x06 of boot.bin; both discs share the ID.
+disc_number = 0
+[discs.2]
+disc_number = 1
+
+[audio]
+# Ogg Vorbis (Tremor), NOT DSP-ADPCM as originally predicted. Identified from
+# source-file strings left in the DOL: floor0.c floor1.c codebook.c mapping0.c
+# res012.c sharedbook.c framing.c, plus the engine's own sd_ogg.c sd_stream2.c
+# sd_sound.c sd_mem.c.
+stream_codec = "ogg-vorbis"
+
+[source]
+# The images these hashes were taken from are NKit-scrubbed, which the design
+# document would normally refuse. Retained knowingly: NKit rewrites junk and
+# padding between files, not the files themselves, so the extracted
+# executables are expected to be byte-exact. UNVERIFIED until someone with a
+# redump-verified image confirms the same main.dol SHA-1. See HANDOFF F8.
+container   = "nkit"
+verified_against_redump = false

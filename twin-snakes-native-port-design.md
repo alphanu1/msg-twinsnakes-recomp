@@ -4,13 +4,13 @@
 
 ## Overview
 
-The project is a **static recompilation** of Metal Gear Solid: The Twin Snakes (GameCube, 2004) into native Windows and Linux builds. The game's PowerPC code is translated ahead of time into C, compiled with a normal host compiler, and linked against a runtime that reimplements the GameCube SDK on SDL3 and Vulkan. At runtime there is no PowerPC, no interpreter and no JIT; the game's own logic runs as native machine code, so behaviour, saves and physics match the original disc exactly.
+The project is a **static recompilation** of Metal Gear Solid: The Twin Snakes (GameCube, 2004; PAL build GGSPA4) into native Windows and Linux builds. The game's PowerPC code is translated ahead of time into C, compiled with a normal host compiler, and linked against a runtime that reimplements the GameCube SDK on SDL3 and Vulkan. At runtime there is no PowerPC, no interpreter and no JIT; the game's own logic runs as native machine code, so behaviour, saves and physics match the original disc exactly.
 
 Matching decompilation is out of scope. The generated C is a build artefact, never hand-edited, and readability is not a goal; a hand-written replacement is only ever introduced for a specific function when a port feature (widescreen, a bug fix) needs it.
 
 Why this is the right shape for Twin Snakes specifically:
 
-- Twin Snakes has no public decompilation, so a matching decomp would start from zero symbols and take years. Static recompilation needs function boundaries and SDK symbols only, which can be recovered from the DOL in weeks.
+- Twin Snakes has no public decompilation, so a matching decomp would start from zero symbols and take years. Static recompilation needs function boundaries and SDK symbols only, which can be recovered from the DOL in weeks. (Confirmed in practice: the SDK build was identified within minutes of the first extraction.)
 - The Gekko is an in-order 32-bit PowerPC with no self-modifying code in retail titles, the ideal input for static translation, and [DolRecomp](https://github.com/ExpansionPak/DolRecomp) already handles it.
 - The engine is Silicon Knights' own (shared lineage with Eternal Darkness) sitting on the standard Nintendo SDK, so the translated/native boundary can be drawn at the SDK's public API, which is the same for every GameCube game.
 
@@ -18,7 +18,9 @@ The finished port has three parts: generated code from both discs' executables, 
 
 ## Target game: Metal Gear Solid: The Twin Snakes
 
-The bring-up target is the North American release, disc IDs GGSEA4 (both discs share the ID; the disc number field distinguishes them). Every address, symbol and hash in the project is tied to that build; PAL (GGSPA4) and Japanese (GGSJA4) support are a later addition once the US build is complete.
+**The bring-up target is the PAL release, disc ID GGSPA4** (retargeted 2026-09-18 from the North American GGSEA4: PAL is the dump that exists). Both discs share the ID; the disc number field at offset 0x06 of `boot.bin` distinguishes them, confirmed as 0x00 and 0x01. Every address, symbol and hash in the project is tied to this build; US (GGSEA4) and Japanese (GGSJA4) support are a later addition once PAL is complete.
+
+PAL brings one complication the US build would not have: 50 Hz and 576i are the native display modes, which interacts with the frame-rate question below and with any phase-6 widescreen work. Check whether the game offers a 60 Hz mode at boot before assuming the 50 Hz timing is what the logic runs on.
 
 What is known and what phase 0 must establish:
 
@@ -27,15 +29,18 @@ What is known and what phase 0 must establish:
 | Developer / engine | Silicon Knights, in-house engine descended from Eternal Darkness; published by Konami, 2004 | Whether the engine uses Nintendo's standard SDK libraries directly or wraps them; SDK version string in `main.dol` |
 | Discs | Two discs; the game prompts for a swap mid-story | Which SDK disc-change path it uses (`DVDGetCurrentDiskID`, cover-status polling) so the runtime can present disc 2 without a physical swap |
 | Decomp status | No public decompilation or symbol map exists | Function boundaries and SDK symbols must be recovered by signature matching against known SDK builds (Ghidra with the Gekko spec plus dtk's analyser) |
-| Code layout | Unknown | Single `main.dol` or REL overlays; approximate function count |
-| Audio | Voice-over and music streamed from disc; Dolby Pro Logic II output | Whether it uses stock AX or a custom DSP microcode; stream codec (DSP-ADPCM is most likely) |
+| **SDK build** | **Answered: Dolphin SDK `0x2301`**, newest component 2003-08-06, Metrowerks CodeWarrior. Components AI, AR, ARQ, AX, CARD, DSP, DVD, EXI, GX, OS, PAD, SI, VI | Done — this is the key for signature matching |
+| **Code layout** | **Answered: DOL plus one large REL.** `main.dol` is 1.9 MB; `files/shared/mgso_pal.rel` is **5.7 MB**, so most of the game's code is in the overlay. The engine has its own `rel_loader.c` | Function count; whether `rel_loader.c` wraps `OSLink` or replaces it |
+| **Both discs' executables** | **Answered: byte-identical.** `main.dol`, the REL and the apploader have the same SHA-1 on both discs; only the asset filesystem differs | Done |
+
+| Audio | Voice-over and music streamed from disc; Dolby Pro Logic II output | **Answered: stock AX, no custom microcode** — the SDK's own AX build string is present. **The stream codec is Ogg Vorbis (Tremor), not DSP-ADPCM**: `floor0.c`, `floor1.c`, `codebook.c`, `mapping0.c`, `res012.c`, `sharedbook.c`, `framing.c` are all in the DOL, alongside the engine's `sd_ogg.c`, `sd_stream2.c`, `sd_sound.c` |
 | Video | Cutscenes are real-time in-engine, not pre-rendered | Any use of Bink or THP for logos or the intro |
 | Memory card | Psycho Mantis reads other games' save files (Eternal Darkness, Wind Waker, Sunshine, Melee) | CARD enumeration API surface used; the runtime must expose a directory of save files, not just the game's own |
 | Frame rate | 30 fps, 480p and progressive-scan supported | Whether game logic is frame-locked at 30 |
 
 The absence of a decomp is the main cost of this choice. Budget the first 2–4 weeks purely for symbol recovery: identify the SDK by string, match its \~400 public functions by byte signature (the same SDK build appears in many other games whose decomps *do* name them), and map the remaining engine functions by address only. The recompiler needs nothing more than that to produce correct code.
 
-The two-disc structure is the other Twin Snakes-specific design point. The runtime should mount both disc images at startup and present a virtual disc-swap: when the game polls for disc 2, the DVD shim reports the cover opened, disc 2 inserted, and cover closed, on the timing the SDK expects.
+The two-disc structure is the other Twin Snakes-specific design point, and it is **simpler than it first appeared**: the two discs carry byte-identical executables, so the recompiler runs once and the disc swap is purely a DVD/asset concern. The runtime should mount both disc images at startup and present a virtual disc-swap: when the game polls for disc 2, the DVD shim reports the cover opened, disc 2 inserted, and cover closed, on the timing the SDK expects.
 
 ## Toolchain and existing projects to build on
 
@@ -148,7 +153,7 @@ The SDK shim layer is where most engineering hours go. Order the work by what bl
 | GX | \~200 functions: `GXSetVtxDesc`, `GXLoadPosMtxImm`, `GXSetTevOp`, `GXBegin`/write-gather immediate mode, display lists via `GXCallDisplayList`, `GXCopyDisp`, `GXSetZMode`, texture and TLUT loading | GX state model, FIFO command parser (games write raw FIFO commands too), TEV-to-GLSL/HLSL shader generator, texture decoder for I4/I8/IA4/IA8/RGB565/RGB5A3/RGBA8/CMPR, EFB copy emulation | Very high: this is the port |
 | VI | `VIConfigure`, `VIFlush`, `VIWaitForRetrace`, XFB address | Present the last EFB copy; drive the frame loop from vsync or a timer | Low |
 | PAD | `PADInit`, `PADRead`, `PADClamp`, rumble | SDL3 gamepad; map GC layout, handle the GC's analog trigger and C-stick semantics | Low |
-| AX / DSP | `AXInit`, `AXAcquireVoice`, `AXSetVoice*`, `AXRegisterCallback` at 5 ms; DSP ARAM DMA | Native voice mixer: ADPCM (DSP-ADPCM/AFC) and PCM decoders, per-voice SRC, mix at 32 kHz into SDL audio | Medium if the game uses stock AX; high if custom ucode |
+| AX / DSP | `AXInit`, `AXAcquireVoice`, `AXSetVoice*`, `AXRegisterCallback` at 5 ms; DSP ARAM DMA | Native voice mixer: PCM decoder, per-voice SRC, mix at 32 kHz into SDL audio. **Vorbis streams decode with libvorbis/Tremor on the host** rather than needing a DSP-ADPCM decoder — the game already does this in software, so the translated code may simply run as-is | **Medium, and confirmed so**: stock AX, no custom ucode |
 | ARAM / AR | `ARAlloc`, `ARStartDMA` | A second 16 MB host buffer; DMA is a memcpy with a completion callback | Low |
 | CARD | Memory card open/read/write/create | Files in a per-user save directory; keep the 8 KB block format so saves stay compatible with Dolphin | Low |
 | DSP init, EXI, SI | Low-level bus setup | Stubs that return success | Low |
@@ -158,10 +163,10 @@ Supported disc inputs (physical GameCube discs cannot be read by PC drives; user
 
 - `.iso` / `.gcm`: raw dumps, \~1.4 GB per disc, mounted directly
 - `.rvz`: Dolphin's compressed format, supported through a small built-in decoder
-- `.nkit`: refused; not guaranteed byte-exact
+- `.nkit`: **normally refused** — not guaranteed byte-exact. The current dumps are NKit and are used knowingly: NKit rewrites junk and padding *between* files, not the files themselves, and the hash check is on the extracted executables rather than the image. Unverified against redump until someone with an untouched dump confirms the same `main.dol` SHA-1.
 - Extracted folder: for development, assets editable in place
 
-Twin Snakes needs both discs; the launcher asks for two images and hash-checks each against the known-good US dump.
+Twin Snakes needs both discs; the launcher asks for two images and hash-checks the executables extracted from them against `config/GGSPA4.toml`.
 
 Two GX details decide whether the renderer is tractable:
 
@@ -180,7 +185,7 @@ recomp/
 ├── cmake/            toolchain files: msvc-x64, clang-linux, mingw cross
 ├── extern/           DolRecomp, SDL3, volk, VMA, spdlog (submodules or vcpkg)
 ├── config/
-│   ├── GGSEA4.toml   per-disc config: entry point, symbol map path, SDK patch list, hash of main.dol
+│   ├── GGSPA4.toml   per-game config: SDK build, hashes of main.dol and the REL
 │   └── symbols/      symbols.txt and splits.txt recovered in phase 0
 ├── runtime/          the native SDK (no game knowledge)
 │   ├── os/  dvd/  gx/  vi/  pad/  ax/  card/  aram/
@@ -195,8 +200,8 @@ recomp/
 
 Build flow, run by `cmake --build`:
 
-1. `verify-hash` checks the user's `main.dol` against the hash in `config/<disc>.toml`; any other revision fails early.
-2. DolRecomp emits split C (or LLVM objects) into `build/generated/`, with SDK symbols routed to the patch table instead of translated.
+1. `verify-hash` checks the user's extracted `main.dol` and `mgso_pal.rel` against the hashes in `config/GGSPA4.toml`; any other revision fails early. Hashing the extracted executables rather than the disc image makes the check independent of the container format.
+2. DolRecomp emits split C (or LLVM objects) into `build/generated/`, with SDK symbols routed to the patch table instead of translated. **Both `main.dol` and the 5.7 MB REL go through it** — the overlay holds most of the game's code.
 3. `gen-patch-table` produces the guest-address to native-function table from `symbols.txt` and the runtime's exported shims.
 4. Normal compile and link: generated code, runtime, game glue, patches.
 

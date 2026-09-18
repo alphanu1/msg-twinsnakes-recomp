@@ -16,13 +16,16 @@ when the work feels done.
 
 ## Status, 2026-09-18
 
-**Phase 0, in progress — toolchain complete and verified.** `extern/` holds all
-ten upstreams pinned in `deps.lock` (git-ignored). Ghidra + GameCubeLoader,
-Dolphin, `dtk` 1.8.4 and DolRecomp (LLVM 20 backend, 33/33 tests) are all
-installed and tested. No symbols and no disc dump yet.
+**Phase 0, in progress — discs extracted, SDK identified.** The toolchain is
+built and verified. Both PAL discs are extracted, the SDK build is known, and
+`config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
+symbol recovery itself.
 
-**The only remaining blocker is a disc dump** (CleanRip on a Wii; PC drives
-cannot read GameCube discs). Every tool is installed — see `THIRD_PARTY.md`.
+**Target retargeted to PAL (GGSPA4)** on 2026-09-18 — that is the dump that
+exists. The design document is updated to match.
+
+Four of the design document's phase-0 unknowns are now answered — SDK build,
+code layout, audio codec and the two-disc question. See below.
 
 **The licence question is settled: GPL-3.0.** Dolphin's texture decoder and TEV
 shader generator are lifted rather than reimplemented, which takes months off
@@ -30,7 +33,7 @@ phase 3.
 
 | Phase | Goal | Exit criterion | Estimate | State |
 |---|---|---|---|---|
-| 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — toolchain ready, awaiting a disc |
+| 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
 | 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | blocked on 0 |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | blocked on 1 |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
@@ -81,12 +84,16 @@ more.
 - [x] **`dtk` 1.8.4 built.**
 
 
-- [ ] Dump both discs (CleanRip on a Wii; PC drives cannot read GameCube discs).
-      Record the hashes into `config/GGSEA4.toml`.
-- [ ] Extract `sys/main.dol` from both discs, any `.rel` files, and the FST —
-      `tools/dolphin.sh tool extract`.
-- [ ] Identify the SDK build from `main.dol` strings — the version string is the
-      key that unlocks signature matching.
+- [x] **Discs obtained and extracted** — PAL, NKit containers (knowingly; see
+      F8). Hashes recorded in `config/GGSPA4.toml`.
+- [x] **Both discs' executables are byte-identical** — `main.dol`, the REL and
+      the apploader share a SHA-1 across discs. **The recompiler runs once, not
+      twice.**
+- [x] **Extracted** `sys/main.dol`, `files/shared/mgso_pal.rel` and the FST
+      from both discs via `tools/dolphin.sh tool extract`.
+- [x] **SDK identified: Dolphin SDK `0x2301`**, newest component 2003-08-06,
+      Metrowerks CodeWarrior. All thirteen component build strings are recorded
+      in `config/GGSPA4.toml`. This is the key for signature matching.
 - [ ] Signature-match the ~400 public SDK functions against other games' decomps
       (decomp.dev). The same SDK build appears in many titles whose decomps *do*
       name these.
@@ -103,13 +110,17 @@ more.
 
 **Open questions from the design doc that phase 0 answers:**
 
-- Single `main.dol` or REL overlays, and approximate function count.
+- [x] **DOL plus one large REL.** `main.dol` 1.9 MB; `mgso_pal.rel` **5.7 MB**
+  — most of the game's code is in the overlay, and both must be recompiled.
+  The engine has its own `rel_loader.c`. *Remaining: function count, and whether
+  `rel_loader.c` wraps `OSLink` or replaces it.*
 - Whether the engine calls the Nintendo SDK directly or wraps it.
 - Which disc-change path the game uses (`DVDGetCurrentDiskID`, cover polling) —
   this determines the virtual two-disc mount.
-- Stock AX or custom DSP microcode. This is the difference between "medium" and
-  "high" on the whole of phase 4. If it is custom there is no signature
-  database for it, and reading it in Ghidra is the only route.
+- [x] **Stock AX, no custom microcode** — phase 4 takes the cheaper branch.
+- [x] **The stream codec is Ogg Vorbis (Tremor), not DSP-ADPCM.** The game
+  decodes it in software, so the translated code may simply run as-is rather
+  than needing a native decoder.
 - Any Bink/THP use for logos or the intro.
 - The CARD enumeration surface, since Psycho Mantis reads *other games'* saves.
 - Whether game logic is frame-locked at 30 fps — decides whether phase 6's 60
