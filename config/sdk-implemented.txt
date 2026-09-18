@@ -26,3 +26,19 @@ OSGetTick
 OSDisableInterrupts
 OSEnableInterrupts
 OSRestoreInterrupts
+
+# --- DVD --------------------------------------------------------------------
+# Reads go through the worker pool; callbacks fire on the guest thread, which
+# is the SDK's own contract. See runtime/dvd/dvd.h.
+DVDConvertPathToEntrynum
+DVDOpen
+DVDFastOpen
+DVDClose
+# DVDReadAsync is deliberately absent: it is a MACRO in the SDK header that
+# expands to DVDReadAsyncPrio, so no such function exists to patch. Listing it
+# was an error the generator caught by refusing to claim an address it could
+# not find.
+DVDReadAsyncPrio
+DVDGetCommandBlockStatus
+# DVDGetFileInfoStatus is a real function but is not yet in the symbol map -
+# a genuine gap, not a macro. Restore this line once alignment reaches it.

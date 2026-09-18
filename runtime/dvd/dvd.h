@@ -27,6 +27,32 @@
 #include <stdint.h>
 
 /* DVDCommandBlock states, as the SDK defines them; the game polls for these. */
+/* DVDCommandBlock field offsets, from the SDK's own dvd.h. Named rather than
+ * literal because the one that matters is easy to guess wrong: `state` is at
+ * 0x0C, and 0x08 - the obvious guess - is `command`. Writing status to 0x08
+ * corrupts the command word and leaves the game polling a state that never
+ * changes.
+ */
+#define DVD_CB_NEXT          0x00u
+#define DVD_CB_PREV          0x04u
+#define DVD_CB_COMMAND       0x08u
+#define DVD_CB_STATE         0x0Cu
+#define DVD_CB_OFFSET        0x10u
+#define DVD_CB_LENGTH        0x14u
+#define DVD_CB_ADDR          0x18u
+#define DVD_CB_CURR_XFER     0x1Cu
+#define DVD_CB_XFERRED       0x20u
+#define DVD_CB_CALLBACK      0x28u
+#define DVD_CB_USERDATA      0x2Cu
+#define DVD_CB_SIZEOF        0x30u
+
+/* DVDFileInfo embeds a command block, then its own three fields. */
+#define DVD_FI_CB            0x00u
+#define DVD_FI_START_ADDR    0x30u
+#define DVD_FI_LENGTH        0x34u
+#define DVD_FI_CALLBACK      0x38u
+#define DVD_FI_SIZEOF        0x3Cu
+
 #define DVD_STATE_END           0
 #define DVD_STATE_BUSY         (-1)
 #define DVD_STATE_WAITING      (-2)

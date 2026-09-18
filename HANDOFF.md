@@ -1517,5 +1517,37 @@ an independent synchronous read of the same slice. A worker writing guest
 memory directly, or a shared scratch buffer, shows up there as crossed data —
 and nowhere else, because a single read would look perfect either way.
 
+**F47 — the guest-facing DVD shims, and two things reading the real header
+caught.**
+`runtime/dvd/dvd_shims.c` implements what translated code calls:
+`DVDConvertPathToEntrynum`, `DVDOpen`, `DVDFastOpen`, `DVDClose`,
+`DVDReadAsyncPrio`, `DVDGetCommandBlockStatus`. **12 SDK functions are now in
+the patch table**, so their translated bodies never run.
+
+*A bug in code I had already written and tested:* I placed the command
+block's `state` at offset `0x08`. The SDK's own header puts it at **`0x0C`** —
+`0x08` is `command`. Writing status there would have corrupted the command
+word *and* left the game polling a state that never changed, and the tests
+passed because they read back the same wrong offset they wrote. **Reading the
+header, not the tests, found it.** Offsets are now named constants with that
+trap called out in the comment.
+
+*An error the generator caught:* I listed `DVDReadAsync` as implemented. It is
+a **macro** in the SDK header expanding to `DVDReadAsyncPrio`, so no such
+function exists to patch, and it correctly was not in the symbol map. The
+generator refused to claim an address it could not find and named it. That is
+the "adding a name without an implementation is a link error" property working
+in the other direction — the map is right and the list was wrong.
+
+`DVDGetFileInfoStatus` is the opposite case: a real function our alignment has
+not reached. Implemented and ready, commented out of the list rather than
+quietly dropped, so it goes in the moment the symbol appears.
+
+*One design point worth recording:* `DVDReadAsync` receives a `DVDFileInfo`,
+which carries a **disc offset and a length — not a name**. So the shim
+resolves the offset back to an FST entry to learn which file to read. That
+works because a file's offset is unique on the disc, and it avoids keeping
+host-side state keyed on a guest pointer the game is free to move or reuse.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

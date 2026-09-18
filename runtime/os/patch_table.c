@@ -15,9 +15,15 @@ static const MgsPatch k_patches[] = {
     {0x8001FCF4u, mgs_OSRestoreInterrupts},   /* OSRestoreInterrupts */
     {0x800240D8u, mgs_OSGetTime},   /* OSGetTime */
     {0x800240F0u, mgs_OSGetTick},   /* OSGetTick */
+    {0x80026970u, mgs_DVDConvertPathToEntrynum},   /* DVDConvertPathToEntrynum */
+    {0x80026C64u, mgs_DVDFastOpen},   /* DVDFastOpen */
+    {0x80026CD8u, mgs_DVDOpen},   /* DVDOpen */
+    {0x80026DA0u, mgs_DVDClose},   /* DVDClose */
+    {0x80026FE8u, mgs_DVDReadAsyncPrio},   /* DVDReadAsyncPrio */
+    {0x80029360u, mgs_DVDGetCommandBlockStatus},   /* DVDGetCommandBlockStatus */
 };
 
-#define MGS_PATCH_COUNT 6u
+#define MGS_PATCH_COUNT 12u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {

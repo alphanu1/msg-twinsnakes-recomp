@@ -57,7 +57,7 @@ MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
      * observe a request that is neither BUSY nor finished.
      */
     if (guest_block)
-        guest_write32(dvd->mem, guest_block + 0x08u, (uint32_t)DVD_STATE_BUSY);
+        guest_write32(dvd->mem, guest_block + DVD_CB_STATE, (uint32_t)DVD_STATE_BUSY);
 
     if (!mgs_jobs_submit(dvd->jobs, read_job, req)) {
         /* Pool refused - shutting down, or full. Run it here rather than
@@ -88,9 +88,13 @@ unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max)
         }
 
         if (req->guest_block) {
-            guest_write32(dvd->mem, req->guest_block + 0x08u,
+            guest_write32(dvd->mem, req->guest_block + DVD_CB_STATE,
                           req->result >= 0 ? (uint32_t)DVD_STATE_END
                                            : (uint32_t)DVD_STATE_FATAL_ERROR);
+            /* The game reads this back to learn how much actually arrived,
+             * which for a short read is less than it asked for. */
+            guest_write32(dvd->mem, req->guest_block + DVD_CB_XFERRED,
+                          req->result > 0 ? (uint32_t)req->result : 0u);
         }
 
         completed[n++] = req;

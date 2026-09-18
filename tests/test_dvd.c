@@ -47,13 +47,13 @@ int main(void)
 
         /* BUSY is visible immediately: the game must never see a request that
          * is neither busy nor finished. */
-        CHECK((int32_t)guest_read32(&mem, BLOCK + 8u) == DVD_STATE_BUSY);
+        CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_BUSY);
 
         mgs_jobs_wait(jobs);
         n = mgs_dvd_drain(&dvd, done, MGS_DVD_MAX_PENDING);
         CHECK(n == 1u);
         CHECK(done[0]->result == 64L);
-        CHECK((int32_t)guest_read32(&mem, BLOCK + 8u) == DVD_STATE_END);
+        CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_END);
 
         /* A REL's first word is its module id, which is 1 - and it must be
          * readable through the byte-swapping accessor, i.e. it landed in
@@ -106,7 +106,7 @@ int main(void)
         n = mgs_dvd_drain(&dvd, done, 1u);
         CHECK(n == 1u);
         CHECK(done[0]->result == -1L);
-        CHECK((int32_t)guest_read32(&mem, BLOCK + 8u) == DVD_STATE_FATAL_ERROR);
+        CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_FATAL_ERROR);
         mgs_dvd_release(done[0]);
     }
 

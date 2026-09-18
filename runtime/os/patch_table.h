@@ -16,5 +16,11 @@ void mgs_OSEnableInterrupts(CPUState* ctx);
 void mgs_OSRestoreInterrupts(CPUState* ctx);
 void mgs_OSGetTime(CPUState* ctx);
 void mgs_OSGetTick(CPUState* ctx);
+void mgs_DVDConvertPathToEntrynum(CPUState* ctx);
+void mgs_DVDFastOpen(CPUState* ctx);
+void mgs_DVDOpen(CPUState* ctx);
+void mgs_DVDClose(CPUState* ctx);
+void mgs_DVDReadAsyncPrio(CPUState* ctx);
+void mgs_DVDGetCommandBlockStatus(CPUState* ctx);
 
 #endif

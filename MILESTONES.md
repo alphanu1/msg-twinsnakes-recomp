@@ -241,9 +241,11 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 - [x] **Asynchronous reads** — on the worker pool, data copied into guest
       memory on the guest thread's drain, `DVDCommandBlock` status moving
       BUSY → END, tested with 32 reads in flight (F46).
-- [ ] **DVD** — the guest-facing shims themselves: `DVDOpen`,
-      `DVDConvertPathToEntrynum`, `DVDReadAsync`, `DVDGetCommandBlockStatus`,
-      wired into the patch table.
+- [x] **DVD shims wired into the patch table** — `DVDConvertPathToEntrynum`,
+      `DVDOpen`, `DVDFastOpen`, `DVDClose`, `DVDReadAsyncPrio`,
+      `DVDGetCommandBlockStatus`. 12 SDK functions patched (F47).
+- [ ] **Virtual two-disc mount** — mount both images, report cover open /
+      disc 2 / cover closed on the SDK's timing when the game asks.
 - [ ] Disc path resolution: explicit argument, then config, then conventional
       locations. The image is never required to sit beside the executable. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.
