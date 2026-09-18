@@ -14,3 +14,7 @@ add_executable(test_fst test_fst.c)
 target_link_libraries(test_fst PRIVATE mgs_runtime)
 # Run from the repo root so the test can find an extracted disc if one exists.
 add_test(NAME fst COMMAND test_fst WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_executable(test_disc test_disc.c)
+target_link_libraries(test_disc PRIVATE mgs_runtime)
+add_test(NAME disc COMMAND test_disc WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

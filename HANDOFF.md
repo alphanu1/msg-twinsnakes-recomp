@@ -1361,5 +1361,27 @@ from an **extracted folder first**, disc images after. The design document
 lists both, an extracted folder is what we have and what it calls the
 development path, and the FST gives the path-to-file mapping either way.
 
+**F42 — the disc layer: one seam, two backends.**
+`runtime/dvd/disc.c` mounts either an image (`.iso`/`.gcm`) or an extracted
+folder, and **detects which rather than being told**, so the caller passes
+whatever the user gave it. Both resolve paths through the same FST, so
+`DVDOpen` never learns the difference — which is what stops the development
+path and the shipped path drifting apart.
+
+*The image backend refuses anything without the GameCube magic* (`0xC2339F3D`
+at `0x1C`) rather than guessing. NKit and compressed formats fail there by
+design: the design document refuses NKit as not byte-exact.
+
+*One behaviour that is deliberate and would be easy to get wrong:* **a read
+running off the end of a file is a short read, not an error.** The SDK's
+`DVDRead` returns a length and the game checks it, so failing would diverge
+from the hardware the game was written against. Tested at the exact boundary —
+16 bytes returned from a 64-byte read at `len-16`, and 0 from a read starting
+at `len`.
+
+Verified against the real disc: mounts as `GGSPA4`, disc number 0, 1,653 FST
+entries, and the REL reads back at its recorded 5,737,716 bytes with the
+module id `1` in its first word.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
