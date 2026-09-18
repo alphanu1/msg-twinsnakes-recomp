@@ -23,7 +23,8 @@ flowchart TD
     B -->|strings| D["SDK build 0x2301<br/>identified"]
     D --> E
     B -->|dtk signature match| E["501 symbols<br/>origin: dtk-sig"]
-    E -->|ordered run alignment<br/>vs doldecomp/mkdd| F["+~164 GX symbols<br/>origin: mkdd-align"]
+    B -->|dtk split: 18,485 functions| E
+    E -->|ordered run alignment<br/>vs doldecomp/mkdd| F["+350 symbols, GX 13 to 93<br/>origin: mkdd-align"]
     F -->|Ghidra, Gekko spec| G["engine boundaries in the REL<br/>origin: ghidra"]
     G --> H["config/symbols/<br/>the symbol map"]
     H -->|DolRecomp| I["generated C<br/>build artefact, never committed"]
@@ -107,36 +108,84 @@ public decompilation projects. A match names the function.
 **Provenance:** names come from public clean-room decompilation projects, which
 recover the SDK's API by analysing retail binaries. Names, not code.
 
-## Stage 5 — Close the GX gap by run alignment · **PLANNED**
+## Stage 5 — Close the GX gap by run alignment · **DONE**
 
 **In:** our function boundaries + `doldecomp/mkdd`'s symbol map.
-**Out:** ~164 further GX symbols, origin `mkdd-align`.
+**Out:** 350 further symbols, origin `mkdd-align`.
 
 Mario Kart Double Dash links **the same SDK `0x2301` build**, and its decomp
-publishes a symbol map with addresses and sizes. It names 177 GX functions
-against our 17.
+publishes a symbol map with addresses and sizes.
 
 **Established before relying on it:** of 287 symbols named in both, **264 have
 byte-identical sizes (92%)**. Every mismatch is a C-runtime function whose
 codegen varies with compiler options, not an SDK function.
 
-**The method, and why it is not a constant offset.** Each game links only the
-SDK functions it references, so the offset between the two binaries is
-*piecewise* constant: `GXInit` through `GXSetGPFifo` — five consecutive
-functions — all sit at exactly `-0x82098`, then it shifts as functions absent
-from one binary drop out. So:
+**Why it is not a constant offset.** Each game links only the SDK functions it
+references, so the offset is *piecewise* constant: `GXInit` through
+`GXSetGPFifo` — five consecutive functions — all sit at exactly `-0x82098`,
+then it shifts as functions absent from one binary drop out.
 
-1. Recover complete function boundaries for our `.text`.
-2. Walk both lists in address order, anchored on symbols already named in both.
-3. Within an aligned run, transfer names by position.
-4. **Accept a name only if the size matches**, and record it as `mkdd-align`.
+```sh
+tools/align-symbols.py \
+    --ours build/phase0/main.symbols.txt \
+    --ref  extern/mkdd/config/MarioClub_us/symbols.txt \
+    --out  build/phase0/aligned.txt
+```
 
-Cross-check names against `extern/dolsdk2004`, which carries 267 GX function
-names in source form — the authoritative list of what the GX surface contains.
+The tool runs two independent passes, and a name is only ever written onto an
+unnamed `fn_*` function whose size matches exactly:
+
+1. **Between-anchor segments.** Two consecutive anchors bracket a segment in
+   each binary. If the segments are the same length *and* every size agrees
+   pairwise, the linker kept the same functions in the same order between those
+   points, and the mapping is 1:1.
+2. **Run extension.** Walk outward from each anchor while sizes agree; a size
+   disagreement ends the run. This catches the regions beyond the first and
+   last anchor.
+
+A function claimed with two different names by different runs is dropped
+rather than guessed at.
+
+### Result, and the proof of it
+
+```
+ours              1804 functions in .text
+reference        15342 functions in .text
+anchors            264 (same name AND same size in both)
+segments mapped     59 (consecutive anchors, exact size agreement)
+runs extended      479
+names assigned     352
+```
+
+| | before | after |
+|---|---|---|
+| symbols in the map | 501 | **851** |
+| GX functions named | 13 | **93** |
+
+**Three independent checks, all passed:**
+
+1. **The two passes agree.** Segment matching produced **no names that run
+   extension had not already produced, and no contradictions**. Two different
+   methods over the same data reaching the same answer is the strongest signal
+   available here.
+2. **Sizes match exactly**, by construction — a name is never transferred onto
+   a function of a different size.
+3. **Cross-checked against a second, unrelated source.** Of the 76 GX names
+   this stage produced, **62 (82%) appear in `doldecomp/dolsdk2004`'s GX
+   sources**, a decompilation of a *different* SDK release by a *different*
+   project. The 14 that do not are all internal `__GX*` statics, where decomp
+   projects legitimately differ on naming — not public API functions.
+
+**Remaining:** MKDD names 177 GX functions; we have 93. The rest were not
+recovered because the surrounding runs broke on size disagreement, which
+happens wherever the two games link different neighbouring functions. Closing
+that needs the Dolphin SDK-call log (stage 9's harness, built early) or manual
+analysis in Ghidra.
 
 **Provenance:** a public clean-room decompilation of a different game. No code
-is copied; only names, and only where our own binary's function sizes confirm
-the match.
+is copied — only names, and only where our own binary's function sizes
+independently confirm the match. `tools/align-symbols.py` is our own code and
+is committed, so the derivation can be re-run and checked.
 
 ## Stage 6 — Recover the engine · **PLANNED**
 

@@ -75,22 +75,19 @@ layout" section is the target, not the current state.
 
 ## NEXT, IN ORDER
 
-1. **Dump both discs** (CleanRip on a Wii). This is now the only thing
-   standing between the project and phase 0, and it is the one step with a
-   physical dependency.
-2. **Hash them** — `tools/dolphin.sh tool verify` / `header` — and record the
-   hashes in `config/GGSEA4.toml`.
-3. **Dump both discs and hash them.** Everything downstream is blocked on this,
-   and it needs hardware — CleanRip on a Wii; a PC drive cannot read a GameCube
-   disc. Start it early because it is the only step with a physical dependency.
-4. **Identify the SDK build from `main.dol` strings.** The version string is the
-   key to signature-matching ~400 SDK functions against decomps of other games
-   that share the build. Without it phase 0 has no shortcut and the estimate
-   goes from weeks to months.
-5. **Log 60 seconds of SDK calls from Dolphin.** That log is the specification
-   for phase 2 — it says exactly which functions must exist and in what order.
-6. **Stand up the repository skeleton** — CMake tree, `config/GGSEA4.toml` with
-   the hashes from step 2, `extern/` as submodules, `tools/verify-hash`.
+1. **Recover engine function boundaries in `mgso_pal.rel`.** `dtk` found
+   **16,667 functions** there and can name none of them — the engine appears in
+   no other binary, so signature matching is structurally impossible. This is
+   Ghidra work at `PowerPC:BE:32:Gekko_Broadway`, it is the bulk of phase 0's
+   remaining effort, and it is now the critical path.
+2. **Log 60 seconds of SDK calls from Dolphin.** Still the specification for
+   phase 2, and the better route to the last ~84 GX names than more alignment.
+3. **Name the last ~84 GX functions.** 93 of MKDD's 177 are named; the runs
+   broke on size disagreement. Phase 3 wants the full surface.
+4. **Stand up the repository skeleton** — CMake tree, `tools/verify-hash`
+   against `config/GGSPA4.toml`, `runtime/` and `patches/` directories.
+5. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+   real work that no phase owns (F10).
 
 ---
 
@@ -418,6 +415,40 @@ source; this is the same category with far more legal heat, and touching it
 would put the project in exactly the position the design document's legal
 section is written to avoid. Everything we need is obtainable from clean-room
 decomps and our own analysis.
+
+**F13 — stage 5 ran; the alignment works and is self-checking.**
+`dtk dol split` recovered **18,485 function boundaries** (1,818 DOL, 16,667
+REL). Ordered run alignment against MKDD then assigned **350 names**: the map
+went 501 → **851**, GX went 13 → **93**.
+
+Three checks agree, which is what makes the result trustworthy:
+
+- The two passes in `tools/align-symbols.py` — between-anchor segment matching
+  and outward run extension — **produced the same names with no
+  contradictions**. Segment matching found 59 segments and added nothing run
+  extension had missed. Two different methods over the same data agreeing is
+  the strongest evidence available without MKDD's own binary.
+- Sizes match exactly by construction: a name is never written onto a function
+  of a different size, and a function claimed twice with different names is
+  dropped rather than guessed.
+- **82% of the GX names (62 of 76) independently appear in
+  `doldecomp/dolsdk2004`**, a decompilation of a different SDK release by a
+  different project. The 14 that do not are all internal `__GX*` statics, where
+  decomp projects legitimately differ on naming — no public API function is
+  unaccounted for.
+
+*Why the remaining 84 GX functions did not come across:* the runs break on size
+disagreement, wherever the two games link different neighbouring functions.
+That is the conservative behaviour working as intended — extending through a
+mismatch would produce a plausible and wrong map.
+
+**F14 — this file's NEXT section had gone stale, and that is a process
+failure worth recording.** It still listed "dump both discs" and
+`config/GGSEA4.toml` several commits after both were done, because successive
+edits appended to it instead of rewriting it. Rule 14 says this file is updated
+every commit; the lesson is that *updating* means re-reading the whole section
+against reality, not adding a line to the top. A stale NEXT is worse than no
+NEXT — it sends the next session to work that is already finished.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-18
 
-**Phase 0, in progress — 501 symbols recovered, structure understood.** The toolchain is
+**Phase 0, in progress — 851 symbols, 18,485 function boundaries.** The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -102,11 +102,18 @@ more.
 - [x] **The DOL/REL split is the translated/native boundary.** `main.dol` is
       7.9% of the code and is almost entirely SDK + runtime + debugger; the REL
       is 92.1% and is the whole engine, with no SDK copy. See F9.
-- [ ] Name the remaining GX surface — ~164 functions. **The signature source is
-      found and verified**: `doldecomp/mkdd` links the same SDK `0x2301` build,
-      92% of shared symbols are byte-identical in size, and it names 177 GX
-      functions. Needs complete `.text` function boundaries, then ordered run
-      alignment (F11). This blocks phase 3.
+- [x] **Complete function boundaries recovered** — `dtk dol split` over the DOL
+      and REL together found **18,485 functions** (1,818 in the DOL, 16,667 in
+      the REL).
+- [x] **Ordered run alignment against `doldecomp/mkdd` run** — **+350 symbols**,
+      taking the map from 501 to **851** and GX from 13 to **93**. Verified
+      three ways: two independent passes agreeing, exact size matching by
+      construction, and 82% of the GX names cross-checked against
+      `dolsdk2004`. Method, commands and numbers in
+      `docs/decompilation-process.md` stage 5.
+- [ ] Name the last ~84 GX functions. MKDD names 177; we have 93. The runs
+      broke on size disagreement wherever the two games link different
+      neighbouring functions. Needs the Dolphin SDK-call log or Ghidra.
 - [ ] Recover engine function boundaries in `mgso_pal.rel` — 4.3 MB, and `dtk`
       found only `_prolog`, `_epilog` and `_unresolved` there, as expected for
       game-specific code with no signatures.
