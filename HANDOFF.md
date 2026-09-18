@@ -21,18 +21,18 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 48.7%
+## PHASE 0 PROGRESS — 56.5%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 717 / 18,485 | 3.9% |
+| Functions named | 866 / 18,485 | 4.7% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 99 / 336 | 29.5% |
-| SDK call sites covered | 1,882 / 7,078 | 26.6% |
-| GX surface named | 148 / 177 | 83.6% |
-| **Average of the five** | | **48.7%** |
+| SDK entry points the engine calls, named | 151 / 336 | 44.9% |
+| SDK call sites covered | 2,725 / 7,078 | 38.5% |
+| GX surface named | 167 / 177 | **94.4%** |
+| **Average of the five** | | **56.5%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
@@ -692,6 +692,54 @@ alone was swallowing DVD, VI and GX.
 **The remaining 237 need dynamic information**, not more static inference. A
 Dolphin SDK-call log names an entry point from the call itself rather than from
 its neighbours, and phase 2 needs it regardless. That is the next move.
+
+**F23 — three reference decomps by consensus, and an error it caught in my
+own work.** MKDD is not the only 2004 GameCube game whose decomp links SDK
+`0x2301`. `doldecomp/ttyd` and `doldecomp/pikmin2` do too, and each is a
+*better* reference than MKDD on its own:
+
+| reference | anchors | names |
+|---|---|---|
+| mkdd | 264 | 415 |
+| ttyd | 273 | 496 |
+| pikmin2 | 280 | 436 |
+
+Run together, a name is accepted only by **consensus**: **445 names where two
+or more independent references concur**, 122 from a single reference, and **7
+conflicts discarded outright**. Where references disagree, every claim at that
+address is dropped — a contradiction means at least one is wrong and nothing
+available can say which.
+
+| | before | after |
+|---|---|---|
+| symbols in the map | 918 | **1,067** |
+| GX surface named | 148 / 177 | **167 / 177 (94.4%)** |
+| SDK entry points the engine calls | 99 / 336 | **151 / 336 (44.9%)** |
+| SDK call sites covered | 26.6% | **38.5%** |
+
+**The consensus caught a wrong name I had committed.** Stage 5b named
+`0x80025728` as `PSQUATDotProduct` from inline-assembly matching; consensus
+said `PSVECDotProduct`. Reading the function settled it — **consensus was
+right**. Ours loads at offsets `0x4` and `0x0`, overlapping, which is the
+three-component dot-product trick; `PSQUATDotProduct` loads at `0` and `8` for
+four components.
+
+*The bug was mine:* `tools/match-sdk-asm.py` compared **opcode mnemonics and
+ignored operands**, and those two functions have identical mnemonic sequences —
+`psq_l, psq_l, ps_mul, psq_l, psq_l, ps_madd, ps_sum0`. The tool now includes
+memory offsets in the signature, and with that fix it no longer claims the
+match. The name is corrected in the map.
+
+*Worth keeping in view:* the guard I wrote for this class of error (refuse when
+one name matches two addresses) did not catch it, because the failure was the
+other shape — one address matching two names that my signature could not
+distinguish. **Two independent methods disagreeing is what caught it**, which
+is the argument for keeping more than one.
+
+*Also restored:* 8 addresses carry legitimate alias names (`__save_fpr` and
+`_savefpr_14`, `_dtors` and `__destroy_global_chain_reference`). An
+address-keyed rebuild silently dropped one of each; the map is keyed to keep
+both.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -25,15 +25,25 @@ FUNC = re.compile(
 ASM = re.compile(r'asm\s*\{(.*?)\}', re.S)
 
 def opcodes(text):
-    """Opcode mnemonics in order, comments and labels stripped."""
+    """Opcode mnemonics PLUS memory offsets, in order.
+
+    Mnemonics alone are not a signature. PSVECDotProduct and
+    PSQUATDotProduct have byte-identical mnemonic sequences - psq_l, psq_l,
+    ps_mul, psq_l, psq_l, ps_madd, ps_sum0 - and differ only in their
+    offsets: the quaternion version loads at 0 and 8 (four components), the
+    vector version at 0 and 4, overlapping, to reach three. Matching on
+    mnemonics alone named one of them wrong.
+    """
     out = []
     for line in text.splitlines():
         line = re.sub(r'(//|/\*).*', '', line).strip()
         if not line or line.endswith(':') or line.startswith('#'):
             continue
         m = re.match(r'([a-z][a-z0-9_.]*)', line)
-        if m:
-            out.append(m.group(1))
+        if not m:
+            continue
+        offs = re.findall(r'(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(', line)
+        out.append(m.group(1) + ('@' + ','.join(str(int(o, 0)) for o in offs) if offs else ''))
     return out
 
 def load_sdk(paths):
@@ -66,9 +76,10 @@ def load_ours(path):
             continue
         if cur is None:
             continue
-        m = re.match(r'^/\* \S+ \S+ [0-9A-F ]+\*/\s+([a-z][a-z0-9_.]*)', line)
+        m = re.match(r'^/\* \S+ \S+ [0-9A-F ]+\*/\s+([a-z][a-z0-9_.]*)(.*)', line)
         if m:
-            ops.append(m.group(1))
+            offs = re.findall(r'(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(', m.group(2))
+            ops.append(m.group(1) + ('@' + ','.join(str(int(o, 0)) for o in offs) if offs else ''))
     return out
 
 def main():

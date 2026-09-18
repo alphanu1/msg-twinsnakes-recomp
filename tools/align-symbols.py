@@ -17,7 +17,7 @@ when the size matches exactly.
 No code is copied - only names, and only where our own binary's function
 sizes independently confirm the match.
 """
-import re, sys, argparse
+import re, sys, argparse, collections
 from collections import defaultdict
 
 SYM = re.compile(r'^(\S+) = (\.\w+):0x([0-9A-Fa-f]+); // type:function size:0x([0-9A-Fa-f]+)')
@@ -134,25 +134,49 @@ def align(ours, ref, verbose=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ours', required=True)
-    ap.add_argument('--ref', required=True)
+    ap.add_argument('--ref', required=True, nargs='+',
+                    help='one or more reference symbol maps; with several, a name is accepted only by consensus')
     ap.add_argument('--section', default='.text')
     ap.add_argument('--prefix', help='only report/assign names with this prefix')
     ap.add_argument('--out')
     a = ap.parse_args()
 
     ours = load(a.ours, a.section)
-    ref = load(a.ref, a.section)
-    anchors, assigned, runs, segments, resyncs = align(ours, ref)
+    votes = collections.defaultdict(dict)      # addr -> {reference: name}
+    for rp in a.ref:
+        ref = load(rp, a.section)
+        anchors, assigned, runs, segments, resyncs = align(ours, ref)
+        label = rp.split('/')[1] if '/' in rp else rp
+        print(f"{label:<18} {len(ref):>6} funcs {len(anchors):>4} anchors "
+              f"{segments:>3} seg {resyncs:>5} resync {len(assigned):>4} names")
+        for addr, name in assigned.items():
+            votes[addr][label] = name
+
+    # Consensus. A name backed by two or more independent references is strong
+    # evidence: different games, linked differently, agreeing only because the
+    # function really is that function. Where references DISAGREE about an
+    # address every claim is discarded - a contradiction means at least one is
+    # wrong and nothing here can say which.
+    assigned, conflicts, single = {}, 0, 0
+    for addr, byref in votes.items():
+        names = set(byref.values())
+        if len(names) > 1:
+            conflicts += 1
+            continue
+        name = names.pop()
+        if len(byref) == 1:
+            single += 1
+        assigned[addr] = name
 
     if a.prefix:
         assigned = {k: v for k, v in assigned.items() if v.startswith(a.prefix)}
 
+    print()
     print(f"ours            {len(ours):>6} functions in {a.section}")
-    print(f"reference       {len(ref):>6} functions in {a.section}")
-    print(f"anchors         {len(anchors):>6} (same name AND same size in both)")
-    print(f"segments mapped {segments:>6} (consecutive anchors, exact size agreement)")
-    print(f"gap resyncs     {resyncs:>6} (3 consecutive sizes must agree)")
-    print(f"runs extended   {len(runs):>6}")
+    print(f"references      {len(a.ref):>6}")
+    print(f"names agreed    {len(assigned) - single:>6} (2+ references concur)")
+    print(f"names single    {single:>6} (only one reference names it)")
+    print(f"CONFLICTS       {conflicts:>6} (references disagree - all discarded)")
     print(f"names assigned  {len(assigned):>6}" + (f" (prefix {a.prefix})" if a.prefix else ""))
 
     if a.out:
