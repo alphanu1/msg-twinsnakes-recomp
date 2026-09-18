@@ -257,6 +257,14 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 *Exit: the title screen, the Dock and the Heliport render correctly at native
 resolution, compared frame-by-frame against Dolphin screenshots.*
 
+**This phase does not have to wait for phase 2.** Dolphin's FIFO recorder
+produces a `.dff` containing the complete renderer input — the FIFO command
+stream, texture and vertex memory updates, and the full BP/CP/XF register
+state. The renderer can therefore be built and tested against recorded frames
+with the game not running, and compared pixel-for-pixel against Dolphin's
+output of the same file (F45). Record the tooling; never commit a recording,
+which contains the game's own graphics data.
+
 This is the project. ~200 functions and the widest error bars in the plan.
 
 - [ ] **Vertex converter** — one converter turning any GX vertex stream

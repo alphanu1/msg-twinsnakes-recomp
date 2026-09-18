@@ -1440,5 +1440,48 @@ drivers were removed and one was added". That argues for less than 2–4 months,
 but the number should come from starting the work rather than from reasoning
 about it.
 
+**F45 — the oracle is stronger than a reference: Dolphin can hand us the
+renderer's input directly, and that decouples phase 3 from phase 2.**
+
+Dolphin ships `FifoRecorder`, `FifoPlayer` and `FifoDataFile`. A recorded
+`.dff` is not a video — it is **the complete input to a GX renderer**:
+
+| | |
+|---|---|
+| `fifoData` | the raw FIFO command stream, per frame |
+| `memoryUpdates` | textures and vertex arrays, sorted by FIFO position |
+| `BPMem` | blitting processor: TEV stages, blending, alpha compare |
+| `CPMem` | command processor: vertex descriptors and formats |
+| `XFMem` + `XFRegs` | transform: matrices, lighting, projection |
+
+**So the GX renderer can be built and tested with the game not running at
+all.** Record a `.dff` in Dolphin at the three places phase 3's exit criterion
+names — title screen, the Dock, the Heliport — then replay those streams into
+our renderer and compare against Dolphin's own output of the same file.
+
+*Why that changes the plan's shape, not just its speed:*
+
+- **Phase 3 stops waiting on phase 2.** The design document sequences the
+  renderer after the native OS/DVD/PAD work because the game has to reach the
+  renderer to exercise it. With recorded FIFO, it does not.
+- **The test input is frame-exact and reproducible**, so a rendering
+  regression is a diff rather than an argument, and a bug reproduces on demand
+  instead of "somewhere in the Heliport".
+- **Comparison is pixel-level against a known-good renderer** of the same
+  input — which is a far stronger check than comparing screenshots of two
+  programs that each had to get to the same place first.
+
+*Combined with the two facts in F44* — Dolphin's `PixelShaderGen.cpp` and
+texture decoder being liftable under GPL-3, and the GX surface measured at 81
+functions rather than ~200 — **the case for phase 3 being much shorter than
+2–4 months is now three independent things, not optimism.** The design
+document's estimate assumed a from-scratch renderer, developed against a game
+that first had to boot, with no reproducible input.
+
+*Concrete next step whenever phase 3 starts:* record `.dff` files from Dolphin
+for the three exit-criterion scenes and commit **the tooling** to replay them —
+never the recordings themselves, which contain the game's own graphics data
+(rule 8).
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
