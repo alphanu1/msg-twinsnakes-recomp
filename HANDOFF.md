@@ -1661,5 +1661,52 @@ In a subdirectory it sets `SDL3_FOUND` only in that scope, so `tests/` could
 not see it and the probe target was silently never created — no error, just a
 missing binary.
 
+**F51 — the game's own code now runs under our runtime, with no ModernGekko
+and no Dolphin in the process.**
+
+```
+guest memory: 24 MB MEM1, 16 MB ARAM
+disc 1: [GGSPA4, disc 1]   disc 2: [GGSPA4, disc 2]
+worker pool: 31 threads
+self-check: read 32 bytes of the overlay; first word 0x00000001
+module: GGSPA4, entry 0x80005240, 303 chunks, 1 rel module
+patch table: installed
+stopped: pc = 0x8001C174   (__OSPSInit)
+```
+
+It ran `__start` → `__init_registers` → `__init_data` → `__init_hardware` and
+got **into `OSInit`** before stopping at `__OSPSInit`, which writes HID2 to
+enable paired singles. A hardware special-register write is exactly the
+boundary a host without hardware should stop at, so this is the expected stop
+rather than a fault.
+
+*How the host and the module meet:* the module exports a descriptor with the
+entry point and a dispatch routine, and expects a `CPUState` whose `ram` points
+at guest memory. The host fills that structure **at offsets taken with
+`offsetof` rather than guessed**, and guards them: the module reports its own
+`cpu_state_size`, and if it does not match the 3536 bytes those offsets were
+derived from, the host refuses to load rather than writing `ram` to a stale
+offset and failing somewhere unrelated.
+
+*Two link-visibility traps, both silent:*
+
+- **The patch hook was hidden by upstream's version script.** `module.exports`
+  lists exactly two global symbols; everything else is `local`. So
+  `dlsym("mgs_dispatch_set_patch_hook")` returned NULL, the host fell back to
+  translated SDK code, and the symptom was "the hook is never called" rather
+  than "the hook was not found". We now ship our own exports file.
+- The module had to be **rebuilt** after the hook was added — an older module
+  loads and runs perfectly well without it, which is what phase 1 did.
+
+*Why 0 SDK calls were served natively:* the boot stops at `__OSPSInit` before
+reaching any patched function. `OSReport`, the DVD shims and the rest come
+later. The next step is the `PPC*` special-register shims — `PPCMthid2`,
+`PPCMtmsr` and their neighbours — which are the functions standing between here
+and `OSInit` completing.
+
+**This is the phase 1 borrowed runtime being paid back.** Nothing in this
+process is Dolphin-derived: our guest memory, our disc layer, our worker pool,
+our patch table, our CPU seam.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

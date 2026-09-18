@@ -1,0 +1,17 @@
+{
+  global:
+    staticrecomp_get_module;
+    /* The lockstep verifier dlsym's this to install the module's RAM write
+       journal; without it the verifier silently disables itself. */
+    ppc_set_mem_write_journal;
+    /* Ours: the host installs the SDK patch table through this, so a patched
+       function's translated body never runs. Hidden by upstream's version
+       script, which lists only the two symbols above - so a dlsym for it
+       returns NULL and the host silently falls back to translated SDK code,
+       which looks like the hook not being called rather than not being
+       found. */
+    mgs_dispatch_set_patch_hook;
+    mgs_dispatch_patched_calls;
+  local:
+    *;
+};

@@ -60,6 +60,25 @@
 static u32 s_rel_runtime_base;   /* 0 until OSLink tells us */
 static unsigned long s_translated;
 
+/* --- the patch table hook ----------------------------------------------- */
+/* The host installs this. It is consulted BEFORE either module's table, so a
+ * patched SDK function's translated body never runs - which is the design
+ * document's central decision, and the reason the dispatch hook exists at
+ * all.
+ *
+ * A function pointer rather than a direct call, so the module stays
+ * independent of the runtime: the module can be loaded by the phase 1 host,
+ * which has no patch table, and by ours, which does.
+ */
+static int (*s_patch_hook)(CPUState* ctx, u32 address);
+static unsigned long s_patched_calls;
+
+void mgs_dispatch_set_patch_hook(int (*hook)(CPUState*, u32));
+void mgs_dispatch_set_patch_hook(int (*hook)(CPUState*, u32)) { s_patch_hook = hook; }
+
+unsigned long mgs_dispatch_patched_calls(void);
+unsigned long mgs_dispatch_patched_calls(void) { return s_patched_calls; }
+
 /* --- tracing ------------------------------------------------------------ */
 /* An open-addressed histogram, fixed size and never resized: this runs inside
  * the dispatch path, so an allocation here would change the timing of the
@@ -135,6 +154,14 @@ static u32 rel_text_base_from_oslink(CPUState* ctx)
 int dolrecomp_dispatch_replacement(CPUState* ctx, u32 address)
 {
     if (!s_trace_ready) trace_init();
+
+    /* Native SDK implementations win over translated code, always. Checked
+     * first so a patched function's original body is never reached.
+     */
+    if (s_patch_hook && s_patch_hook(ctx, address)) {
+        s_patched_calls++;
+        return 1;
+    }
 
     if (address == MGS_OSLINK_ADDR && s_rel_runtime_base == 0u) {
         u32 base = rel_text_base_from_oslink(ctx);

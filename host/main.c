@@ -12,6 +12,7 @@
 #include "os/os_runtime.h"
 #include "os/patch_table.h"
 #include "platform/jobs.h"
+#include "module.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,24 @@ static void report_to_stdout(void* user, const char* line)
     fflush(out);
 }
 
+/* The patch table, as the module's dispatch hook sees it. Returns 1 when a
+ * native implementation ran, which tells the module not to execute the
+ * translated body.
+ */
+static unsigned long s_patched_calls;
+
+static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
+{
+    MgsSdkFn fn = mgs_patch_lookup(address);
+    (void)cpu_state;
+    if (!fn) return 0;
+    fn((CPUState*)cpu_state);
+    ++s_patched_calls;
+    return 1;
+}
+
+static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -36,7 +55,10 @@ static void usage(const char* argv0)
         "\n"
         "  A disc is an .iso/.gcm image or a folder extracted from one.\n"
         "  With no --disc1, the usual places are tried: $MGS_DISC1, a\n"
-        "  remembered path, discs/<id>/disc1, then beside the executable.\n",
+        "  remembered path, discs/<id>/disc1, then beside the executable.\n"
+        "\n"
+        "  --module <path>  a recompiled game module. Without one the host\n"
+        "                   exercises the runtime but runs no game code.\n",
         argv0);
 }
 
@@ -45,6 +67,7 @@ int main(int argc, char** argv)
     const char* disc1_arg = NULL;
     const char* disc2_arg = NULL;
     const char* report_path = NULL;
+    const char* module_path = NULL;
     char path1[1024], path2[1024];
     MgsDiscSource src1, src2;
     MgsDisc disc1, disc2;
@@ -58,6 +81,7 @@ int main(int argc, char** argv)
         if (!strcmp(argv[i], "--disc1") && i + 1 < argc)       disc1_arg = argv[++i];
         else if (!strcmp(argv[i], "--disc2") && i + 1 < argc)  disc2_arg = argv[++i];
         else if (!strcmp(argv[i], "--report") && i + 1 < argc) report_path = argv[++i];
+        else if (!strcmp(argv[i], "--module") && i + 1 < argc) module_path = argv[++i];
         else { usage(argv[0]); return 2; }
     }
 
@@ -122,9 +146,62 @@ int main(int argc, char** argv)
                "(its module id)\n", n, guest_read32(&rt.mem, 0x80100000u));
     }
 
-    printf("\nSDK functions patched: see runtime/os/patch_table.c\n");
-    printf("No recompiled module loaded yet: the host runs the runtime, not\n"
-           "the game, until the module ABI is ours rather than ModernGekko's.\n");
+    if (!module_path) {
+        printf("\nNo --module given: the runtime is up, but there is no game\n"
+               "code to run. Pass --module <gGGSPA4_recomp.so> to boot.\n");
+    } else {
+        MgsModule mod;
+        void* cpu;
+
+        printf("\nloading module: %s\n", module_path);
+        if (!mgs_module_load(&mod, module_path)) {
+            fprintf(stderr, "  failed: %s\n", mod.error);
+        } else {
+            printf("  game id      : %s\n", mod.game_id);
+            printf("  entry point  : 0x%08X\n", mod.entry_point);
+            printf("  cpu state    : %u bytes\n", mod.cpu_state_size);
+            printf("  code ranges  : %u   chunks: %u   rel modules: %u\n",
+                   mod.code_ranges, mod.chunk_ranges, mod.rel_modules);
+
+            /* The module's game id must match the disc's, or we would run one
+             * game's code against another's assets and fail somewhere
+             * unrelated to the cause. */
+            if (strncmp(mod.game_id, disc1.game_id, 6) != 0) {
+                fprintf(stderr, "  REFUSED: module is for %s, disc is %s\n",
+                        mod.game_id, disc1.game_id);
+            } else {
+                cpu = mgs_module_new_cpu_state(&mod, rt.mem.ram, GUEST_RAM_SIZE);
+                if (!cpu) {
+                    fprintf(stderr, "  REFUSED: unexpected CPU state size %u; the\n"
+                                    "  layout this host was built against has moved.\n",
+                            mod.cpu_state_size);
+                } else {
+                    /* Point the SDK shims at the module's registers, so a
+                     * shim reads exactly what the translated code passed. */
+                    mgs_cpu_bind_registers(mgs_module_gpr(cpu));
+                    if (mod.set_patch_hook) {
+                        mod.set_patch_hook(mgs_host_patch_dispatch);
+                        printf("  patch table  : installed\n");
+                    } else {
+                        printf("  patch table  : module has no hook; the\n"
+                               "                 translated SDK will run instead\n");
+                    }
+
+                    printf("\nrunning from 0x%08X ...\n\n", mod.entry_point);
+                    {
+                        int handled = mod.dispatch(cpu, mod.entry_point);
+                        printf("\nstopped: dispatch returned %d, pc = 0x%08X\n",
+                               handled, mgs_module_pc(cpu));
+                        printf("SDK calls served natively: %lu\n",
+                               mgs_host_patched_calls());
+                    }
+                    mgs_cpu_unbind();
+                    free(cpu);
+                }
+            }
+            mgs_module_unload(&mod);
+        }
+    }
 
     if (report != stdout) fclose(report);
     mgs_jobs_destroy(jobs);
