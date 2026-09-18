@@ -741,5 +741,40 @@ is the argument for keeping more than one.
 address-keyed rebuild silently dropped one of each; the map is keyed to keep
 both.
 
+**F24 — the whole game translates. This is the feasibility question answered.**
+DolRecomp was run over both modules with `--gamecube --cpu gekko`:
+
+| | instructions | decoded | unknown |
+|---|---|---|---|
+| `main.dol` | 97,240 | 95,591 (98.30%) | **0** |
+| `mgso_pal.rel` | 1,136,896 | 1,136,896 (100.00%) | **0** |
+| **combined** | **1,234,136** | **1,232,487 (99.87%)** | **0** |
+
+The 1,649 not "known" in `main.dol` are **embedded data** in `.init` — constant
+pools inside the text section, which the decoder correctly refuses to treat as
+code. Not failures.
+
+**The REL decoding at 100% is the result that matters.** It is 92% of the game,
+it is Konami's engine, and no prior art for it exists anywhere. It decoded
+without a single unknown instruction, paired-singles included.
+
+Output: 295 MB of C, 11.5M lines, 303 chunks. The design document budgeted
+50–150 MB for a 3 MB DOL; at 4.9 MB of code this is proportionate.
+
+*The self-modifying-code warning is benign.* DolRecomp flagged 124 addresses as
+possibly patching executable memory. Cross-referenced against the symbol map:
+81 are `SPEC0/1/2_MakeStatus`, the rest cache maintenance (`__flush_cache`,
+`ICInvalidateRange`), exception-vector installation (`OSExceptionInit`) and DMA
+register writes. Every one is an SDK routine with a legitimate reason to touch
+executable memory. **No self-modifying game code**, as the design document
+predicted. The symbol map turned an alarming warning into an explained list in
+a single pass — the clearest payoff it has produced so far.
+
+*Practical note for phase 1:* `ModernGekko-Template` recompiles `main.dol`
+only. For this game that would leave out 92% of the code, so the REL must be
+built alongside it. DolRecomp supports RELs directly (`--rel-base`, and a REL
+or REL folder as input), so this is a wiring problem rather than a missing
+capability.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

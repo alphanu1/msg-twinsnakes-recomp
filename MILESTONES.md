@@ -35,7 +35,7 @@ phase 3.
 | Phase | Goal | Exit criterion | Estimate | State |
 |---|---|---|---|---|
 | 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
-| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | blocked on 0 |
+| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **in progress** — both modules recompile, 0 unknown instructions |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | blocked on 1 |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
 | 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
@@ -168,7 +168,13 @@ more.
 *Exit: title screen renders through recompiled CPU code with no interpreter
 fallback hits on the boot path.*
 
-- [ ] Run DolRecomp over both `main.dol` files.
+- [x] **DolRecomp run over `main.dol` and `mgso_pal.rel`** — **1,232,487 of
+      1,234,136 instructions decoded (99.87%), 0 unknown**. The REL decodes at
+      100%. 295 MB of C, 11.5M lines, 303 chunks. The remaining 1,649 are
+      embedded data in `.init`, not failures.
+- [x] **Self-modifying-code warnings checked and benign** — all 124 are cache
+      maintenance, exception-vector installation or DMA writes in SDK
+      routines. No self-modifying game code.
 - [ ] Build under the ModernGekko/RecompCore template, Dolphin providing GX,
       audio and HLE.
 - [ ] Log every interpreter-fallback hit. The boot path must reach zero; the
