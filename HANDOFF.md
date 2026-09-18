@@ -113,7 +113,12 @@ layout" section is the target, not the current state.
 
 ## NEXT, IN ORDER
 
-1. **Name the 266 DOL functions the REL calls but we have not named.** Of 336
+1. **Wire the REL into the module** (F30) — the four items above. This is what
+   stands between the Konami logo and the title screen, and it is phase 1's
+   remaining work.
+2. **Clear the interpreter fallback** on chunk `[0x800455E0,0x800495E0)`,
+   caused by SDK stub patching in the `Hu_IsStub` region (F29).
+3. **Name the 266 DOL functions the REL calls but we have not named.** Of 336
    SDK entry points the engine calls directly, 70 are named. These 266 are the
    highest-value targets in the project — each is demonstrably used. The
    Dolphin SDK-call log is the best route.
@@ -893,6 +898,49 @@ interpreter with it** purely because they share a chunk with the patched stubs.
 stub patch invalidates only its own neighbourhood, or treating the AMC/Hu stub
 region as data rather than code so its hash is not covered. The second looks
 cleaner and matches what the stubs actually are.
+
+**F30 — why it stops after the Konami logo: the REL is never recompiled into
+the module.** The logo is drawn by `main.dol` code. The game then calls
+`rel_loader_LoadRel` → `OSLink`, and there is no recompiled REL code to reach,
+so it goes no further.
+
+The cause is upstream tooling, not our setup. The port command in the log is:
+
+```
+dolrecomp --backend=c --cpu gekko --gamecube .../sys/main.dol .../dolrecomp-output
+```
+
+**`main.dol` only.** `moderngekko-port` has no REL handling anywhere — neither
+`gen_module_tables.py` nor `module_export.c` mentions RELs. The ABI defines
+`rel_modules` and `num_rel_modules` in `ModernGekkoModuleDesc`, but **nothing in
+the toolchain ever populates them.** The `_Main.rel` symlink got the runtime to
+*hash* the overlay; it was never going to get it *compiled*.
+
+For most GameCube games that is a minor gap. For this one it is 92% of the code.
+
+**What integration actually requires — four things, none of them a symlink:**
+
+1. **A symbol clash to resolve.** Both generated sets define `dolrecomp_call`,
+   so the two cannot simply be linked into one module. One side needs
+   namespacing, or DolRecomp needs to emit prefixed symbols.
+2. **A top-level dispatch router.** Entry points differ — DOL `0x80005240`,
+   REL `0x805000EC` — so dispatch must route by address: below `0x80500000`
+   to the DOL table, at or above it to the REL table.
+3. **REL section metadata.** `ModernGekkoRelModule` wants `module_id`,
+   `version`, `section_count`, `section_info_offset`, `file_size` and a section
+   array. DolRecomp's REL output emits none of it, so we parse it from the REL
+   ourselves — `dtk rel info` already reads exactly these fields.
+4. **An `OSLink` hook**, so linking the overlay maps recompiled code rather
+   than leaving the runtime to interpret it.
+
+**Where this work belongs: `game/` in this repository, not `extern/`.** Project
+rule 4 keeps upstream unmodified, and the design document already reserves
+`game/` for game-specific glue. Writing our own module glue also avoids
+carrying a patch against two upstreams for the life of the project.
+
+*Revised phase 1 estimate:* the design document allowed 1–2 weeks for phase 1.
+Booting took hours; this is the rest of it, and days is realistic. Nothing here
+is unknown — every piece is specified, and the REL already translates at 100%.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
