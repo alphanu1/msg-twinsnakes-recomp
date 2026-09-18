@@ -1248,5 +1248,47 @@ That is a correctness requirement: replaying a recorded input sequence and
 comparing guest memory at fixed frames only works if guest time is a function
 of frames rather than of how fast the host ran.
 
+**F39 — the cooperative scheduler, and why "exactly one at a time" is a
+correctness rule rather than a simplification.**
+
+GameCube OS threads are cooperative on a single core: a thread runs until it
+blocks or yields, and nothing preempts it. The game is written against that,
+so **every sequence between two yield points is atomic from its point of
+view**. Run two guest threads genuinely in parallel on host threads and that
+atomicity disappears — silently, as occasional corruption rather than as a
+crash. So exactly one guest thread executes at any instant, and host threads
+live only in the platform layer, never touching guest memory except through
+queued events.
+
+*The `OSThread` structure lives in guest memory* — the game allocates it and
+reads its fields — so the runtime owns only the execution context. Every
+visible field is read and written through the byte-swapping accessors at the
+SDK's own offsets (`state` `0x2C8`, `priority` `0x2D0`, `suspend` `0x2CC`,
+`stackBase` `0x304`, …), taken from `dolsdk2004`'s `OSThread.h`. **No host
+struct is overlaid on it**: a host struct carries host endianness and host
+padding, and this one was laid out by a 2003 PowerPC compiler.
+
+*Three selection rules that are easy to get subtly wrong, so they are pinned
+by tests rather than trusted to inspection:*
+
+- **`RUNNING` counts as runnable.** The current thread is a candidate to
+  continue — that is precisely what makes this cooperative rather than
+  round-robin.
+- **Ties leave the incumbent in place.** Priority comparison is strictly
+  less-than, so two equal-priority threads do not swap on every reschedule.
+  With `<=` they would, and the game's assumption that it keeps the CPU until
+  it yields would break without any visible error.
+- **A positive `suspend` count blocks even a `RUNNING` thread**, and threads
+  are created suspended, because `OSCreateThread` does not start one.
+
+`tests/test_os_thread.c` covers each, plus that a duplicate `OSThread*` is
+refused — two slots for one guest thread would mean two host contexts for it —
+and that priority round-trips through guest memory big-endian.
+
+*Not yet built, and deliberately separated:* the context switch itself. The
+selection policy is testable without it and is where the subtle bugs live;
+fibers or `ucontext` come next, and the policy being already pinned means a
+switching bug cannot be mistaken for a scheduling one.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

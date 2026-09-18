@@ -12,8 +12,15 @@
 
 typedef struct CPUState CPUState;
 
+struct MgsScheduler;
+
 typedef struct MgsRuntime {
     GuestMemory mem;
+
+    /* Guest threads. One runs at a time; see os_thread.h for why that is a
+     * correctness requirement and not a simplification.
+     */
+    struct MgsScheduler* sched;
 
     /* Guest time. The Gekko's timebase runs at 40.5 MHz - the 162 MHz bus
      * divided by four - and everything the game schedules derives from it.

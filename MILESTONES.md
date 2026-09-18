@@ -222,10 +222,14 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       `DOLRECOMP_ENABLE_REPLACEMENTS` hook phase 1 proved.
 - [x] **First OS shims**: `OSReport`, `OSGetTime`, `OSGetTick`,
       `OSDisableInterrupts`, `OSEnableInterrupts`, `OSRestoreInterrupts`.
-- [ ] **OS** — fiber/ucontext scheduler running exactly one guest thread at a
-      time, arena allocator over guest memory, monotonic clock scaled to the
-      40.5 MHz timebase, alarms driven from the frame loop, REL loader with
-      relocation. *The high-risk item: threading semantics must be exact.*
+- [x] **Scheduler selection policy** — priority-ordered, cooperative, one
+      thread at a time, `OSThread` fields read from guest memory at the SDK's
+      offsets. Tested: `RUNNING` is runnable, ties keep the incumbent, suspend
+      blocks, duplicates refused (F39).
+- [ ] **OS** — the context switch itself (fibers or `ucontext`), arena
+      allocator over guest memory, monotonic clock scaled to the 40.5 MHz
+      timebase, alarms driven from the frame loop, REL loader with relocation.
+      *The high-risk item: threading semantics must be exact.*
 - [ ] **DVD** — FST lookup, `DVDReadAsync` on a worker thread with callbacks
       fired on the guest thread. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.

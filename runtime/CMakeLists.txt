@@ -7,6 +7,7 @@ add_library(mgs_runtime STATIC
   memory/guest.c
   os/os_report.c
   os/os_time.c
+  os/os_thread.c
   os/patch_table.c)
 
 target_include_directories(mgs_runtime PUBLIC
