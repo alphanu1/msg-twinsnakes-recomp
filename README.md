@@ -76,6 +76,31 @@ The bring-up target is the PAL release, disc ID `GGSPA4`. US (`GGSEA4`) and
 Japanese (`GGSJA4`) support comes later — every address in the project is tied
 to a specific build.
 
+## Legal notice
+
+**Not affiliated with, endorsed by, or associated with Konami, Nintendo, or
+Silicon Knights.** "Metal Gear Solid", "The Twin Snakes" and "Konami" are
+trademarks of Konami Digital Entertainment; "Nintendo" and "GameCube" are
+trademarks of Nintendo. They are used here only to identify the game this
+software interoperates with.
+
+**No game code or data is distributed here.** This repository contains no
+executable, no assets, no decompiled source and no generated code from the
+game. You must supply your own legally obtained copy; the build hashes it and
+refuses anything else. Nothing here will run without it.
+
+**This is an interoperability project.** Its purpose is to allow a game you own
+to run on hardware you own, by reimplementing the console's SDK in code written
+from scratch. It does not circumvent any technical protection measure, and it
+does not substitute for the game.
+
+**Nothing here derives from leaked source code.** See Provenance above. Every
+symbol carries an origin recording which analysis produced it.
+
+The reasoning behind this position, the provisions it relies on, the conditions
+attached to them, and the places this project is exposed anyway, are set out in
+[docs/legal-position.md](docs/legal-position.md). None of it is legal advice.
+
 ## Licence
 
 **GPL-3.0.** The runtime reuses code from Dolphin, which is GPL, and the
@@ -102,3 +127,4 @@ upstream is pinned by commit in [deps.lock](deps.lock).
 | [HANDOFF.md](HANDOFF.md) | Current state, what is next, and every finding — including the wrong ones. |
 | [docs/decompilation-process.md](docs/decompilation-process.md) | Every stage from disc to binary: inputs, commands, verification, provenance. |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Licence, pin and role for each dependency. |
+| [docs/legal-position.md](docs/legal-position.md) | What protects this work, the conditions attached, and where it is exposed. |

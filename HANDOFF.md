@@ -41,6 +41,7 @@ more** — what remains is the symbol recovery itself.
 | `tools/bootstrap.sh` | Fetches them. `--all` for the reference group, `--update` to re-pin. |
 | `README.md` | What this is, and the provenance statement: no leaked source, ever. |
 | `docs/decompilation-process.md` | All nine stages, disc to binary, with per-stage provenance. |
+| `docs/legal-position.md` | Provisions relied on, their conditions, and honest exposure. |
 | `THIRD_PARTY.md` | Licence and group per dependency, and the system packages. |
 | `config/GGSPA4.toml` | The target build: SDK, executable hashes, disc paths. |
 | `discs/GGSPA4/disc{1,2}/` | Extracted discs, 2.5 GB. **Git-ignored**, never committed. |
@@ -502,6 +503,45 @@ other.
 on, the GameCube loader opens a GUI "load a symbol map?" dialog mid-import,
 which throws headless and fails the run with a stack trace that does not say
 why.
+
+**F17 — what actually protects this work, and what a disclaimer does not do.**
+Written up in `docs/legal-position.md`; the short version, because it changes
+what we may commit.
+
+*The provisions that do something:* **17 U.S.C. §102(b)** and **Feist** (facts
+and methods of operation are not copyrightable — this is what makes the symbol
+map and `docs/evidence/` defensible). **Sega v. Accolade** and **Sony v.
+Connectix** (intermediate copying while reverse engineering is fair use).
+**Google v. Oracle** (reimplementing an API is transformative — directly on
+point for the SDK runtime). In the UK, **CDPA s.50B and s.50BA** give a
+*statutory right* to decompile for interoperability, and **s.296A makes it
+unwaivable** — stronger than US fair use, which is a defence rather than a
+right.
+
+*The limit that decides our practice:* Accolade and Connectix both turned on
+the intermediate copies **not being distributed**. They protect the *act* of
+decompiling, not *publishing the output*. That is the whole basis for
+committing addresses and names but not reconstructed source — it is not
+caution, it is the line the case law actually draws.
+
+*s.50B's fourth condition is the one to watch:* the information must not be
+used to create a "substantially similar program". A reimplemented *SDK* is not
+similar to the *game*. Always argue interoperability, never substitution.
+
+*Where we are exposed regardless, and this stays in the document:* trademark is
+separate from copyright (name the game, never use logos or imply endorsement);
+these provisions protect our analysis, not our users' copies; **Konami is
+actively litigating** over the leaked source of this game's engine; and a DMCA
+takedown does not require the sender to be right — careful projects have been
+taken down anyway.
+
+*On disclaimers:* a disclaimer creates no protection and changes no liability.
+It is worth having for three narrower reasons — it records purpose
+contemporaneously, and both fair use and s.50B turn on purpose; it gives
+whoever reads a takedown notice the decisive facts quickly; and **it binds our
+own behaviour**, since it is only worth anything while it stays true. Project
+rule 16 makes that binding explicit: if a change would falsify the notice, the
+change is wrong.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
