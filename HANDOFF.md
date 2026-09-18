@@ -21,6 +21,28 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
+## PHASE 0 PROGRESS — 48.7%
+
+Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
+
+| Measure | | |
+|---|---|---|
+| Functions named | 717 / 18,485 | 3.9% |
+| Function boundaries recovered | 18,485 / 18,485 | 100.0% |
+| SDK entry points the engine calls, named | 99 / 336 | 29.5% |
+| SDK call sites covered | 1,882 / 7,078 | 26.6% |
+| GX surface named | 148 / 177 | 83.6% |
+| **Average of the five** | | **48.7%** |
+
+The average is an unweighted mean of five dissimilar measures — a headline, not
+a statistic. Read the rows. In particular the 3.9% and the 100% are both true
+and neither is the answer: the engine is translated mechanically, so naming it
+buys debugging rather than correctness, while boundaries are what the
+recompiler actually consumes. **The row that governs the remaining work is the
+SDK boundary at 29.5%.**
+
+---
+
 **The target is now PAL, GGSPA4** — retargeted 2026-09-18 because that is the
 dump that exists. The design document is updated to match (rule 12).
 
