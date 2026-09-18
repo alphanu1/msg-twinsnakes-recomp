@@ -807,6 +807,7 @@
 .text 0x800405FC 0x20 GXSaveCPUFifo mkdd-align
 .text 0x8004061C 0xDC __GXSaveCPUFifoAux mkdd-align
 .text 0x800406F8 0x50 GXGetGPStatus mkdd-align
+.text 0x80040748 0x98 GXGetFifoPtrs own
 .text 0x800408B0 0x4C __GXFifoInit dtk-sig
 .text 0x800408FC 0x24 __GXFifoReadEnable mkdd-align
 .text 0x80040920 0x24 __GXFifoReadDisable mkdd-align
@@ -1097,4 +1098,6 @@
 .sbss 0x8027DFA8 0x4 __peReg dtk-sig
 .sbss 0x8027DFAC 0x4 __memReg dtk-sig
 .sbss 0x8027DFC4 0x4 resetFuncRegistered$70 dtk-sig
+.sdata2 0x8027DFC8 0x4 CPUFifo own
+.sdata2 0x8027DFCC 0x4 GPFifo own
 .sdata2 0x8027E600 0x4 __GXData dtk-sig

@@ -33,6 +33,33 @@
 #define MGS_DOL_TEXT_BASE 0x80003100u
 #define MGS_DOL_TEXT_END  0x80062050u
 
+/* --- finding the overlay at runtime ------------------------------------- */
+/* DolRecomp emits recompiled REL code at a SYNTHETIC base. The game loads the
+ * real overlay wherever OSAlloc happens to put it, so the two never coincide
+ * and a dispatch into the REL never matches anything.
+ *
+ * OSLink(OSModuleInfo* module, void* bss) is where the overlay's final
+ * addresses are decided, and every DOL dispatch already passes through this
+ * router - so we can read r3 as it goes by, walk the module's section table
+ * in guest RAM, and learn where .text actually landed. From then on a REL
+ * address translates into the recompiled range by a simple delta.
+ *
+ * OSLink's address comes from our own symbol map (mkdd-align, cross-checked
+ * against three reference decompilations).
+ */
+#define MGS_OSLINK_ADDR   0x80020AD8u
+
+/* OSModuleInfo mirrors the REL header: section count at 0x0C, section table
+ * offset at 0x10. Each section entry is 8 bytes - offset then size - and the
+ * low bits of offset are flags, bit 0 marking an executable section.
+ */
+#define MGS_MODULE_NUM_SECTIONS   0x0Cu
+#define MGS_MODULE_SECTION_INFO   0x10u
+#define MGS_REL_TEXT_SECTION      1u
+
+static u32 s_rel_runtime_base;   /* 0 until OSLink tells us */
+static unsigned long s_translated;
+
 /* --- tracing ------------------------------------------------------------ */
 /* An open-addressed histogram, fixed size and never resized: this runs inside
  * the dispatch path, so an allocation here would change the timing of the
@@ -53,8 +80,10 @@ static void trace_dump(void)
     if (!s_trace_path) return;
     f = fopen(s_trace_path, "w");
     if (!f) return;
-    fprintf(f, "# dispatched=%lu rel=%lu dol=%lu unclaimed=%lu\n",
-            s_rel_calls + s_dol_calls, s_rel_calls, s_dol_calls, s_unclaimed);
+    fprintf(f, "# dispatched=%lu rel=%lu dol=%lu unclaimed=%lu "
+               "translated=%lu rel_base=0x%08X\n",
+            s_rel_calls + s_dol_calls, s_rel_calls, s_dol_calls, s_unclaimed,
+            s_translated, s_rel_runtime_base);
     for (i = 0; i < TRACE_SLOTS; ++i)
         if (s_trace[i].hits)
             fprintf(f, "%08X %lu\n", s_trace[i].addr, s_trace[i].hits);
@@ -78,9 +107,57 @@ static void trace_hit(unsigned address)
     s_trace[slot].hits++;
 }
 
+/* Read where the overlay's .text landed, out of the module header the game
+ * just handed to OSLink. Returns 0 if the header does not look right, so a
+ * surprise leaves dispatch exactly as it was rather than corrupting it.
+ */
+static u32 rel_text_base_from_oslink(CPUState* ctx)
+{
+    u32 module = ctx->gpr[3];
+    u32 count, info, entry, offset;
+
+    if (module < 0x80000000u || module >= 0x81800000u)
+        return 0;
+
+    count = mem_read32(ctx, module + MGS_MODULE_NUM_SECTIONS);
+    info  = mem_read32(ctx, module + MGS_MODULE_SECTION_INFO);
+    if (count <= MGS_REL_TEXT_SECTION || info < 0x40u)
+        return 0;
+
+    entry  = info + MGS_REL_TEXT_SECTION * 8u;
+    offset = mem_read32(ctx, entry);
+    offset &= ~3u;                     /* strip the exec/flag bits */
+    if (offset < 0x80000000u || offset >= 0x81800000u)
+        return 0;
+    return offset;
+}
+
 int dolrecomp_dispatch_replacement(CPUState* ctx, u32 address)
 {
     if (!s_trace_ready) trace_init();
+
+    if (address == MGS_OSLINK_ADDR && s_rel_runtime_base == 0u) {
+        u32 base = rel_text_base_from_oslink(ctx);
+        if (base) {
+            s_rel_runtime_base = base;
+            fprintf(stderr, "[mgs] OSLink: overlay .text at 0x%08X, "
+                            "recompiled at 0x%08X (delta 0x%08X)\n",
+                    base, MGS_REL_TEXT_BASE, MGS_REL_TEXT_BASE - base);
+        } else {
+            fprintf(stderr, "[mgs] OSLink: could not read the module header "
+                            "(r3=0x%08X)\n", ctx->gpr[3]);
+        }
+    }
+
+    /* An address inside the overlay as the game linked it: translate into the
+     * recompiled range. Done before the DOL test because the overlay lives in
+     * MEM1 and would otherwise look like a DOL address.
+     */
+    if (s_rel_runtime_base &&
+        address - s_rel_runtime_base < MGS_REL_TEXT_SIZE) {
+        address = MGS_REL_TEXT_BASE + (address - s_rel_runtime_base);
+        s_translated++;
+    }
 
     if (address - MGS_REL_TEXT_BASE < MGS_REL_TEXT_SIZE) {
         s_rel_calls++;

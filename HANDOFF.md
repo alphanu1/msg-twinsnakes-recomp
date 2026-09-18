@@ -1122,5 +1122,43 @@ answering "where is it" in one run instead of by argument.
 before measuring it. The histogram took twenty minutes to build and settled it
 immediately. **Instrument first.**
 
+**F36 — it is not blocked on the REL at all. It is blocked on the GPU FIFO.**
+The `OSLink` hook was added and **never fired**: the game never reaches the
+point of loading its overlay. So the REL work, while necessary, was not what
+was holding it.
+
+The trace names the real loop. My first report mislabelled the hottest entry as
+`GXGetGPStatus +0x50`, because the reporter falls back to the nearest preceding
+*named* symbol — `GXGetGPStatus` is `0x50` bytes and ends exactly at
+`0x80040748`, so the hot address is the **next, unnamed** function.
+
+Disassembling it settled what three reference decompilations could not (they
+disagree on what follows `GXGetGPStatus`, and none has a `0x98`-byte function
+there). It reads `__piReg` and `__cpReg` to recover the FIFO read and write
+pointers and returns them through `r4`/`r5` — **`GXGetFifoPtrs`**, confirmed
+structurally against `dolsdk2004`'s `GXFifo.c` line for line, including
+`OSPhysicalToCached` compiled as `addis r0, r6, 0x8000` and the `wrPtr`/`rdPtr`
+offsets at `0x18`/`0x14`. Its two compare targets are therefore the `CPUFifo`
+and `GPFifo` globals. Three names added, origin `own`.
+
+**So the loop is:** call `GXGetFifoPtrs` → check whether the graphics FIFO has
+drained → `OSYieldThread` → repeat, ~1.5 million times. **The game is waiting
+for the GP to consume the command FIFO, and it never does.** Everything else in
+the profile — `SelectThread`, `OSSaveContext`/`OSLoadContext`,
+`OSDisableInterrupts`, `PPCHalt` — is the scheduler servicing that wait.
+
+*What this means for sequencing:* the REL is downstream of a working graphics
+FIFO, not the other way round. The engine is loaded *after* the game gets its
+renderer going, which is why `OSLink` is never reached. **Phase 1's remaining
+problem is a GX/FIFO one**, and it sits in ModernGekko's Dolphin-derived
+runtime rather than in our translated code — `fallback=0` says our code runs
+natively and correctly right up to the wait.
+
+*Next, in order:* find why the CP read pointer never advances. Either the
+write-gather-pipe writes from recompiled code are not reaching Dolphin's CP
+emulation, or the CP registers the game polls are not being updated. The
+`hook_fb=16132` counter says SDK calls *are* reaching the host, so the HLE path
+is live — it is specifically the FIFO plumbing that is not.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
