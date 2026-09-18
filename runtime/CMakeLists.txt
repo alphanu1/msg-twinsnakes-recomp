@@ -3,6 +3,13 @@
 # No game knowledge and no ModernGekko dependency: phase 1 borrowed a
 # Dolphin-derived runtime to prove the translated CPU code, and this replaces
 # it. Nothing here includes a ModernGekko or Dolphin header.
+find_package(SDL3 QUIET)
+if(SDL3_FOUND)
+  message(STATUS "SDL3 found: gamepad input enabled")
+else()
+  message(STATUS "SDL3 not found: building without the SDL input backend")
+endif()
+
 add_library(mgs_runtime STATIC
   memory/guest.c
   os/os_report.c
@@ -15,7 +22,14 @@ add_library(mgs_runtime STATIC
   dvd/disc_locate.c
   dvd/dvd.c
   dvd/dvd_shims.c
-  dvd/disc_swap.c)
+  dvd/disc_swap.c
+  pad/pad.c)
+
+if(SDL3_FOUND)
+  target_sources(mgs_runtime PRIVATE platform/sdl_input.c)
+  target_link_libraries(mgs_runtime PUBLIC SDL3::SDL3)
+  target_compile_definitions(mgs_runtime PUBLIC MGS_HAVE_SDL3=1)
+endif()
 
 target_include_directories(mgs_runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"

@@ -1589,5 +1589,42 @@ match whatever the disc number.
 
 **14 SDK functions now patched.**
 
+**F49 — controllers, and the first SDL3 in the tree.**
+`runtime/pad/pad.c` is a **pure mapping layer** — normalised axes in, guest
+`PADStatus` out — and `runtime/platform/sdl_input.c` is a thin SDL3 backend
+that feeds it. Split that way for one reason: **a test that needs a controller
+plugged in is a test that never runs.** All the behaviour worth checking lives
+in the pure layer and is tested with no hardware present.
+
+*Three things a naive mapping gets wrong, each of which feels like a control
+bug rather than a code bug:*
+
+- **Analog triggers carry two signals.** The GameCube's L and R report an
+  8-bit pressure value *and* a separate `PAD_TRIGGER_L`/`R` bit that latches
+  only near full travel. Twin Snakes reads both — the analog value aims, the
+  click fires. Deriving the click from "axis > 0" fires the instant the player
+  begins to aim; deriving pressure from the button removes aiming entirely.
+  The click point is set at 230 of 255.
+- **Y is inverted between the two worlds.** SDL reports down as positive, the
+  GameCube reports up as positive. Getting it wrong inverts aiming.
+- **Sticks do not use the full signed range.** The SDK clamps to roughly ±72
+  before a game sees anything, and games are calibrated against the clamped
+  range. Feeding a full −128..127 is oversensitive in a way that reads as a
+  deadzone bug rather than a scaling one. The C-stick has its own smaller
+  range (±60).
+
+Also: out-of-range input is **clamped, not wrapped** — a wrap would send a full
+right deflection hard left — and axes divide by 32767 rather than 32768, so
+full deflection reaches exactly 1.0 instead of stopping one unit short of the
+SDK's range.
+
+*Verified against real SDL3:* initialises, reports connected gamepads, and an
+empty port returns `PAD_ERR_NO_CONTROLLER` rather than a neutral reading — the
+game can tell "no controller" from "controller at rest".
+
+**SDL3 is optional in the build.** `find_package(SDL3 QUIET)`: present, the
+input backend compiles; absent, the runtime still builds and every test still
+runs. The mapping layer has no SDL dependency at all.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

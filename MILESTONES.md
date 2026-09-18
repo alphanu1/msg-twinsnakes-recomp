@@ -255,7 +255,12 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
       the SDK's expected timing.
 - [ ] **VI** — stubs, plus the frame loop.
-- [ ] **PAD** — SDL3 gamepad, GC layout, analog triggers and C-stick semantics.
+- [x] **PAD mapping** — GC layout, analog triggers with a late digital click,
+      C-stick, inverted Y, SDK-clamped stick ranges. Pure layer, tested with
+      no hardware present (F49).
+- [x] **SDL3 gamepad backend** — the first SDL3 in the tree. Optional in the
+      build: absent, everything still compiles and tests.
+- [ ] Wire `PADInit`/`PADRead`/`PADClamp` into the patch table.
 - [ ] GX calls log and discard.
 
 ---
