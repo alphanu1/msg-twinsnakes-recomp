@@ -40,6 +40,7 @@ more** — what remains is the symbol recovery itself.
 | `deps.lock` | The ten upstream pins. Committed; `extern/` itself is not. |
 | `tools/bootstrap.sh` | Fetches them. `--all` for the reference group, `--update` to re-pin. |
 | `README.md` | What this is, and the provenance statement: no leaked source, ever. |
+| `docs/decompilation-process.md` | All nine stages, disc to binary, with per-stage provenance. |
 | `THIRD_PARTY.md` | Licence and group per dependency, and the system packages. |
 | `config/GGSPA4.toml` | The target build: SDK, executable hashes, disc paths. |
 | `discs/GGSPA4/disc{1,2}/` | Extracted discs, 2.5 GB. **Git-ignored**, never committed. |

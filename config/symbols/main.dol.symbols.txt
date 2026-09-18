@@ -4,509 +4,522 @@
 # Dolphin SDK 0x2301 build. These names are the community's own naming,
 # not Nintendo's source, and are ours to commit (project rule 9).
 #
-# Format: <section> <address> <size> <name>
+# Format: <section> <address> <size> <name> <origin>
+#
+# ORIGIN is the provenance of the NAME, and it is not optional. README.md
+# claims every symbol here was produced by our own analysis or by public
+# clean-room decompilation; this column is that claim's evidence, per symbol.
+#
+#   dtk-sig     decomp-toolkit signature match against the SDK 0x2301 build
+#   mkdd-align  ordered run alignment against doldecomp/mkdd's symbol map
+#   sdk2004     name confirmed against doldecomp/dolsdk2004 sources
+#   ghidra      recovered by our own analysis in Ghidra
+#   own         named by our own reasoning about behaviour
+#
+# No symbol here may originate from leaked source. See project rule 9 and
+# docs/decompilation-process.md.
 #
 # main.dol is 7.9% of the game's code and is almost entirely SDK,
 # CodeWarrior runtime and the Metrowerks TRK debugger. The engine lives
 # in mgso_pal.rel. See HANDOFF.md F9.
-.init 0x80003154 ? gTRKInterruptVectorTable
-.init 0x80005088 ? gTRKInterruptVectorTableEnd
-.init 0x800050B4 0x30 memset
-.init 0x800050E4 0xB8 __fill_mem
-.init 0x8000519C 0x50 memcpy
-.init 0x800051EC 0x40 __check_pad3
-.init 0x8000522C 0xC __set_debug_bba
-.init 0x80005238 0x8 __get_debug_bba
-.init 0x80005240 0x15C __start
-.init 0x8000539C 0x90 __init_registers
-.init 0x8000542C 0xC0 __init_data
-.init 0x800054EC 0x24 __init_hardware
-.init 0x80005510 0x34 __flush_cache
-.init 0x80005544 0x6C _rom_copy_info
-.init 0x800055B0 0x18 _bss_init_info
-.text 0x80006958 0x24 main
-.text 0x800072CC 0xF8 TRKNubMainLoop
-.text 0x800073C4 0x24 TRKDestructEvent
-.text 0x800074E0 0xB4 TRKGetNextEvent
-.text 0x80007594 0x58 TRKInitializeEventQueue
-.text 0x800075EC 0x28 TRKNubWelcome
-.text 0x80007614 0x24 TRKTerminateNub
-.text 0x80007638 0x14C TRKInitializeNub
-.text 0x80007E9C 0x2C TRKGetBuffer
-.text 0x80007F90 0x74 TRKInitializeMessageBuffers
-.text 0x8000800C 0xC4 TRKInitializeSerialHandler
-.text 0x80008120 0x60 TRKGetInput
-.text 0x800082BC 0x4 usr_put_initialize
-.text 0x80008348 0x170 TRKDispatchMessage
-.text 0x800084B8 0x8 TRKInitializeDispatcher
-.text 0x80009DB0 0x194 TRKInterruptHandler
-.text 0x80009F44 0x9C TRKExceptionHandler
-.text 0x80009FE0 0xC4 TRKSwapAndGo
-.text 0x8000A0A4 0x54 TRKInterruptHandlerEnableInterrupts
-.text 0x8000A0F8 0x10 TRKTargetSetInputPendingPtr
-.text 0x8000A120 0x10 TRKTargetSetStopped
-.text 0x8000A130 0x10 TRKTargetStopped
-.text 0x8000A140 0x200 TRKTargetSupportRequest
-.text 0x8000A5C4 0x190 TRKTargetInterrupt
-.text 0x8000A754 0xAC TRKPostInterruptEvent
-.text 0x8000B7D0 0x1B8 TRKSaveExtended1Block
-.text 0x8000B988 0x1B8 TRKRestoreExtended1Block
-.text 0x8000BB40 0x94 InitMetroTRK
-.text 0x8000BBD8 0x94 InitMetroTRK_BBA
-.text 0x8000BC6C 0x4C TRKInitializeTarget
-.text 0x8000BE3C 0x20 EnableMetroTRKInterrupts
-.text 0x8000BE5C 0x58 TRK_main
-.text 0x8000BEB4 0x88 TRKLoadContext
-.text 0x8000BF3C 0x4 TRKUARTInterruptHandler
-.text 0x8000BF40 0x58 InitializeProgramEndTrap
-.text 0x8000BF98 0x30 TRK_board_display
-.text 0x8000BFC8 0x30 UnreserveEXI2Port
-.text 0x8000BFF8 0x30 ReserveEXI2Port
-.text 0x8000C118 0x50 TRKInitializeIntDrivenUART
-.text 0x8000C168 0x26C InitMetroTRKCommTable
-.text 0x8000C3D4 0x38 TRKEXICallBack
-.text 0x8000C40C 0x34 TRKTargetContinue
-.text 0x8000C658 0x8 udp_cc_post_stop
-.text 0x8000C660 0x8 udp_cc_pre_continue
-.text 0x8000C668 0x8 udp_cc_peek
-.text 0x8000C670 0x8 udp_cc_write
-.text 0x8000C678 0x8 udp_cc_read
-.text 0x8000C680 0x8 udp_cc_close
-.text 0x8000C688 0x8 udp_cc_open
-.text 0x8000C690 0x8 udp_cc_shutdown
-.text 0x8000C698 0x8 udp_cc_initialize
-.text 0x8000C6A0 0x24 ddh_cc_initinterrupts
-.text 0x8000C6C4 0x70 ddh_cc_peek
-.text 0x8000C734 0x24 ddh_cc_post_stop
-.text 0x8000C758 0x24 ddh_cc_pre_continue
-.text 0x8000C77C 0xC0 ddh_cc_write
-.text 0x8000C83C 0xEC ddh_cc_read
-.text 0x8000C928 0x8 ddh_cc_close
-.text 0x8000C930 0x24 ddh_cc_open
-.text 0x8000C954 0x8 ddh_cc_shutdown
-.text 0x8000C95C 0x88 ddh_cc_initialize
-.text 0x8000CC4C 0x24 gdev_cc_initinterrupts
-.text 0x8000CC70 0x70 gdev_cc_peek
-.text 0x8000CCE0 0x24 gdev_cc_post_stop
-.text 0x8000CD04 0x24 gdev_cc_pre_continue
-.text 0x8000CD28 0xC0 gdev_cc_write
-.text 0x8000CDE8 0xF4 gdev_cc_read
-.text 0x8000CEDC 0x8 gdev_cc_close
-.text 0x8000CEE4 0x24 gdev_cc_open
-.text 0x8000CF08 0x8 gdev_cc_shutdown
-.text 0x8000CF10 0x88 gdev_cc_initialize
-.text 0x8000CF98 0x50 MWTRACE
-.text 0x8000D040 0xC8 __va_arg
-.text 0x8000D108 0x48 __destroy_global_chain
-.text 0x8000D1AC 0x4C __save_fpr
-.text 0x8000D1AC ? _savefpr_14
-.text 0x8000D1B0 ? _savefpr_15
-.text 0x8000D1B4 ? _savefpr_16
-.text 0x8000D1B8 ? _savefpr_17
-.text 0x8000D1BC ? _savefpr_18
-.text 0x8000D1C0 ? _savefpr_19
-.text 0x8000D1C4 ? _savefpr_20
-.text 0x8000D1C8 ? _savefpr_21
-.text 0x8000D1CC ? _savefpr_22
-.text 0x8000D1D0 ? _savefpr_23
-.text 0x8000D1D4 ? _savefpr_24
-.text 0x8000D1D8 ? _savefpr_25
-.text 0x8000D1DC ? _savefpr_26
-.text 0x8000D1E0 ? _savefpr_27
-.text 0x8000D1E4 ? _savefpr_28
-.text 0x8000D1E8 ? _savefpr_29
-.text 0x8000D1EC ? _savefpr_30
-.text 0x8000D1F0 ? _savefpr_31
-.text 0x8000D1F8 0x4C __restore_fpr
-.text 0x8000D1F8 ? _restfpr_14
-.text 0x8000D1FC ? _restfpr_15
-.text 0x8000D200 ? _restfpr_16
-.text 0x8000D204 ? _restfpr_17
-.text 0x8000D208 ? _restfpr_18
-.text 0x8000D20C ? _restfpr_19
-.text 0x8000D210 ? _restfpr_20
-.text 0x8000D214 ? _restfpr_21
-.text 0x8000D218 ? _restfpr_22
-.text 0x8000D21C ? _restfpr_23
-.text 0x8000D220 ? _restfpr_24
-.text 0x8000D224 ? _restfpr_25
-.text 0x8000D228 ? _restfpr_26
-.text 0x8000D22C ? _restfpr_27
-.text 0x8000D230 ? _restfpr_28
-.text 0x8000D234 ? _restfpr_29
-.text 0x8000D238 ? _restfpr_30
-.text 0x8000D23C ? _restfpr_31
-.text 0x8000D244 0x4C __save_gpr
-.text 0x8000D244 ? _savegpr_14
-.text 0x8000D248 ? _savegpr_15
-.text 0x8000D24C ? _savegpr_16
-.text 0x8000D250 ? _savegpr_17
-.text 0x8000D254 ? _savegpr_18
-.text 0x8000D258 ? _savegpr_19
-.text 0x8000D25C ? _savegpr_20
-.text 0x8000D260 ? _savegpr_21
-.text 0x8000D264 ? _savegpr_22
-.text 0x8000D268 ? _savegpr_23
-.text 0x8000D26C ? _savegpr_24
-.text 0x8000D270 ? _savegpr_25
-.text 0x8000D274 ? _savegpr_26
-.text 0x8000D278 ? _savegpr_27
-.text 0x8000D27C ? _savegpr_28
-.text 0x8000D280 ? _savegpr_29
-.text 0x8000D284 ? _savegpr_30
-.text 0x8000D288 ? _savegpr_31
-.text 0x8000D290 0x4C __restore_gpr
-.text 0x8000D290 ? _restgpr_14
-.text 0x8000D294 ? _restgpr_15
-.text 0x8000D298 ? _restgpr_16
-.text 0x8000D29C ? _restgpr_17
-.text 0x8000D2A0 ? _restgpr_18
-.text 0x8000D2A4 ? _restgpr_19
-.text 0x8000D2A8 ? _restgpr_20
-.text 0x8000D2AC ? _restgpr_21
-.text 0x8000D2B0 ? _restgpr_22
-.text 0x8000D2B4 ? _restgpr_23
-.text 0x8000D2B8 ? _restgpr_24
-.text 0x8000D2BC ? _restgpr_25
-.text 0x8000D2C0 ? _restgpr_26
-.text 0x8000D2C4 ? _restgpr_27
-.text 0x8000D2C8 ? _restgpr_28
-.text 0x8000D2CC ? _restgpr_29
-.text 0x8000D2D0 ? _restgpr_30
-.text 0x8000D2D4 ? _restgpr_31
-.text 0x8000D2DC 0xEC __div2u
-.text 0x8000D500 0xE4 __mod2u
-.text 0x8000DA50 0xF0 exit
-.text 0x8000EA88 0xA8 __close_all
-.text 0x80010A94 0xC4 __flush_buffer
-.text 0x80010B58 0x34 __prep_buffer
-.text 0x80010B8C 0x4 __end_critical_region
-.text 0x80010B90 0x4 __begin_critical_region
-.text 0x80010B94 0x4 __kill_critical_regions
-.text 0x80010BBC 0x30C __fwrite
-.text 0x80010EC8 0x7C fwrite
-.text 0x80011238 0x6C fseek
-.text 0x80011588 0x118 wcstombs
-.text 0x800116EC 0x2C __memrchr
-.text 0x80011718 0x2C memchr
-.text 0x80011744 0xCC memmove
-.text 0x80011AE0 0x10 __stdio_atexit
-.text 0x80011C48 0x98 vprintf
-.text 0x80011F14 0x58 __FileWrite
-.text 0x80011F6C 0x774 __pformatter
-.text 0x800126E0 0x71C float2str
-.text 0x80012F28 0x338 double2hex
-.text 0x80013260 0x314 longlong2str
-.text 0x80013574 0x258 long2str
-.text 0x800137CC 0x504 parse_format
-.text 0x80013EF4 0x30 strchr
-.text 0x800141B4 0x1C strlen
-.text 0x800146D8 0x88 fwide
-.text 0x80017CE4 0xF4 SetExiInterruptMask
-.text 0x80017DD8 0x25C EXIImm
-.text 0x800180D4 0xEC EXIDma
-.text 0x800181C0 0x24C EXISync
-.text 0x8001840C 0x48 EXIClearInterrupts
-.text 0x800184D0 0x174 __EXIProbe
-.text 0x80018940 0x12C EXISelect
-.text 0x80018A6C 0x110 EXIDeselect
-.text 0x80018B7C 0xC8 EXIIntrruptHandler
-.text 0x80018C44 0x218 TCIntrruptHandler
-.text 0x80018E5C 0xD0 EXTIntrruptHandler
-.text 0x80018F2C 0x1D4 EXIInit
-.text 0x80019100 0xF4 EXILock
-.text 0x800191F4 0xDC EXIUnlock
-.text 0x800192E8 0x28 UnlockedHandler
-.text 0x80019310 0x3B0 EXIGetID
-.text 0x8001984C 0x1BC __OSEnableBarnacle
-.text 0x80019FEC 0x344 SIInterruptHandler
-.text 0x8001A588 0xB4 SIInit
-.text 0x8001A8E8 0x6C SISetXY
-.text 0x8001AC80 0x16C SITransfer
-.text 0x8001ADEC 0x298 GetTypeCallback
-.text 0x8001B084 0x1C4 SIGetType
-.text 0x8001B4F4 0xE4 SISetSamplingRate
-.text 0x8001B5FC 0x8 PPCMfmsr
-.text 0x8001B604 0x8 PPCMtmsr
-.text 0x8001B60C 0x8 PPCMfhid0
-.text 0x8001B61C 0x8 PPCMfl2cr
-.text 0x8001B624 0x8 PPCMtl2cr
-.text 0x8001B62C 0x8 PPCMtdec
-.text 0x8001B63C 0x14 PPCHalt
-.text 0x8001B650 0x8 PPCMtmmcr0
-.text 0x8001B658 0x8 PPCMtmmcr1
-.text 0x8001B660 0x8 PPCMtpmc1
-.text 0x8001B668 0x8 PPCMtpmc2
-.text 0x8001B670 0x8 PPCMtpmc3
-.text 0x8001B678 0x8 PPCMtpmc4
-.text 0x8001B680 0x20 PPCMffpscr
-.text 0x8001B6A0 0x28 PPCMtfpscr
-.text 0x8001B6C8 0x8 PPCMfhid2
-.text 0x8001B6D0 0x8 PPCMthid2
-.text 0x8001B6E4 0x8 PPCMtwpar
-.text 0x8001B6EC 0x28 PPCDisableSpeculation
-.text 0x8001B714 0x8 PPCSetFpNonIEEEMode
-.text 0x8001B71C 0x128 __OSFPRInit
-.text 0x8001B86C 0x128 ClearArena
-.text 0x8001B994 0x3C InquiryCallback
-.text 0x8001B9D0 0x3D8 OSInit
-.text 0x8001BDA8 0x280 OSExceptionInit
-.text 0x8001C028 0x0 __OSDBINTSTART
-.text 0x8001C028 0x24 __OSDBIntegrator
-.text 0x8001C04C 0x0 __OSDBINTEND
-.text 0x8001C050 0x0 __OSDBJUMPEND
-.text 0x8001C050 0x1C __OSSetExceptionHandler
-.text 0x8001C06C 0x14 __OSGetExceptionHandler
-.text 0x8001C080 0x0 __OSEVStart
-.text 0x8001C080 0x9C OSExceptionVector
-.text 0x8001C0D8 0x0 __DBVECTOR
-.text 0x8001C0E8 0x0 __OSEVSetNumber
-.text 0x8001C118 0x0 __OSEVEnd
-.text 0x8001C11C 0x58 OSDefaultExceptionHandler
-.text 0x8001C174 0x54 __OSPSInit
-.text 0x8001C1DC 0x2C OSRegisterVersion
-.text 0x8001C208 0x58 OSInitAlarm
-.text 0x8001C260 0x10 OSCreateAlarm
-.text 0x8001C270 0x250 InsertAlarm
-.text 0x8001C4C0 0x68 OSSetAlarm
-.text 0x8001C644 0x230 DecrementerExceptionCallback
-.text 0x8001C874 0x50 DecrementerExceptionHandler
-.text 0x8001CD78 0x8 OSGetArenaHi
-.text 0x8001CD80 0x8 OSGetArenaLo
-.text 0x8001CD88 0x8 OSSetArenaHi
-.text 0x8001CD90 0x8 OSSetArenaLo
-.text 0x8001CDC4 0x1BC __OSInitAudioSystem
-.text 0x8001CF80 0xD8 __OSStopAudioSystem
-.text 0x8001D058 0x14 DCEnable
-.text 0x8001D06C 0x2C DCInvalidateRange
-.text 0x8001D098 0x30 DCFlushRange
-.text 0x8001D0F8 0x2C DCFlushRangeNoSync
-.text 0x8001D150 0x34 ICInvalidateRange
-.text 0x8001D184 0x10 ICFlashInvalidate
-.text 0x8001D194 0x14 ICEnable
-.text 0x8001D2AC 0x28 LCDisable
-.text 0x8001D3B8 0x98 L2GlobalInvalidate
-.text 0x8001D450 0x160 DMAErrorHandler
-.text 0x8001D5B0 0xF4 __OSCacheInit
-.text 0x8001D6A4 0x124 __OSLoadFPUContext
-.text 0x8001D7C8 0x128 __OSSaveFPUContext
-.text 0x8001D8F0 0x8 OSSaveFPUContext
-.text 0x8001D8F8 0x5C OSSetCurrentContext
-.text 0x8001D9E0 0xD8 OSLoadContext
-.text 0x8001DAF0 0x24 OSClearContext
-.text 0x8001DBD0 0x2A8 OSDumpContext
-.text 0x8001DE78 0x84 OSSwitchFPUContext
-.text 0x8001DEFC 0x48 __OSContextInit
-.text 0x8001DF44 0x80 OSReport
-.text 0x8001E0F0 0x218 OSSetErrorHandler
-.text 0x8001E308 0x2E8 __OSUnhandledException
-.text 0x8001FCCC 0x14 OSDisableInterrupts
-.text 0x8001FCE0 0x14 OSEnableInterrupts
-.text 0x8001FCF4 0x24 OSRestoreInterrupts
-.text 0x8001FD18 0x1C __OSSetInterruptHandler
-.text 0x8001FD48 0x74 __OSInterruptInit
-.text 0x80020094 0x88 __OSMaskInterrupts
-.text 0x8002011C 0x88 __OSUnmaskInterrupts
-.text 0x800204E8 0x50 ExternalInterruptHandler
-.text 0x80020AFC 0x18 __OSModuleInit
-.text 0x80020D54 0x6C MEMIntrruptHandler
-.text 0x80020DC0 0x80 Config24MB
-.text 0x80020E40 0x80 Config48MB
-.text 0x80020EC0 0x18 RealMode
-.text 0x80020ED8 0x118 __OSInitMemoryProtection
-.text 0x80021258 0x340 __OSReboot
-.text 0x80021598 0x84 OSRegisterResetFunction
-.text 0x800216B0 0x70 Reset
-.text 0x80021768 0x2B8 OSResetSystem
-.text 0x80021A20 0x30 OSGetResetCode
-.text 0x80021A50 0xF4 __OSResetSWInterruptHandler
-.text 0x80021F54 0x13C __OSInitSram
-.text 0x80022090 0x5C __OSLockSram
-.text 0x800220EC 0x5C __OSLockSramEx
-.text 0x80022484 0x24 __OSUnlockSram
-.text 0x800224A8 0x24 __OSUnlockSramEx
-.text 0x800224CC 0x10 __OSSyncSram
-.text 0x800229D4 0x70 OSGetGbsMode
-.text 0x80022A44 0xB8 OSSetGbsMode
-.text 0x80022DF8 0x0 __OSSystemCallVectorStart
-.text 0x80022E14 0x0 __OSSystemCallVectorEnd
-.text 0x80022E18 0x64 __OSInitSystemCall
-.text 0x80022E80 0x158 __OSThreadInit
-.text 0x80022FD8 0x10 OSInitThreadQueue
-.text 0x80022FF4 0x40 OSDisableScheduler
-.text 0x80023034 0x40 OSEnableScheduler
-.text 0x80023328 0x228 SelectThread
-.text 0x80023550 0x30 __OSReschedule
-.text 0x80023888 0x1BC OSCancelThread
-.text 0x8002402C 0xAC OSClearStack
-.text 0x800240D8 0x18 OSGetTime
-.text 0x800240F0 0x8 OSGetTick
-.text 0x800240F8 0x64 __OSGetSystemTime
-.text 0x800244FC 0x20 __init_user
-.text 0x8002451C 0x54 __init_cpp
-.text 0x80024570 0x20 _ExitProcess
-.text 0x80024590 0x28 DBInit
-.text 0x80024600 0x10 __DBExceptionDestination
-.text 0x80024610 0x1C __DBIsExceptionMarked
-.text 0x8002462C 0x50 DBPrintf
-.text 0x80025ABC 0x40 __DVDInitWA
-.text 0x80025AFC 0x2E0 __DVDInterruptHandler
-.text 0x80025E60 0x70 AlarmHandlerForTimeout
-.text 0x8002638C 0x2C DVDLowWaitCoverClose
-.text 0x8002645C 0x8C DVDLowStopMotor
-.text 0x800267D0 0xBC DVDLowReset
-.text 0x800268BC 0x44 __DVDLowSetWAType
-.text 0x80026938 0x38 __DVDFSInit
-.text 0x80027218 0xCC DVDInit
-.text 0x80027404 0xAC cbForStateError
-.text 0x80027FBC 0x44 AlarmHandler
-.text 0x80028194 0xE4 cbForStateMotorStopped
-.text 0x80028278 0x230 stateReady
-.text 0x800284A8 0x320 stateBusy
-.text 0x80028FAC 0xD4 DVDReadDiskID
-.text 0x8002924C 0xD0 DVDInquiryAsync
-.text 0x8002931C 0x44 DVDReset
-.text 0x800293AC 0xAC DVDGetDriveStatus
-.text 0x80029A58 0x38 __DVDClearWaitingQueue
-.text 0x80029A90 0x68 __DVDPushWaitingQueue
-.text 0x80029AF8 0xA0 __DVDPopWaitingQueue
-.text 0x80029B98 0x58 __DVDCheckWaitingQueue
-.text 0x80029C50 0x11C ErrorCode2Num
-.text 0x80029D6C 0x7C __DVDStoreErrorCode
-.text 0x8002A00C 0xD8 cb
-.text 0x8002A0E4 0x168 __fstLoad
-.text 0x8002C03C 0x68 VIGetTvFormat
-.text 0x8002EE58 0x7C __PADDisableRecalibration
-.text 0x8003F070 0x798 GXInit
-.text 0x8003F808 0x938 __GXInitGX
-.text 0x80040274 0x6C GXInitFifoBase
-.text 0x8004035C 0x128 GXSetCPUFifo
-.text 0x80040484 0x178 GXSetGPFifo
-.text 0x800408B0 0x4C __GXFifoInit
-.text 0x80041B28 0x94 GXSetMisc
-.text 0x80042364 0x74 __GXPEInit
-.text 0x800440E8 0xF4 GXInitTexCacheRegion
-.text 0x800441DC 0x38 GXInitTlutRegion
-.text 0x800444A0 0x354 __GXSetTmemConfig
-.text 0x80044D84 0x30 __GXSetIndirectMask
-.text 0x80044DB4 0x24 __GXFlushTextureState
-.text 0x800475A4 0x8 Hu_IsStub
-.text 0x80048054 0x8 AMC_IsStub
-.ctors 0x80062060 0x0 _ctors
-.dtors 0x80062080 0x0 _dtors
-.dtors 0x80062080 0x4 __destroy_global_chain_reference
-.rodata 0x80062718 0x4 EndofProgramInstruction$162
-.data 0x801DE708 0x9 gTRKRestoreFlags
-.data 0x801DE714 0x10 gTRKExceptionStatus
-.data 0x801DE778 0x28 gDBCommTable
-.data 0x801DE7A0 0x140 __files
-.data 0x801DF0D4 0x14 Si
-.data 0x801DF0E8 0x10 Type
-.data 0x801DF1A8 0x30 XYNTSC
-.data 0x801DF438 0x10 ResetFunctionInfo
-.data 0x801DF7E0 0x80 DSPInitCode
-.data 0x801E0AF0 0x10 ResetFunctionInfo
-.data 0x801E63CC 0xC0 GXTexRegionAddrTable
-.data 0x801E648C 0x10 GXResetFuncInfo
-.bss 0x801E91A8 0x4 gTRKBigEndian
-.bss 0x801EAB80 0x2 TRK_saved_exceptionID
-.bss 0x801EAB84 0xA4 gTRKState
-.bss 0x801EAC28 0x430 gTRKCPUState
-.bss 0x801EB058 0x94 gTRKSaveState
-.bss 0x801EB108 0x4 TRK_mainError
-.bss 0x801EB110 0x1 TRK_Use_BBA
-.bss 0x801EBE60 0x100 __atexit_funcs
-.bss 0x801EC298 0xC0 Ecb
-.bss 0x801EC358 0x80 Packet
-.bss 0x801EC478 0x20 TypeTime
-.bss 0x801EC560 0x20 DriveInfo
-.bss 0x801EC5B0 0x44 __OSErrorTable
-.bss 0x801EC900 0x54 Scb
-.bss 0x801EC958 0x100 RunQueue
-.bss 0x801ED350 0x3C CommandList
-.bss 0x801ED3B8 0x28 AlarmForTimeout
-.bss 0x801ED420 0x20 BB2
-.bss 0x801ED460 0x30 DummyCommandBlock
-.bss 0x801ED4B8 0x20 WaitingQueue
-.bss 0x801ED4D8 0x3F bb2Buf
-.bss 0x801ED518 0x30 block$16
-.bss 0x80209040 0x80 FifoObj
-.sdata 0x8027D9A0 0x4 __EXIVersion
-.sdata 0x8027D9A8 0x4 __SIVersion
-.sdata 0x8027D9B0 0x4 __OSVersion
-.sdata 0x8027D9C8 0x4 __OSArenaLo
-.sdata 0x8027D9E8 0x4 SwitchThreadCallback
-.sdata 0x8027DA08 0x4 __DVDVersion
-.sdata 0x8027DA0C 0x4 autoInvalidation
-.sdata 0x8027DAC8 0x4 __GXVersion
-.sbss 0x8027DB40 0x4 gTRKInputPendingPtr
-.sbss 0x8027DB58 0x4 __global_destructor_chain
-.sbss 0x8027DB60 0x4 __aborting
-.sbss 0x8027DB64 0x4 __atexit_curr_func
-.sbss 0x8027DB68 0x4 __stdio_exit
-.sbss 0x8027DB6C 0x4 __console_exit
-.sbss 0x8027DB88 0x4 IDSerialPort1
-.sbss 0x8027DBA4 0x4 cmdTypeAndStatus$371
-.sbss 0x8027DBB0 0x4 SamplingRate
-.sbss 0x8027DBB8 0x4 BootInfo
-.sbss 0x8027DBBC 0x4 BI2DebugFlag
-.sbss 0x8027DBC0 0x4 BI2DebugFlagHolder
-.sbss 0x8027DBC4 0x4 __OSIsGcam
-.sbss 0x8027DBC8 0x8 ZeroF
-.sbss 0x8027DBD0 0x8 ZeroPS
-.sbss 0x8027DBD8 0x4 AreWeInitialized
-.sbss 0x8027DBDC 0x4 OSExceptionTable
-.sbss 0x8027DBE0 0x4 __OSSavedRegionEnd
-.sbss 0x8027DBE4 0x4 __OSSavedRegionStart
-.sbss 0x8027DBE8 0x4 __OSInIPL
-.sbss 0x8027DBF0 0x8 __OSStartTime
-.sbss 0x8027DBF8 0x8 AlarmQueue
-.sbss 0x8027DC10 0x4 __OSArenaHi
-.sbss 0x8027DC28 0x4 InterruptHandlerTable
-.sbss 0x8027DC2C 0x4 __OSLastInterruptSrr0
-.sbss 0x8027DC30 0x2 __OSLastInterrupt
-.sbss 0x8027DC38 0x8 __OSLastInterruptTime
-.sbss 0x8027DC50 0x8 ResetFunctionQueue
-.sbss 0x8027DC58 0x4 bootThisDol
-.sbss 0x8027DC80 0x4 RunQueueBits
-.sbss 0x8027DC84 0x4 RunQueueHint
-.sbss 0x8027DC88 0x4 Reschedule
-.sbss 0x8027DC90 0x1 Debug_BBA
-.sbss 0x8027DC98 0x4 __DBInterface
-.sbss 0x8027DC9C 0x4 DBVerbose
-.sbss 0x8027DCA0 0x4 StopAtNextInt
-.sbss 0x8027DCA8 0x4 Callback
-.sbss 0x8027DCB0 0x8 LastResetEnd
-.sbss 0x8027DCB8 0x4 ResetOccurred
-.sbss 0x8027DCBC 0x4 WaitingCoverClose
-.sbss 0x8027DCC4 0x4 WorkAroundType
-.sbss 0x8027DCC8 0x4 WorkAroundSeekLocation
-.sbss 0x8027DCE4 0x4 NextCommandNumber
-.sbss 0x8027DCE8 0x4 BootInfo
-.sbss 0x8027DCEC 0x4 FstStart
-.sbss 0x8027DCF0 0x4 FstStringStart
-.sbss 0x8027DCF4 0x4 MaxEntryNum
-.sbss 0x8027DCFC 0x4 __DVDLongFileNameFlag
-.sbss 0x8027DD00 0x8 __DVDThreadQueue
-.sbss 0x8027DD08 0x4 executing
-.sbss 0x8027DD0C 0x4 IDShouldBe
-.sbss 0x8027DD10 0x4 bootInfo
-.sbss 0x8027DD14 0x4 PauseFlag
-.sbss 0x8027DD18 0x4 PausingFlag
-.sbss 0x8027DD20 0x4 FatalErrorFlag
-.sbss 0x8027DD24 0x4 CurrCommand
-.sbss 0x8027DD30 0x4 ResumeFromHere
-.sbss 0x8027DD34 0x4 CancelLastError
-.sbss 0x8027DD40 0x4 ResetRequired
-.sbss 0x8027DD44 0x4 FirstTimeInBootrom
-.sbss 0x8027DD48 0x4 DVDInitialized
-.sbss 0x8027DD5C 0x4 bb2
-.sbss 0x8027DD60 0x4 idTmp
-.sbss 0x8027DDB4 0x4 CurrTvMode
-.sbss 0x8027DE00 0x4 __PADSpec
-.sbss 0x8027DFA0 0x4 __piReg
-.sbss 0x8027DFA4 0x4 __cpReg
-.sbss 0x8027DFA8 0x4 __peReg
-.sbss 0x8027DFAC 0x4 __memReg
-.sbss 0x8027DFC4 0x4 resetFuncRegistered$70
-.sdata2 0x8027E600 0x4 __GXData
+.init 0x80003154 ? gTRKInterruptVectorTable dtk-sig
+.init 0x80005088 ? gTRKInterruptVectorTableEnd dtk-sig
+.init 0x800050B4 0x30 memset dtk-sig
+.init 0x800050E4 0xB8 __fill_mem dtk-sig
+.init 0x8000519C 0x50 memcpy dtk-sig
+.init 0x800051EC 0x40 __check_pad3 dtk-sig
+.init 0x8000522C 0xC __set_debug_bba dtk-sig
+.init 0x80005238 0x8 __get_debug_bba dtk-sig
+.init 0x80005240 0x15C __start dtk-sig
+.init 0x8000539C 0x90 __init_registers dtk-sig
+.init 0x8000542C 0xC0 __init_data dtk-sig
+.init 0x800054EC 0x24 __init_hardware dtk-sig
+.init 0x80005510 0x34 __flush_cache dtk-sig
+.init 0x80005544 0x6C _rom_copy_info dtk-sig
+.init 0x800055B0 0x18 _bss_init_info dtk-sig
+.text 0x80006958 0x24 main dtk-sig
+.text 0x800072CC 0xF8 TRKNubMainLoop dtk-sig
+.text 0x800073C4 0x24 TRKDestructEvent dtk-sig
+.text 0x800074E0 0xB4 TRKGetNextEvent dtk-sig
+.text 0x80007594 0x58 TRKInitializeEventQueue dtk-sig
+.text 0x800075EC 0x28 TRKNubWelcome dtk-sig
+.text 0x80007614 0x24 TRKTerminateNub dtk-sig
+.text 0x80007638 0x14C TRKInitializeNub dtk-sig
+.text 0x80007E9C 0x2C TRKGetBuffer dtk-sig
+.text 0x80007F90 0x74 TRKInitializeMessageBuffers dtk-sig
+.text 0x8000800C 0xC4 TRKInitializeSerialHandler dtk-sig
+.text 0x80008120 0x60 TRKGetInput dtk-sig
+.text 0x800082BC 0x4 usr_put_initialize dtk-sig
+.text 0x80008348 0x170 TRKDispatchMessage dtk-sig
+.text 0x800084B8 0x8 TRKInitializeDispatcher dtk-sig
+.text 0x80009DB0 0x194 TRKInterruptHandler dtk-sig
+.text 0x80009F44 0x9C TRKExceptionHandler dtk-sig
+.text 0x80009FE0 0xC4 TRKSwapAndGo dtk-sig
+.text 0x8000A0A4 0x54 TRKInterruptHandlerEnableInterrupts dtk-sig
+.text 0x8000A0F8 0x10 TRKTargetSetInputPendingPtr dtk-sig
+.text 0x8000A120 0x10 TRKTargetSetStopped dtk-sig
+.text 0x8000A130 0x10 TRKTargetStopped dtk-sig
+.text 0x8000A140 0x200 TRKTargetSupportRequest dtk-sig
+.text 0x8000A5C4 0x190 TRKTargetInterrupt dtk-sig
+.text 0x8000A754 0xAC TRKPostInterruptEvent dtk-sig
+.text 0x8000B7D0 0x1B8 TRKSaveExtended1Block dtk-sig
+.text 0x8000B988 0x1B8 TRKRestoreExtended1Block dtk-sig
+.text 0x8000BB40 0x94 InitMetroTRK dtk-sig
+.text 0x8000BBD8 0x94 InitMetroTRK_BBA dtk-sig
+.text 0x8000BC6C 0x4C TRKInitializeTarget dtk-sig
+.text 0x8000BE3C 0x20 EnableMetroTRKInterrupts dtk-sig
+.text 0x8000BE5C 0x58 TRK_main dtk-sig
+.text 0x8000BEB4 0x88 TRKLoadContext dtk-sig
+.text 0x8000BF3C 0x4 TRKUARTInterruptHandler dtk-sig
+.text 0x8000BF40 0x58 InitializeProgramEndTrap dtk-sig
+.text 0x8000BF98 0x30 TRK_board_display dtk-sig
+.text 0x8000BFC8 0x30 UnreserveEXI2Port dtk-sig
+.text 0x8000BFF8 0x30 ReserveEXI2Port dtk-sig
+.text 0x8000C118 0x50 TRKInitializeIntDrivenUART dtk-sig
+.text 0x8000C168 0x26C InitMetroTRKCommTable dtk-sig
+.text 0x8000C3D4 0x38 TRKEXICallBack dtk-sig
+.text 0x8000C40C 0x34 TRKTargetContinue dtk-sig
+.text 0x8000C658 0x8 udp_cc_post_stop dtk-sig
+.text 0x8000C660 0x8 udp_cc_pre_continue dtk-sig
+.text 0x8000C668 0x8 udp_cc_peek dtk-sig
+.text 0x8000C670 0x8 udp_cc_write dtk-sig
+.text 0x8000C678 0x8 udp_cc_read dtk-sig
+.text 0x8000C680 0x8 udp_cc_close dtk-sig
+.text 0x8000C688 0x8 udp_cc_open dtk-sig
+.text 0x8000C690 0x8 udp_cc_shutdown dtk-sig
+.text 0x8000C698 0x8 udp_cc_initialize dtk-sig
+.text 0x8000C6A0 0x24 ddh_cc_initinterrupts dtk-sig
+.text 0x8000C6C4 0x70 ddh_cc_peek dtk-sig
+.text 0x8000C734 0x24 ddh_cc_post_stop dtk-sig
+.text 0x8000C758 0x24 ddh_cc_pre_continue dtk-sig
+.text 0x8000C77C 0xC0 ddh_cc_write dtk-sig
+.text 0x8000C83C 0xEC ddh_cc_read dtk-sig
+.text 0x8000C928 0x8 ddh_cc_close dtk-sig
+.text 0x8000C930 0x24 ddh_cc_open dtk-sig
+.text 0x8000C954 0x8 ddh_cc_shutdown dtk-sig
+.text 0x8000C95C 0x88 ddh_cc_initialize dtk-sig
+.text 0x8000CC4C 0x24 gdev_cc_initinterrupts dtk-sig
+.text 0x8000CC70 0x70 gdev_cc_peek dtk-sig
+.text 0x8000CCE0 0x24 gdev_cc_post_stop dtk-sig
+.text 0x8000CD04 0x24 gdev_cc_pre_continue dtk-sig
+.text 0x8000CD28 0xC0 gdev_cc_write dtk-sig
+.text 0x8000CDE8 0xF4 gdev_cc_read dtk-sig
+.text 0x8000CEDC 0x8 gdev_cc_close dtk-sig
+.text 0x8000CEE4 0x24 gdev_cc_open dtk-sig
+.text 0x8000CF08 0x8 gdev_cc_shutdown dtk-sig
+.text 0x8000CF10 0x88 gdev_cc_initialize dtk-sig
+.text 0x8000CF98 0x50 MWTRACE dtk-sig
+.text 0x8000D040 0xC8 __va_arg dtk-sig
+.text 0x8000D108 0x48 __destroy_global_chain dtk-sig
+.text 0x8000D1AC 0x4C __save_fpr dtk-sig
+.text 0x8000D1AC ? _savefpr_14 dtk-sig
+.text 0x8000D1B0 ? _savefpr_15 dtk-sig
+.text 0x8000D1B4 ? _savefpr_16 dtk-sig
+.text 0x8000D1B8 ? _savefpr_17 dtk-sig
+.text 0x8000D1BC ? _savefpr_18 dtk-sig
+.text 0x8000D1C0 ? _savefpr_19 dtk-sig
+.text 0x8000D1C4 ? _savefpr_20 dtk-sig
+.text 0x8000D1C8 ? _savefpr_21 dtk-sig
+.text 0x8000D1CC ? _savefpr_22 dtk-sig
+.text 0x8000D1D0 ? _savefpr_23 dtk-sig
+.text 0x8000D1D4 ? _savefpr_24 dtk-sig
+.text 0x8000D1D8 ? _savefpr_25 dtk-sig
+.text 0x8000D1DC ? _savefpr_26 dtk-sig
+.text 0x8000D1E0 ? _savefpr_27 dtk-sig
+.text 0x8000D1E4 ? _savefpr_28 dtk-sig
+.text 0x8000D1E8 ? _savefpr_29 dtk-sig
+.text 0x8000D1EC ? _savefpr_30 dtk-sig
+.text 0x8000D1F0 ? _savefpr_31 dtk-sig
+.text 0x8000D1F8 0x4C __restore_fpr dtk-sig
+.text 0x8000D1F8 ? _restfpr_14 dtk-sig
+.text 0x8000D1FC ? _restfpr_15 dtk-sig
+.text 0x8000D200 ? _restfpr_16 dtk-sig
+.text 0x8000D204 ? _restfpr_17 dtk-sig
+.text 0x8000D208 ? _restfpr_18 dtk-sig
+.text 0x8000D20C ? _restfpr_19 dtk-sig
+.text 0x8000D210 ? _restfpr_20 dtk-sig
+.text 0x8000D214 ? _restfpr_21 dtk-sig
+.text 0x8000D218 ? _restfpr_22 dtk-sig
+.text 0x8000D21C ? _restfpr_23 dtk-sig
+.text 0x8000D220 ? _restfpr_24 dtk-sig
+.text 0x8000D224 ? _restfpr_25 dtk-sig
+.text 0x8000D228 ? _restfpr_26 dtk-sig
+.text 0x8000D22C ? _restfpr_27 dtk-sig
+.text 0x8000D230 ? _restfpr_28 dtk-sig
+.text 0x8000D234 ? _restfpr_29 dtk-sig
+.text 0x8000D238 ? _restfpr_30 dtk-sig
+.text 0x8000D23C ? _restfpr_31 dtk-sig
+.text 0x8000D244 0x4C __save_gpr dtk-sig
+.text 0x8000D244 ? _savegpr_14 dtk-sig
+.text 0x8000D248 ? _savegpr_15 dtk-sig
+.text 0x8000D24C ? _savegpr_16 dtk-sig
+.text 0x8000D250 ? _savegpr_17 dtk-sig
+.text 0x8000D254 ? _savegpr_18 dtk-sig
+.text 0x8000D258 ? _savegpr_19 dtk-sig
+.text 0x8000D25C ? _savegpr_20 dtk-sig
+.text 0x8000D260 ? _savegpr_21 dtk-sig
+.text 0x8000D264 ? _savegpr_22 dtk-sig
+.text 0x8000D268 ? _savegpr_23 dtk-sig
+.text 0x8000D26C ? _savegpr_24 dtk-sig
+.text 0x8000D270 ? _savegpr_25 dtk-sig
+.text 0x8000D274 ? _savegpr_26 dtk-sig
+.text 0x8000D278 ? _savegpr_27 dtk-sig
+.text 0x8000D27C ? _savegpr_28 dtk-sig
+.text 0x8000D280 ? _savegpr_29 dtk-sig
+.text 0x8000D284 ? _savegpr_30 dtk-sig
+.text 0x8000D288 ? _savegpr_31 dtk-sig
+.text 0x8000D290 0x4C __restore_gpr dtk-sig
+.text 0x8000D290 ? _restgpr_14 dtk-sig
+.text 0x8000D294 ? _restgpr_15 dtk-sig
+.text 0x8000D298 ? _restgpr_16 dtk-sig
+.text 0x8000D29C ? _restgpr_17 dtk-sig
+.text 0x8000D2A0 ? _restgpr_18 dtk-sig
+.text 0x8000D2A4 ? _restgpr_19 dtk-sig
+.text 0x8000D2A8 ? _restgpr_20 dtk-sig
+.text 0x8000D2AC ? _restgpr_21 dtk-sig
+.text 0x8000D2B0 ? _restgpr_22 dtk-sig
+.text 0x8000D2B4 ? _restgpr_23 dtk-sig
+.text 0x8000D2B8 ? _restgpr_24 dtk-sig
+.text 0x8000D2BC ? _restgpr_25 dtk-sig
+.text 0x8000D2C0 ? _restgpr_26 dtk-sig
+.text 0x8000D2C4 ? _restgpr_27 dtk-sig
+.text 0x8000D2C8 ? _restgpr_28 dtk-sig
+.text 0x8000D2CC ? _restgpr_29 dtk-sig
+.text 0x8000D2D0 ? _restgpr_30 dtk-sig
+.text 0x8000D2D4 ? _restgpr_31 dtk-sig
+.text 0x8000D2DC 0xEC __div2u dtk-sig
+.text 0x8000D500 0xE4 __mod2u dtk-sig
+.text 0x8000DA50 0xF0 exit dtk-sig
+.text 0x8000EA88 0xA8 __close_all dtk-sig
+.text 0x80010A94 0xC4 __flush_buffer dtk-sig
+.text 0x80010B58 0x34 __prep_buffer dtk-sig
+.text 0x80010B8C 0x4 __end_critical_region dtk-sig
+.text 0x80010B90 0x4 __begin_critical_region dtk-sig
+.text 0x80010B94 0x4 __kill_critical_regions dtk-sig
+.text 0x80010BBC 0x30C __fwrite dtk-sig
+.text 0x80010EC8 0x7C fwrite dtk-sig
+.text 0x80011238 0x6C fseek dtk-sig
+.text 0x80011588 0x118 wcstombs dtk-sig
+.text 0x800116EC 0x2C __memrchr dtk-sig
+.text 0x80011718 0x2C memchr dtk-sig
+.text 0x80011744 0xCC memmove dtk-sig
+.text 0x80011AE0 0x10 __stdio_atexit dtk-sig
+.text 0x80011C48 0x98 vprintf dtk-sig
+.text 0x80011F14 0x58 __FileWrite dtk-sig
+.text 0x80011F6C 0x774 __pformatter dtk-sig
+.text 0x800126E0 0x71C float2str dtk-sig
+.text 0x80012F28 0x338 double2hex dtk-sig
+.text 0x80013260 0x314 longlong2str dtk-sig
+.text 0x80013574 0x258 long2str dtk-sig
+.text 0x800137CC 0x504 parse_format dtk-sig
+.text 0x80013EF4 0x30 strchr dtk-sig
+.text 0x800141B4 0x1C strlen dtk-sig
+.text 0x800146D8 0x88 fwide dtk-sig
+.text 0x80017CE4 0xF4 SetExiInterruptMask dtk-sig
+.text 0x80017DD8 0x25C EXIImm dtk-sig
+.text 0x800180D4 0xEC EXIDma dtk-sig
+.text 0x800181C0 0x24C EXISync dtk-sig
+.text 0x8001840C 0x48 EXIClearInterrupts dtk-sig
+.text 0x800184D0 0x174 __EXIProbe dtk-sig
+.text 0x80018940 0x12C EXISelect dtk-sig
+.text 0x80018A6C 0x110 EXIDeselect dtk-sig
+.text 0x80018B7C 0xC8 EXIIntrruptHandler dtk-sig
+.text 0x80018C44 0x218 TCIntrruptHandler dtk-sig
+.text 0x80018E5C 0xD0 EXTIntrruptHandler dtk-sig
+.text 0x80018F2C 0x1D4 EXIInit dtk-sig
+.text 0x80019100 0xF4 EXILock dtk-sig
+.text 0x800191F4 0xDC EXIUnlock dtk-sig
+.text 0x800192E8 0x28 UnlockedHandler dtk-sig
+.text 0x80019310 0x3B0 EXIGetID dtk-sig
+.text 0x8001984C 0x1BC __OSEnableBarnacle dtk-sig
+.text 0x80019FEC 0x344 SIInterruptHandler dtk-sig
+.text 0x8001A588 0xB4 SIInit dtk-sig
+.text 0x8001A8E8 0x6C SISetXY dtk-sig
+.text 0x8001AC80 0x16C SITransfer dtk-sig
+.text 0x8001ADEC 0x298 GetTypeCallback dtk-sig
+.text 0x8001B084 0x1C4 SIGetType dtk-sig
+.text 0x8001B4F4 0xE4 SISetSamplingRate dtk-sig
+.text 0x8001B5FC 0x8 PPCMfmsr dtk-sig
+.text 0x8001B604 0x8 PPCMtmsr dtk-sig
+.text 0x8001B60C 0x8 PPCMfhid0 dtk-sig
+.text 0x8001B61C 0x8 PPCMfl2cr dtk-sig
+.text 0x8001B624 0x8 PPCMtl2cr dtk-sig
+.text 0x8001B62C 0x8 PPCMtdec dtk-sig
+.text 0x8001B63C 0x14 PPCHalt dtk-sig
+.text 0x8001B650 0x8 PPCMtmmcr0 dtk-sig
+.text 0x8001B658 0x8 PPCMtmmcr1 dtk-sig
+.text 0x8001B660 0x8 PPCMtpmc1 dtk-sig
+.text 0x8001B668 0x8 PPCMtpmc2 dtk-sig
+.text 0x8001B670 0x8 PPCMtpmc3 dtk-sig
+.text 0x8001B678 0x8 PPCMtpmc4 dtk-sig
+.text 0x8001B680 0x20 PPCMffpscr dtk-sig
+.text 0x8001B6A0 0x28 PPCMtfpscr dtk-sig
+.text 0x8001B6C8 0x8 PPCMfhid2 dtk-sig
+.text 0x8001B6D0 0x8 PPCMthid2 dtk-sig
+.text 0x8001B6E4 0x8 PPCMtwpar dtk-sig
+.text 0x8001B6EC 0x28 PPCDisableSpeculation dtk-sig
+.text 0x8001B714 0x8 PPCSetFpNonIEEEMode dtk-sig
+.text 0x8001B71C 0x128 __OSFPRInit dtk-sig
+.text 0x8001B86C 0x128 ClearArena dtk-sig
+.text 0x8001B994 0x3C InquiryCallback dtk-sig
+.text 0x8001B9D0 0x3D8 OSInit dtk-sig
+.text 0x8001BDA8 0x280 OSExceptionInit dtk-sig
+.text 0x8001C028 0x0 __OSDBINTSTART dtk-sig
+.text 0x8001C028 0x24 __OSDBIntegrator dtk-sig
+.text 0x8001C04C 0x0 __OSDBINTEND dtk-sig
+.text 0x8001C050 0x0 __OSDBJUMPEND dtk-sig
+.text 0x8001C050 0x1C __OSSetExceptionHandler dtk-sig
+.text 0x8001C06C 0x14 __OSGetExceptionHandler dtk-sig
+.text 0x8001C080 0x0 __OSEVStart dtk-sig
+.text 0x8001C080 0x9C OSExceptionVector dtk-sig
+.text 0x8001C0D8 0x0 __DBVECTOR dtk-sig
+.text 0x8001C0E8 0x0 __OSEVSetNumber dtk-sig
+.text 0x8001C118 0x0 __OSEVEnd dtk-sig
+.text 0x8001C11C 0x58 OSDefaultExceptionHandler dtk-sig
+.text 0x8001C174 0x54 __OSPSInit dtk-sig
+.text 0x8001C1DC 0x2C OSRegisterVersion dtk-sig
+.text 0x8001C208 0x58 OSInitAlarm dtk-sig
+.text 0x8001C260 0x10 OSCreateAlarm dtk-sig
+.text 0x8001C270 0x250 InsertAlarm dtk-sig
+.text 0x8001C4C0 0x68 OSSetAlarm dtk-sig
+.text 0x8001C644 0x230 DecrementerExceptionCallback dtk-sig
+.text 0x8001C874 0x50 DecrementerExceptionHandler dtk-sig
+.text 0x8001CD78 0x8 OSGetArenaHi dtk-sig
+.text 0x8001CD80 0x8 OSGetArenaLo dtk-sig
+.text 0x8001CD88 0x8 OSSetArenaHi dtk-sig
+.text 0x8001CD90 0x8 OSSetArenaLo dtk-sig
+.text 0x8001CDC4 0x1BC __OSInitAudioSystem dtk-sig
+.text 0x8001CF80 0xD8 __OSStopAudioSystem dtk-sig
+.text 0x8001D058 0x14 DCEnable dtk-sig
+.text 0x8001D06C 0x2C DCInvalidateRange dtk-sig
+.text 0x8001D098 0x30 DCFlushRange dtk-sig
+.text 0x8001D0F8 0x2C DCFlushRangeNoSync dtk-sig
+.text 0x8001D150 0x34 ICInvalidateRange dtk-sig
+.text 0x8001D184 0x10 ICFlashInvalidate dtk-sig
+.text 0x8001D194 0x14 ICEnable dtk-sig
+.text 0x8001D2AC 0x28 LCDisable dtk-sig
+.text 0x8001D3B8 0x98 L2GlobalInvalidate dtk-sig
+.text 0x8001D450 0x160 DMAErrorHandler dtk-sig
+.text 0x8001D5B0 0xF4 __OSCacheInit dtk-sig
+.text 0x8001D6A4 0x124 __OSLoadFPUContext dtk-sig
+.text 0x8001D7C8 0x128 __OSSaveFPUContext dtk-sig
+.text 0x8001D8F0 0x8 OSSaveFPUContext dtk-sig
+.text 0x8001D8F8 0x5C OSSetCurrentContext dtk-sig
+.text 0x8001D9E0 0xD8 OSLoadContext dtk-sig
+.text 0x8001DAF0 0x24 OSClearContext dtk-sig
+.text 0x8001DBD0 0x2A8 OSDumpContext dtk-sig
+.text 0x8001DE78 0x84 OSSwitchFPUContext dtk-sig
+.text 0x8001DEFC 0x48 __OSContextInit dtk-sig
+.text 0x8001DF44 0x80 OSReport dtk-sig
+.text 0x8001E0F0 0x218 OSSetErrorHandler dtk-sig
+.text 0x8001E308 0x2E8 __OSUnhandledException dtk-sig
+.text 0x8001FCCC 0x14 OSDisableInterrupts dtk-sig
+.text 0x8001FCE0 0x14 OSEnableInterrupts dtk-sig
+.text 0x8001FCF4 0x24 OSRestoreInterrupts dtk-sig
+.text 0x8001FD18 0x1C __OSSetInterruptHandler dtk-sig
+.text 0x8001FD48 0x74 __OSInterruptInit dtk-sig
+.text 0x80020094 0x88 __OSMaskInterrupts dtk-sig
+.text 0x8002011C 0x88 __OSUnmaskInterrupts dtk-sig
+.text 0x800204E8 0x50 ExternalInterruptHandler dtk-sig
+.text 0x80020AFC 0x18 __OSModuleInit dtk-sig
+.text 0x80020D54 0x6C MEMIntrruptHandler dtk-sig
+.text 0x80020DC0 0x80 Config24MB dtk-sig
+.text 0x80020E40 0x80 Config48MB dtk-sig
+.text 0x80020EC0 0x18 RealMode dtk-sig
+.text 0x80020ED8 0x118 __OSInitMemoryProtection dtk-sig
+.text 0x80021258 0x340 __OSReboot dtk-sig
+.text 0x80021598 0x84 OSRegisterResetFunction dtk-sig
+.text 0x800216B0 0x70 Reset dtk-sig
+.text 0x80021768 0x2B8 OSResetSystem dtk-sig
+.text 0x80021A20 0x30 OSGetResetCode dtk-sig
+.text 0x80021A50 0xF4 __OSResetSWInterruptHandler dtk-sig
+.text 0x80021F54 0x13C __OSInitSram dtk-sig
+.text 0x80022090 0x5C __OSLockSram dtk-sig
+.text 0x800220EC 0x5C __OSLockSramEx dtk-sig
+.text 0x80022484 0x24 __OSUnlockSram dtk-sig
+.text 0x800224A8 0x24 __OSUnlockSramEx dtk-sig
+.text 0x800224CC 0x10 __OSSyncSram dtk-sig
+.text 0x800229D4 0x70 OSGetGbsMode dtk-sig
+.text 0x80022A44 0xB8 OSSetGbsMode dtk-sig
+.text 0x80022DF8 0x0 __OSSystemCallVectorStart dtk-sig
+.text 0x80022E14 0x0 __OSSystemCallVectorEnd dtk-sig
+.text 0x80022E18 0x64 __OSInitSystemCall dtk-sig
+.text 0x80022E80 0x158 __OSThreadInit dtk-sig
+.text 0x80022FD8 0x10 OSInitThreadQueue dtk-sig
+.text 0x80022FF4 0x40 OSDisableScheduler dtk-sig
+.text 0x80023034 0x40 OSEnableScheduler dtk-sig
+.text 0x80023328 0x228 SelectThread dtk-sig
+.text 0x80023550 0x30 __OSReschedule dtk-sig
+.text 0x80023888 0x1BC OSCancelThread dtk-sig
+.text 0x8002402C 0xAC OSClearStack dtk-sig
+.text 0x800240D8 0x18 OSGetTime dtk-sig
+.text 0x800240F0 0x8 OSGetTick dtk-sig
+.text 0x800240F8 0x64 __OSGetSystemTime dtk-sig
+.text 0x800244FC 0x20 __init_user dtk-sig
+.text 0x8002451C 0x54 __init_cpp dtk-sig
+.text 0x80024570 0x20 _ExitProcess dtk-sig
+.text 0x80024590 0x28 DBInit dtk-sig
+.text 0x80024600 0x10 __DBExceptionDestination dtk-sig
+.text 0x80024610 0x1C __DBIsExceptionMarked dtk-sig
+.text 0x8002462C 0x50 DBPrintf dtk-sig
+.text 0x80025ABC 0x40 __DVDInitWA dtk-sig
+.text 0x80025AFC 0x2E0 __DVDInterruptHandler dtk-sig
+.text 0x80025E60 0x70 AlarmHandlerForTimeout dtk-sig
+.text 0x8002638C 0x2C DVDLowWaitCoverClose dtk-sig
+.text 0x8002645C 0x8C DVDLowStopMotor dtk-sig
+.text 0x800267D0 0xBC DVDLowReset dtk-sig
+.text 0x800268BC 0x44 __DVDLowSetWAType dtk-sig
+.text 0x80026938 0x38 __DVDFSInit dtk-sig
+.text 0x80027218 0xCC DVDInit dtk-sig
+.text 0x80027404 0xAC cbForStateError dtk-sig
+.text 0x80027FBC 0x44 AlarmHandler dtk-sig
+.text 0x80028194 0xE4 cbForStateMotorStopped dtk-sig
+.text 0x80028278 0x230 stateReady dtk-sig
+.text 0x800284A8 0x320 stateBusy dtk-sig
+.text 0x80028FAC 0xD4 DVDReadDiskID dtk-sig
+.text 0x8002924C 0xD0 DVDInquiryAsync dtk-sig
+.text 0x8002931C 0x44 DVDReset dtk-sig
+.text 0x800293AC 0xAC DVDGetDriveStatus dtk-sig
+.text 0x80029A58 0x38 __DVDClearWaitingQueue dtk-sig
+.text 0x80029A90 0x68 __DVDPushWaitingQueue dtk-sig
+.text 0x80029AF8 0xA0 __DVDPopWaitingQueue dtk-sig
+.text 0x80029B98 0x58 __DVDCheckWaitingQueue dtk-sig
+.text 0x80029C50 0x11C ErrorCode2Num dtk-sig
+.text 0x80029D6C 0x7C __DVDStoreErrorCode dtk-sig
+.text 0x8002A00C 0xD8 cb dtk-sig
+.text 0x8002A0E4 0x168 __fstLoad dtk-sig
+.text 0x8002C03C 0x68 VIGetTvFormat dtk-sig
+.text 0x8002EE58 0x7C __PADDisableRecalibration dtk-sig
+.text 0x8003F070 0x798 GXInit dtk-sig
+.text 0x8003F808 0x938 __GXInitGX dtk-sig
+.text 0x80040274 0x6C GXInitFifoBase dtk-sig
+.text 0x8004035C 0x128 GXSetCPUFifo dtk-sig
+.text 0x80040484 0x178 GXSetGPFifo dtk-sig
+.text 0x800408B0 0x4C __GXFifoInit dtk-sig
+.text 0x80041B28 0x94 GXSetMisc dtk-sig
+.text 0x80042364 0x74 __GXPEInit dtk-sig
+.text 0x800440E8 0xF4 GXInitTexCacheRegion dtk-sig
+.text 0x800441DC 0x38 GXInitTlutRegion dtk-sig
+.text 0x800444A0 0x354 __GXSetTmemConfig dtk-sig
+.text 0x80044D84 0x30 __GXSetIndirectMask dtk-sig
+.text 0x80044DB4 0x24 __GXFlushTextureState dtk-sig
+.text 0x800475A4 0x8 Hu_IsStub dtk-sig
+.text 0x80048054 0x8 AMC_IsStub dtk-sig
+.ctors 0x80062060 0x0 _ctors dtk-sig
+.dtors 0x80062080 0x0 _dtors dtk-sig
+.dtors 0x80062080 0x4 __destroy_global_chain_reference dtk-sig
+.rodata 0x80062718 0x4 EndofProgramInstruction$162 dtk-sig
+.data 0x801DE708 0x9 gTRKRestoreFlags dtk-sig
+.data 0x801DE714 0x10 gTRKExceptionStatus dtk-sig
+.data 0x801DE778 0x28 gDBCommTable dtk-sig
+.data 0x801DE7A0 0x140 __files dtk-sig
+.data 0x801DF0D4 0x14 Si dtk-sig
+.data 0x801DF0E8 0x10 Type dtk-sig
+.data 0x801DF1A8 0x30 XYNTSC dtk-sig
+.data 0x801DF438 0x10 ResetFunctionInfo dtk-sig
+.data 0x801DF7E0 0x80 DSPInitCode dtk-sig
+.data 0x801E0AF0 0x10 ResetFunctionInfo dtk-sig
+.data 0x801E63CC 0xC0 GXTexRegionAddrTable dtk-sig
+.data 0x801E648C 0x10 GXResetFuncInfo dtk-sig
+.bss 0x801E91A8 0x4 gTRKBigEndian dtk-sig
+.bss 0x801EAB80 0x2 TRK_saved_exceptionID dtk-sig
+.bss 0x801EAB84 0xA4 gTRKState dtk-sig
+.bss 0x801EAC28 0x430 gTRKCPUState dtk-sig
+.bss 0x801EB058 0x94 gTRKSaveState dtk-sig
+.bss 0x801EB108 0x4 TRK_mainError dtk-sig
+.bss 0x801EB110 0x1 TRK_Use_BBA dtk-sig
+.bss 0x801EBE60 0x100 __atexit_funcs dtk-sig
+.bss 0x801EC298 0xC0 Ecb dtk-sig
+.bss 0x801EC358 0x80 Packet dtk-sig
+.bss 0x801EC478 0x20 TypeTime dtk-sig
+.bss 0x801EC560 0x20 DriveInfo dtk-sig
+.bss 0x801EC5B0 0x44 __OSErrorTable dtk-sig
+.bss 0x801EC900 0x54 Scb dtk-sig
+.bss 0x801EC958 0x100 RunQueue dtk-sig
+.bss 0x801ED350 0x3C CommandList dtk-sig
+.bss 0x801ED3B8 0x28 AlarmForTimeout dtk-sig
+.bss 0x801ED420 0x20 BB2 dtk-sig
+.bss 0x801ED460 0x30 DummyCommandBlock dtk-sig
+.bss 0x801ED4B8 0x20 WaitingQueue dtk-sig
+.bss 0x801ED4D8 0x3F bb2Buf dtk-sig
+.bss 0x801ED518 0x30 block$16 dtk-sig
+.bss 0x80209040 0x80 FifoObj dtk-sig
+.sdata 0x8027D9A0 0x4 __EXIVersion dtk-sig
+.sdata 0x8027D9A8 0x4 __SIVersion dtk-sig
+.sdata 0x8027D9B0 0x4 __OSVersion dtk-sig
+.sdata 0x8027D9C8 0x4 __OSArenaLo dtk-sig
+.sdata 0x8027D9E8 0x4 SwitchThreadCallback dtk-sig
+.sdata 0x8027DA08 0x4 __DVDVersion dtk-sig
+.sdata 0x8027DA0C 0x4 autoInvalidation dtk-sig
+.sdata 0x8027DAC8 0x4 __GXVersion dtk-sig
+.sbss 0x8027DB40 0x4 gTRKInputPendingPtr dtk-sig
+.sbss 0x8027DB58 0x4 __global_destructor_chain dtk-sig
+.sbss 0x8027DB60 0x4 __aborting dtk-sig
+.sbss 0x8027DB64 0x4 __atexit_curr_func dtk-sig
+.sbss 0x8027DB68 0x4 __stdio_exit dtk-sig
+.sbss 0x8027DB6C 0x4 __console_exit dtk-sig
+.sbss 0x8027DB88 0x4 IDSerialPort1 dtk-sig
+.sbss 0x8027DBA4 0x4 cmdTypeAndStatus$371 dtk-sig
+.sbss 0x8027DBB0 0x4 SamplingRate dtk-sig
+.sbss 0x8027DBB8 0x4 BootInfo dtk-sig
+.sbss 0x8027DBBC 0x4 BI2DebugFlag dtk-sig
+.sbss 0x8027DBC0 0x4 BI2DebugFlagHolder dtk-sig
+.sbss 0x8027DBC4 0x4 __OSIsGcam dtk-sig
+.sbss 0x8027DBC8 0x8 ZeroF dtk-sig
+.sbss 0x8027DBD0 0x8 ZeroPS dtk-sig
+.sbss 0x8027DBD8 0x4 AreWeInitialized dtk-sig
+.sbss 0x8027DBDC 0x4 OSExceptionTable dtk-sig
+.sbss 0x8027DBE0 0x4 __OSSavedRegionEnd dtk-sig
+.sbss 0x8027DBE4 0x4 __OSSavedRegionStart dtk-sig
+.sbss 0x8027DBE8 0x4 __OSInIPL dtk-sig
+.sbss 0x8027DBF0 0x8 __OSStartTime dtk-sig
+.sbss 0x8027DBF8 0x8 AlarmQueue dtk-sig
+.sbss 0x8027DC10 0x4 __OSArenaHi dtk-sig
+.sbss 0x8027DC28 0x4 InterruptHandlerTable dtk-sig
+.sbss 0x8027DC2C 0x4 __OSLastInterruptSrr0 dtk-sig
+.sbss 0x8027DC30 0x2 __OSLastInterrupt dtk-sig
+.sbss 0x8027DC38 0x8 __OSLastInterruptTime dtk-sig
+.sbss 0x8027DC50 0x8 ResetFunctionQueue dtk-sig
+.sbss 0x8027DC58 0x4 bootThisDol dtk-sig
+.sbss 0x8027DC80 0x4 RunQueueBits dtk-sig
+.sbss 0x8027DC84 0x4 RunQueueHint dtk-sig
+.sbss 0x8027DC88 0x4 Reschedule dtk-sig
+.sbss 0x8027DC90 0x1 Debug_BBA dtk-sig
+.sbss 0x8027DC98 0x4 __DBInterface dtk-sig
+.sbss 0x8027DC9C 0x4 DBVerbose dtk-sig
+.sbss 0x8027DCA0 0x4 StopAtNextInt dtk-sig
+.sbss 0x8027DCA8 0x4 Callback dtk-sig
+.sbss 0x8027DCB0 0x8 LastResetEnd dtk-sig
+.sbss 0x8027DCB8 0x4 ResetOccurred dtk-sig
+.sbss 0x8027DCBC 0x4 WaitingCoverClose dtk-sig
+.sbss 0x8027DCC4 0x4 WorkAroundType dtk-sig
+.sbss 0x8027DCC8 0x4 WorkAroundSeekLocation dtk-sig
+.sbss 0x8027DCE4 0x4 NextCommandNumber dtk-sig
+.sbss 0x8027DCE8 0x4 BootInfo dtk-sig
+.sbss 0x8027DCEC 0x4 FstStart dtk-sig
+.sbss 0x8027DCF0 0x4 FstStringStart dtk-sig
+.sbss 0x8027DCF4 0x4 MaxEntryNum dtk-sig
+.sbss 0x8027DCFC 0x4 __DVDLongFileNameFlag dtk-sig
+.sbss 0x8027DD00 0x8 __DVDThreadQueue dtk-sig
+.sbss 0x8027DD08 0x4 executing dtk-sig
+.sbss 0x8027DD0C 0x4 IDShouldBe dtk-sig
+.sbss 0x8027DD10 0x4 bootInfo dtk-sig
+.sbss 0x8027DD14 0x4 PauseFlag dtk-sig
+.sbss 0x8027DD18 0x4 PausingFlag dtk-sig
+.sbss 0x8027DD20 0x4 FatalErrorFlag dtk-sig
+.sbss 0x8027DD24 0x4 CurrCommand dtk-sig
+.sbss 0x8027DD30 0x4 ResumeFromHere dtk-sig
+.sbss 0x8027DD34 0x4 CancelLastError dtk-sig
+.sbss 0x8027DD40 0x4 ResetRequired dtk-sig
+.sbss 0x8027DD44 0x4 FirstTimeInBootrom dtk-sig
+.sbss 0x8027DD48 0x4 DVDInitialized dtk-sig
+.sbss 0x8027DD5C 0x4 bb2 dtk-sig
+.sbss 0x8027DD60 0x4 idTmp dtk-sig
+.sbss 0x8027DDB4 0x4 CurrTvMode dtk-sig
+.sbss 0x8027DE00 0x4 __PADSpec dtk-sig
+.sbss 0x8027DFA0 0x4 __piReg dtk-sig
+.sbss 0x8027DFA4 0x4 __cpReg dtk-sig
+.sbss 0x8027DFA8 0x4 __peReg dtk-sig
+.sbss 0x8027DFAC 0x4 __memReg dtk-sig
+.sbss 0x8027DFC4 0x4 resetFuncRegistered$70 dtk-sig
+.sdata2 0x8027E600 0x4 __GXData dtk-sig

@@ -6,7 +6,8 @@ Ordered to answer one question as early and as cheaply as possible:
 
 Everything is sequenced so that question is answered before a single line of our
 own SDK shim can be blamed for anything. `twin-snakes-native-port-design.md` is
-the analysis; this is the order of work. The study sets the *content*, this sets
+the analysis, `docs/decompilation-process.md` is the mechanics stage by stage,
+and this is the order of work. The study sets the *content*, this sets
 the *order*. Both are checked.
 
 **Updated on every commit.** A phase moves when its exit criterion is met, not

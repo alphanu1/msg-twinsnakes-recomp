@@ -46,6 +46,12 @@ Every symbol name, address and structure layout here was produced by that
 process. Where a name comes from a public decompilation project, it is recorded
 in [THIRD_PARTY.md](THIRD_PARTY.md) with its upstream and commit.
 
+**[docs/decompilation-process.md](docs/decompilation-process.md) documents every
+stage end to end** — inputs, tools, commands, outputs and how each stage's
+output is verified. Every symbol in `config/symbols/` additionally carries an
+origin column recording which stage produced it, so the claim above is
+checkable per symbol rather than in the aggregate.
+
 ## What is not in this repository
 
 **No game code. No game assets. Ever.**
@@ -94,4 +100,5 @@ upstream is pinned by commit in [deps.lock](deps.lock).
 | [twin-snakes-native-port-design.md](twin-snakes-native-port-design.md) | The design. Architecture, the translated/native boundary, the phase plan. |
 | [MILESTONES.md](MILESTONES.md) | Phase order, exit criteria, per-phase checklists. |
 | [HANDOFF.md](HANDOFF.md) | Current state, what is next, and every finding — including the wrong ones. |
+| [docs/decompilation-process.md](docs/decompilation-process.md) | Every stage from disc to binary: inputs, commands, verification, provenance. |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Licence, pin and role for each dependency. |
