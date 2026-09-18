@@ -1925,5 +1925,48 @@ the guest's critical sections still mean something.
 loop.** Everything after it — VI presenting an XFB, the game reaching its main
 loop — depends on interrupts existing.
 
+**F58 — interrupt delivery, built so the guest keeps deciding.**
+`host/interrupt.c`. The host raises an interrupt by setting a cause bit in the
+processor interface and calling **`__OSDispatchInterrupt`** — the guest's own
+dispatcher. It does not reimplement the SDK's handling, reach into the handler
+table, or know which handler is registered. The guest decides all of that,
+exactly as it would on hardware.
+
+*That needed a new primitive:* `mgs_module_call_guest` — enter the guest, run a
+function to completion, return with every other register and the interrupted pc
+untouched. The return is detected with a **sentinel link register**: a real
+`blr` jumps to whatever `lr` held, so setting it to an address outside every
+code range makes the function's own return land somewhere recognisable, and the
+run loop can stop without understanding the callee at all. Registers are saved
+and restored because the interrupted code is entitled to find them as it left
+them; not doing so corrupts whatever was running, intermittently and far from
+the cause.
+
+*The mask is honoured, and the first run proved it:* **20,000 retrace
+interrupts raised, 20,000 refused** — because the guest had not unmasked VI
+yet. That is correct, not a failure. Delivering anyway would break precisely
+the atomicity the cooperative scheduler exists to preserve (F39).
+
+**F59 — guest time never advanced, and 13 million `OSGetTick` calls said so.**
+
+`OSGetTime`/`OSGetTick` read `rt->ticks`, and **nothing incremented it.** The
+design note said "a tick count the frame loop advances"; the frame loop did
+not. Every timed wait in the SDK therefore spun forever.
+
+*What made it findable was a counter reading wrong rather than a crash:*
+**13,328,496 SDK calls served natively** in 40 million steps — roughly one call
+every three instructions. That is not a program making progress; that is a
+timed wait polling a clock. Combined with `r31 = 0xCC00500A` showing the
+hardware register was the right one, the remaining suspect was time itself.
+
+The run loop now advances the timebase, 32 ticks per step against the Gekko's
+40.5 MHz — the 162 MHz bus divided by four. Driven from the loop rather than
+the host clock, because a replayed run has to be reproducible.
+
+*Effect, immediately:* the wait completes, the boot moves on to
+`__OSInitAudioSystem +0x154`, and MMIO reads go from 32 to **2,001,047** — it
+is now genuinely talking to hardware rather than waiting on a clock that never
+ticked.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -33,6 +33,7 @@ typedef struct MgsRunResult {
     uint32_t      srr0;
     uint32_t      msr;
     uint64_t      syscalls;   /* barriers serviced, not faults */
+    uint64_t      frames;     /* retrace ticks raised */
 } MgsRunResult;
 
 int   mgs_module_load(MgsModule* mod, const char* path);
@@ -46,6 +47,14 @@ uint32_t* mgs_module_gpr(void* cpu_state);
 uint32_t  mgs_module_pc(const void* cpu_state);
 uint32_t  mgs_module_lr(const void* cpu_state);
 void      mgs_module_set_pc(void* cpu_state, uint32_t pc);
+void      mgs_module_set_lr(void* cpu_state, uint32_t lr);
+
+/* Enter the guest, run a function to completion, and return with every other
+ * register and the interrupted pc exactly as they were. Returns 1 if the
+ * function returned, 0 if it ran out of steps or hit an address with no code. */
+int       mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
+                                const uint32_t* args, unsigned arg_count,
+                                uint64_t max_steps);
 
 #endif
 
@@ -56,3 +65,12 @@ struct MgsMmio* mgs_host_mmio(void);
 void          mgs_host_install_spr_handler(void* cpu);
 unsigned long mgs_host_spr_handled(void);
 unsigned long mgs_host_spr_unknown(void);
+
+/* Interrupt delivery. The host raises a cause and calls the guest's own
+ * dispatcher; it does not reimplement the SDK's handling. */
+void     mgs_interrupt_set_dispatch(uint32_t guest_address);
+int      mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit);
+int      mgs_interrupt_vi(const MgsModule* mod, void* cpu);
+int      mgs_interrupt_dsp(const MgsModule* mod, void* cpu);
+uint64_t mgs_interrupt_delivered(void);
+uint64_t mgs_interrupt_refused(void);

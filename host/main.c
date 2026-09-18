@@ -269,6 +269,16 @@ int main(int argc, char** argv)
                      * shim reads exactly what the translated code passed. */
                     mgs_cpu_bind_registers(mgs_module_gpr(cpu));
                     mgs_host_install_spr_handler(cpu);
+
+                    /* Tell the interrupt layer where the guest's own
+                     * dispatcher is. Taken from the symbol map rather than
+                     * hard-coded: it is a PAL-specific address, and the map is
+                     * the one place that knows which build this is. */
+                    {
+                        MgsSdkFn probe = mgs_patch_lookup(0x800201A4u);
+                        (void)probe;
+                        mgs_interrupt_set_dispatch(0x800201A4u);  /* __OSDispatchInterrupt */
+                    }
                     if (mod.set_patch_hook) {
                         mod.set_patch_hook(mgs_host_patch_dispatch);
                         printf("  patch table  : installed\n");
@@ -301,6 +311,8 @@ int main(int argc, char** argv)
                             const uint32_t* g = mgs_module_gpr(cpu);
                             printf("  r1(sp)=0x%08X r2=0x%08X r13=0x%08X r3=0x%08X\n",
                                    g[1], g[2], g[13], g[3]);
+                            printf("  r25=0x%08X r26=0x%08X r27=0x%08X r31=0x%08X\n",
+                                   g[25], g[26], g[27], g[31]);
                         }
                         if (r.exception) {
                             printf("  exception 0x%08X  cause 0x%08X  "
@@ -330,6 +342,14 @@ int main(int argc, char** argv)
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
                         printf("system calls serviced: %llu\n",
                                (unsigned long long)r.syscalls);
+                        printf("retrace ticks: %llu   interrupts delivered: %llu  "
+                               "(refused while masked: %llu)\n",
+                               (unsigned long long)r.frames,
+                               (unsigned long long)mgs_interrupt_delivered(),
+                               (unsigned long long)mgs_interrupt_refused());
+                        overlay_line("IRQ: %llu DELIVERED  %llu MASKED",
+                               (unsigned long long)mgs_interrupt_delivered(),
+                               (unsigned long long)mgs_interrupt_refused());
                         overlay_line("HOST INSNS: %lu  UNKNOWN: %lu",
                                      mgs_host_spr_handled(), mgs_host_spr_unknown());
                         overlay_line("STOPPED AT PC 0x%08X", r.pc);

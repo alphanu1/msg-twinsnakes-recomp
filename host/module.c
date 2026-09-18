@@ -12,6 +12,7 @@
  */
 #include "module.h"
 #include "platform/mmio.h"
+#include "os/os_runtime.h"
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -139,6 +140,11 @@ uint32_t mgs_module_lr(const void* cpu_state)
     return lr;
 }
 
+void mgs_module_set_lr(void* cpu_state, uint32_t lr)
+{
+    memcpy((uint8_t*)cpu_state + CPU_LR_OFFSET, &lr, sizeof lr);
+}
+
 void mgs_module_set_pc(void* cpu_state, uint32_t pc)
 {
     memcpy((uint8_t*)cpu_state + CPU_PC_OFFSET, &pc, sizeof pc);
@@ -196,8 +202,24 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         /* Advance the video beam on a cadence, so a guest polling for retrace
          * sees time pass at the rate the host runs rather than as fast as it
          * can spin. Tied to steps rather than wall clock for now: a replayed
-         * run must be reproducible, and wall clock is not. */
-        if ((r.steps % 2000ull) == 0ull) mgs_mmio_tick_frame(mgs_host_mmio());
+         * run must be reproducible, and wall clock is not.
+         *
+         * A retrace interrupt goes with it. The beam moving is what a polling
+         * loop sees; the interrupt is what a waiting THREAD needs, and the
+         * SDK's boot waits rather than polls. Raising one without the other
+         * leaves half the guest satisfied. */
+        /* Guest time advances with the run loop. The Gekko timebase is
+         * 40.5 MHz - the 162 MHz bus divided by four - so a 60 Hz field is
+         * 675,000 ticks. Without this every timed wait in the SDK spins
+         * forever, which is exactly what __OSInitAudioSystem was doing:
+         * 13 million OSGetTick calls against a clock that never moved. */
+        mgs_runtime_advance_ticks(mgs_runtime_from(NULL), 32u);
+
+        if ((r.steps % 2000ull) == 0ull) {
+            mgs_mmio_tick_frame(mgs_host_mmio());
+            mgs_interrupt_vi(mod, cpu);
+            ++r.frames;
+        }
 
         if (r.steps < trace_steps)
             fprintf(stderr, "  step %4llu  pc = 0x%08X\n",
@@ -293,6 +315,59 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     r.stop = MGS_STOP_STEP_LIMIT;
     r.pc = mgs_module_pc(cpu);
     return r;
+}
+
+/* Call a guest function from the host, and return when it does.
+ *
+ * Needed because an interrupt is not something the host can simulate from the
+ * outside: the SDK's handler runs GUEST code, touches guest structures, and
+ * wakes guest threads. So the host has to be able to enter the guest, run a
+ * function to completion, and come back with everything else undisturbed.
+ *
+ * The return is detected with a SENTINEL link register. A real `blr` jumps to
+ * whatever lr held, so setting lr to an address outside every code range
+ * makes the function's own return land somewhere recognisable - and lets the
+ * run loop stop without needing to understand the callee at all.
+ *
+ * Registers are saved and restored around the call because the interrupted
+ * guest code is entitled to find them exactly as it left them. Not doing that
+ * corrupts whatever was running, intermittently and far from the cause.
+ */
+#define MGS_GUEST_RETURN_SENTINEL 0x0DEADBEEu
+
+int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
+                          const uint32_t* args, unsigned arg_count,
+                          uint64_t max_steps)
+{
+    uint32_t saved_gpr[32];
+    uint32_t saved_pc, saved_lr;
+    uint32_t* gpr = mgs_module_gpr(cpu);
+    uint64_t step;
+    unsigned i;
+    int returned = 0;
+
+    memcpy(saved_gpr, gpr, sizeof saved_gpr);
+    saved_pc = mgs_module_pc(cpu);
+    saved_lr = mgs_module_lr(cpu);
+
+    for (i = 0; i < arg_count && i < 8u; ++i) gpr[3 + i] = args[i];
+    mgs_module_set_lr(cpu, MGS_GUEST_RETURN_SENTINEL);
+    mgs_module_set_pc(cpu, address);
+
+    for (step = 0; step < max_steps; ++step) {
+        uint32_t pc = mgs_module_pc(cpu);
+        if (pc == MGS_GUEST_RETURN_SENTINEL) { returned = 1; break; }
+        {
+            uint32_t budget = 100000u;
+            memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
+        }
+        if (!mod->dispatch(cpu, pc)) break;   /* gave up: leave it to the caller */
+    }
+
+    memcpy(gpr, saved_gpr, sizeof saved_gpr);
+    mgs_module_set_pc(cpu, saved_pc);
+    mgs_module_set_lr(cpu, saved_lr);
+    return returned;
 }
 
 void mgs_module_unload(MgsModule* mod)

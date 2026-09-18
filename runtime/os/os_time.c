@@ -49,6 +49,16 @@ void mgs_OSRestoreInterrupts(CPUState* ctx)
     mgs_set_guest_gpr(rt, 3, (uint32_t)was);
 }
 
+void mgs_runtime_advance_ticks(MgsRuntime* rt, uint64_t ticks)
+{
+    if (rt) rt->ticks += ticks;
+}
+
+uint64_t mgs_runtime_ticks(const MgsRuntime* rt)
+{
+    return rt ? rt->ticks : 0u;
+}
+
 void mgs_os_report_sink(MgsRuntime* rt, const char* line)
 {
     if (rt->report_sink) rt->report_sink(rt->report_user, line);

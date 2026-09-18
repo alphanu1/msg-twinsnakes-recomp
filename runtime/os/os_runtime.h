@@ -59,4 +59,11 @@ void mgs_cpu_bind_registers(uint32_t* gpr_array);
 void mgs_cpu_unbind(void);
 void mgs_runtime_set_current(MgsRuntime* rt);
 
+/* Advance guest time. Nothing else moves it: OSGetTime and OSGetTick read
+ * rt->ticks, and a timebase that never advances turns every timed wait in the
+ * SDK into an infinite loop. Driven from the run loop rather than the host
+ * clock so a replayed run is reproducible. */
+void mgs_runtime_advance_ticks(MgsRuntime* rt, uint64_t ticks);
+uint64_t mgs_runtime_ticks(const MgsRuntime* rt);
+
 #endif

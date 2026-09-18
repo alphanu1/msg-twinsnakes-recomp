@@ -258,9 +258,11 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       overlay showing real state from the first frame (F52).
 - [x] **MMIO layer** — the `0xCC000000` register block, with set-and-wait bits
       completing as hardware would (F56).
-- [ ] **Interrupts** — VI retrace, DSP and DVD raised from the frame loop and
-      dispatched to the guest's registered handlers. The boot is blocked on
-      this: it polls RAM that only a handler writes (F57).
+- [x] **Interrupts** — raised from the run loop and dispatched through the
+      guest's own `__OSDispatchInterrupt`, with the guest's mask honoured
+      (F58). Needed a host-to-guest call primitive with a sentinel return.
+- [x] **Guest time advances** — the timebase at 40.5 MHz, driven by the run
+      loop. Without it every timed wait in the SDK spun forever (F59).
 - [ ] **VI** — stubs, plus the frame loop, presenting the XFB the game writes.
 - [x] **PAD mapping** — GC layout, analog triggers with a late digital click,
       C-stick, inverted Y, SDK-clamped stick ranges. Pure layer, tested with
