@@ -942,5 +942,53 @@ carrying a patch against two upstreams for the life of the project.
 Booting took hours; this is the rest of it, and days is realistic. Nothing here
 is unknown — every piece is specified, and the REL already translates at 100%.
 
+**F31 — the cross-module hook already exists: `DOLRECOMP_ENABLE_REPLACEMENTS`.**
+Joining the two modules looked like it would need namespacing or upstream
+patches. It needs neither.
+
+Almost every shared symbol in the generated headers is `static inline`, so two
+modules in one binary do not collide. The one exception is deliberate:
+
+```c
+#if defined(DOLRECOMP_ENABLE_REPLACEMENTS)
+int dolrecomp_dispatch_replacement(CPUState* ctx, u32 address);
+#else
+static inline int dolrecomp_dispatch_replacement(...) { return 0; }
+#endif
+```
+
+and `dolrecomp_call` consults it **before** its own table. So DolRecomp already
+ships the extension point, and defining that one function is the whole
+integration. **Phase 2 will use the same hook** to route SDK calls to native
+implementations, so this is the patch-table mechanism arriving early.
+
+*Built in `game/module/`, not `extern/`* (rule 4):
+
+| file | role |
+|---|---|
+| `dispatch.c` | `dolrecomp_dispatch_replacement`, routing by address |
+| `dol_bridge.c` / `rel_bridge.c` | expose each module's table as `mgs_dol_call` / `mgs_rel_call` |
+| `module_glue.h` | shared declarations, deliberately including neither `generated.h` |
+| `CMakeLists.txt` | one static library per module, then link together |
+
+*Three details that are not arbitrary:*
+
+- **Separate translation units per module.** Both headers define
+  `dolrecomp_find_original` and `dolrecomp_call_original` as `static inline`
+  over *their own* chunk tables, so one file seeing both would get one table
+  silently shadowing the other.
+- **The bridges call `dolrecomp_call_original`, not `dolrecomp_call`** — the
+  table lookup rather than the full path. Calling the latter would re-enter
+  the router and recurse.
+- **The REL range is bounded** to `0x805000EC + 0x456400`, its actual `.text`
+  extent. An unbounded "high addresses are the REL" test would claim addresses
+  the REL does not own, and a false claim returns 1, which tells the caller the
+  call was handled when it was not.
+
+*Verified before committing to the full build:* the router compiles and exports
+`dolrecomp_dispatch_replacement` while importing `mgs_dol_call`/`mgs_rel_call`;
+the REL bridge compiles against the REL's header, exports `mgs_rel_call`, and
+resolves to the REL's `func_*` chunk symbols. The interfaces fit.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
