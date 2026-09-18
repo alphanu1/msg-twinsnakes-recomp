@@ -1,0 +1,101 @@
+openjdk version "21.0.12.1" 2026-08-18
+OpenJDK Runtime Environment 25.08 (build 21.0.12.1)
+OpenJDK 64-Bit Server VM 25.08 (build 21.0.12.1, mixed mode)
+Module manifest file error on line 2 of file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/Module.manifest
+	-> Invalid line encountered: name=i960
+Module manifest file error on line 2 of file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/Module.manifest
+	-> Invalid line encountered: name=i960
+INFO  Using log config file: jar:file:/app/lib/ghidra/Ghidra/Framework/Generic/lib/Generic.jar!/generic.log4j.xml (LoggingInitialization)  
+INFO  Using log file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/application.log (LoggingInitialization)  
+INFO  Loading user preferences: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/preferences (Preferences)  
+INFO  Searching for classes... (ClassSearcher)  
+INFO  Class search complete (725 ms) (ClassSearcher)  
+INFO  Initializing SSL Context (DefaultSSLContextInitializer)  
+INFO  Initializing Random Number Generator... (SecureRandomFactory)  
+INFO  Random Number Generator initialization complete: NativePRNGNonBlocking (SecureRandomFactory)  
+INFO  Trust manager disabled, cacerts have not been set (DefaultTrustManagerFactory)  
+ERROR Language i960:LE:32:default previously defined: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/languages/i960.ldefs (SleighLanguageProvider)  
+ERROR Language i960:LEBE:32:lebe previously defined: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/languages/i960.ldefs (SleighLanguageProvider)  
+INFO  Headless startup complete (2271 ms) (AnalyzeHeadless)  
+INFO  Class searcher loaded 94 extension points (47 false positives) (ClassSearcher)  
+INFO  HEADLESS Script Paths:
+    /app/lib/ghidra/Ghidra/Features/Decompiler/ghidra_scripts
+    /home/ben/source/Recompilations/GameCube/MGS/tools/ghidra-scripts
+    /app/lib/ghidra/Ghidra/Features/MicrosoftCodeAnalyzer/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/BytePatterns/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/Base/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/FunctionID/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/8051/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/PIC/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Debug/Debugger/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/DATA/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/DecompilerDependent/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/FileFormats/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/SwiftDemangler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/PDB/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/GnuDemangler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/PyGhidra/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Debug/Debugger-rmi-trace/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/BSim/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/VersionTracking/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/SystemEmulation/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/JVM/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/WildcardAssembler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/Atmel/ghidra_scripts (HeadlessAnalyzer)  
+INFO  HEADLESS: execution starts (HeadlessAnalyzer)  
+INFO  Creating temporary project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/main_dol (HeadlessAnalyzer)  
+INFO  Creating project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/main_dol (DefaultProject)  
+INFO  REPORT: Processing input files:  (HeadlessAnalyzer)  
+INFO       project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/main_dol (HeadlessAnalyzer)  
+INFO  IMPORTING: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/sys/main.dol (HeadlessAnalyzer)  
+INFO  Successfully applied "-loader-autoloadMaps" to "Automatically load symbol map files with corresponding names" (old: "true", new: "false") (ProgramLoader)  
+INFO  Using Loader: Nintendo GameCube/Wii Binary (Executable) (ProgramLoader)  
+INFO  Using Language/Compiler: PowerPC:BE:32:Gekko_Broadway:default (ProgramLoader)  
+INFO  Using Library Search Path: [., /bin, /lib, /lib64, /lib/x86_64-linux-gnu, /lib/aarch64-linux-gnu, /usr/bin, /usr/lib, /usr/X11R6/bin, /usr/X11R6/lib, /usr/java/packages/lib, /usr/lib64] (ProgramLoader)  
+INFO  IMPORTING: Loaded 0 additional files (HeadlessAnalyzer)  
+ERROR Error processing pattern file /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/patterns/patternconstraints.xml
+Attempted to overwrite property value for patternfile in contraint node: /languageID = i960:LE:*:* (Patterns)  
+INFO  ANALYZING all memory and code: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/sys/main.dol (HeadlessAnalyzer)  
+INFO  Packed database cache: /home/ben/.var/app/org.ghidra_sre.Ghidra/cache/ghidra/packed-db-cache (PackedDatabaseCache)  
+INFO  Applied data type archive: generic_clib (ApplyDataArchiveAnalyzer)  
+INFO  -----------------------------------------------------
+    ASCII Strings                              0.325 secs
+    Apply Data Archives                        0.322 secs
+    Call-Fixup Installer                       0.019 secs
+    Create Address Tables                      0.038 secs
+    Create Address Tables - One Time           0.178 secs
+    Create Function                            0.289 secs
+    Data Reference                             0.015 secs
+    Decompiler Switch Analysis                 6.434 secs
+    Demangle CodeWarrior                       0.003 secs
+    Demangler GNU                              0.002 secs
+    Disassemble                                0.834 secs
+    Disassemble Entry Points                   0.879 secs
+    Embedded Media                             0.025 secs
+    External Entry References                  0.000 secs
+    Function ID                                0.019 secs
+    Function Start Pre Search                  0.036 secs
+    Function Start Search                      0.033 secs
+    Function Start Search After Code           0.024 secs
+    Function Start Search After Data           0.019 secs
+    Function Start Search delayed - One Time   0.039 secs
+    Non-Returning Functions - Discovered       0.079 secs
+    PowerPC Constant Reference Analyzer        1.746 secs
+    Reference                                  0.144 secs
+    Shared Return Calls                        0.123 secs
+    Stack                                      1.676 secs
+    Subroutine References                      0.076 secs
+    Subroutine References - One Time           0.004 secs
+-----------------------------------------------------
+     Total Time   13 secs
+-----------------------------------------------------
+ (AutoAnalysisManager)  
+INFO  REPORT: Analysis succeeded for file: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/sys/main.dol (HeadlessAnalyzer)  
+INFO  REPORT: Execute script: ExportEvidence.java '/home/ben/source/Recompilations/GameCube/MGS/docs/evidence/main_dol.functions.txt'  (HeadlessAnalyzer)  
+INFO  SCRIPT: /home/ben/source/Recompilations/GameCube/MGS/tools/ghidra-scripts/ExportEvidence.java (HeadlessAnalyzer)  
+INFO  ExportEvidence.java> exported 1687 functions to /home/ben/source/Recompilations/GameCube/MGS/docs/evidence/main_dol.functions.txt (GhidraScript)  
+INFO  ANALYZING changes made by post scripts: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/sys/main.dol (HeadlessAnalyzer)  
+INFO  REPORT: Post-analysis succeeded for file: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/sys/main.dol (HeadlessAnalyzer)  
+INFO  /main.dol: file created (ben) (LocalFileSystem)  
+INFO  REPORT: Save succeeded for: /main.dol (main_dol:/main.dol) (HeadlessAnalyzer)  
+INFO  REPORT: Import succeeded (HeadlessAnalyzer)  

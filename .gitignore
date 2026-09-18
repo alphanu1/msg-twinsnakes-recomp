@@ -82,6 +82,10 @@ rules.ninja
 shadercache/
 *.spv
 *.log
+# ...but analysis logs ARE evidence and must be committed. They record what the
+# analyser actually did, which is half the value of docs/evidence/. The blanket
+# *.log above was silently swallowing them.
+!docs/evidence/*.log
 osreport-*.txt
 frames/
 saves/

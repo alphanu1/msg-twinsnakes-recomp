@@ -1,0 +1,103 @@
+openjdk version "21.0.12.1" 2026-08-18
+OpenJDK Runtime Environment 25.08 (build 21.0.12.1)
+OpenJDK 64-Bit Server VM 25.08 (build 21.0.12.1, mixed mode)
+Module manifest file error on line 2 of file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/Module.manifest
+	-> Invalid line encountered: name=i960
+Module manifest file error on line 2 of file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/Module.manifest
+	-> Invalid line encountered: name=i960
+INFO  Using log config file: jar:file:/app/lib/ghidra/Ghidra/Framework/Generic/lib/Generic.jar!/generic.log4j.xml (LoggingInitialization)  
+INFO  Using log file: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/application.log (LoggingInitialization)  
+INFO  Loading user preferences: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/preferences (Preferences)  
+INFO  Searching for classes... (ClassSearcher)  
+INFO  Class search complete (721 ms) (ClassSearcher)  
+INFO  Initializing SSL Context (DefaultSSLContextInitializer)  
+INFO  Initializing Random Number Generator... (SecureRandomFactory)  
+INFO  Random Number Generator initialization complete: NativePRNGNonBlocking (SecureRandomFactory)  
+INFO  Trust manager disabled, cacerts have not been set (DefaultTrustManagerFactory)  
+ERROR Language i960:LE:32:default previously defined: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/languages/i960.ldefs (SleighLanguageProvider)  
+ERROR Language i960:LEBE:32:lebe previously defined: /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/languages/i960.ldefs (SleighLanguageProvider)  
+INFO  Headless startup complete (2183 ms) (AnalyzeHeadless)  
+INFO  Class searcher loaded 94 extension points (47 false positives) (ClassSearcher)  
+INFO  HEADLESS Script Paths:
+    /app/lib/ghidra/Ghidra/Features/Decompiler/ghidra_scripts
+    /home/ben/source/Recompilations/GameCube/MGS/tools/ghidra-scripts
+    /app/lib/ghidra/Ghidra/Features/MicrosoftCodeAnalyzer/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/BytePatterns/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/Base/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/FunctionID/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/8051/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/PIC/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Debug/Debugger/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/DATA/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/DecompilerDependent/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/FileFormats/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/SwiftDemangler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/PDB/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/GnuDemangler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/PyGhidra/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Debug/Debugger-rmi-trace/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/BSim/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/VersionTracking/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/SystemEmulation/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/JVM/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Features/WildcardAssembler/ghidra_scripts
+    /app/lib/ghidra/Ghidra/Processors/Atmel/ghidra_scripts (HeadlessAnalyzer)  
+INFO  HEADLESS: execution starts (HeadlessAnalyzer)  
+INFO  Creating temporary project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/mgso_pal_rel (HeadlessAnalyzer)  
+INFO  Creating project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/mgso_pal_rel (DefaultProject)  
+INFO  REPORT: Processing input files:  (HeadlessAnalyzer)  
+INFO       project: /home/ben/source/Recompilations/GameCube/MGS/build/ghidra/mgso_pal_rel (HeadlessAnalyzer)  
+INFO  IMPORTING: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/files/shared/mgso_pal.rel (HeadlessAnalyzer)  
+INFO  Successfully applied "-loader-autoloadMaps" to "Automatically load symbol map files with corresponding names" (old: "true", new: "false") (ProgramLoader)  
+INFO  Using Loader: Nintendo GameCube/Wii Binary (Relocatable Module) (ProgramLoader)  
+INFO  Using Language/Compiler: PowerPC:BE:32:Gekko_Broadway:default (ProgramLoader)  
+INFO  Using Library Search Path: [., /bin, /lib, /lib64, /lib/x86_64-linux-gnu, /lib/aarch64-linux-gnu, /usr/bin, /usr/lib, /usr/X11R6/bin, /usr/X11R6/lib, /usr/java/packages/lib, /usr/lib64] (ProgramLoader)  
+INFO  Relocations: Starting relocations for module 1 from module 1 (RELProgramBuilder)  
+INFO  IMPORTING: Loaded 0 additional files (HeadlessAnalyzer)  
+ERROR Error processing pattern file /home/ben/.var/app/org.ghidra_sre.Ghidra/config/ghidra/ghidra_12.1.3_FLATPAK/Extensions/i960/data/patterns/patternconstraints.xml
+Attempted to overwrite property value for patternfile in contraint node: /languageID = i960:LE:*:* (Patterns)  
+INFO  ANALYZING all memory and code: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/files/shared/mgso_pal.rel (HeadlessAnalyzer)  
+INFO  Packed database cache: /home/ben/.var/app/org.ghidra_sre.Ghidra/cache/ghidra/packed-db-cache (PackedDatabaseCache)  
+INFO  Applied data type archive: generic_clib (ApplyDataArchiveAnalyzer)  
+INFO  -----------------------------------------------------
+    ASCII Strings                              0.408 secs
+    Apply Data Archives                        0.388 secs
+    Call-Fixup Installer                       0.083 secs
+    Create Address Tables                      0.567 secs
+    Create Address Tables - One Time           0.159 secs
+    Create Function                            1.711 secs
+    Data Reference                             0.055 secs
+    Decompiler Switch Analysis                 8.941 secs
+    Demangle CodeWarrior                       0.024 secs
+    Demangler GNU                              0.065 secs
+    Disassemble                               12.414 secs
+    Disassemble Entry Points                   0.081 secs
+    Disassemble Entry Points - One Time        0.001 secs
+    Embedded Media                             0.021 secs
+    External Entry References                  0.000 secs
+    Function ID                                0.012 secs
+    Function Start Pre Search                  0.160 secs
+    Function Start Search                      0.316 secs
+    Function Start Search After Code           0.199 secs
+    Function Start Search After Data           0.001 secs
+    Function Start Search delayed - One Time   0.726 secs
+    Non-Returning Functions - Discovered       0.815 secs
+    PowerPC Constant Reference Analyzer       16.703 secs
+    Reference                                  0.875 secs
+    Shared Return Calls                        1.071 secs
+    Stack                                     18.845 secs
+    Subroutine References                      0.595 secs
+    Subroutine References - One Time           0.005 secs
+-----------------------------------------------------
+     Total Time   65 secs
+-----------------------------------------------------
+ (AutoAnalysisManager)  
+INFO  REPORT: Analysis succeeded for file: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/files/shared/mgso_pal.rel (HeadlessAnalyzer)  
+INFO  REPORT: Execute script: ExportEvidence.java '/home/ben/source/Recompilations/GameCube/MGS/docs/evidence/mgso_pal_rel.functions.txt'  (HeadlessAnalyzer)  
+INFO  SCRIPT: /home/ben/source/Recompilations/GameCube/MGS/tools/ghidra-scripts/ExportEvidence.java (HeadlessAnalyzer)  
+INFO  ExportEvidence.java> exported 16323 functions to /home/ben/source/Recompilations/GameCube/MGS/docs/evidence/mgso_pal_rel.functions.txt (GhidraScript)  
+INFO  ANALYZING changes made by post scripts: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/files/shared/mgso_pal.rel (HeadlessAnalyzer)  
+INFO  REPORT: Post-analysis succeeded for file: file:///home/ben/source/Recompilations/GameCube/MGS/discs/GGSPA4/disc1/files/shared/mgso_pal.rel (HeadlessAnalyzer)  
+INFO  /mgso_pal.rel: file created (ben) (LocalFileSystem)  
+INFO  REPORT: Save succeeded for: /mgso_pal.rel (mgso_pal_rel:/mgso_pal.rel) (HeadlessAnalyzer)  
+INFO  REPORT: Import succeeded (HeadlessAnalyzer)  
