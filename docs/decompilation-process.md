@@ -504,6 +504,43 @@ Output: **295 MB of C, 11.5 million lines, 303 chunk files** (25 for the DOL,
 278 for the REL). The design document budgeted 50–150 MB for a 3 MB DOL; this
 is 4.9 MB of code, so the figure is in the right range.
 
+### "99.87% decoded" is not "99.87% decompiled"
+
+Worth stating plainly, because the two are easy to conflate and mean very
+different things.
+
+**Decoded/translated** means every PowerPC instruction was recognised and
+mechanically rewritten as C operating on a CPU-state struct:
+
+```c
+// 80500288: lbz     r6, 0(r3)
+{
+    u32 ea = ctx->gpr[3] + (u32)(s32)(0);
+    ctx->gpr[6] = mem_read8(ctx, ea);
+}
+```
+
+That is the whole of the 99.87%. No types, no variable names, no control-flow
+structure, no functions in any human sense — assembly wearing C syntax. It is
+exactly what a recompilation needs and nothing more.
+
+**Decompiled**, as decomp.dev uses the word, means readable idiomatic C that
+recompiles to matching machine code. By that measure this project is at
+**roughly 0%, deliberately.** The design document's second paragraph rules it
+out: the generated C is a build artefact, never hand-edited, and readability is
+not a goal.
+
+| | |
+|---|---|
+| Instructions translated | **99.87%** |
+| Phase 0 progress, five measures | **56.5%** |
+| Decompiled in the matching-source sense | **~0%, by design** |
+
+**And it does not mean the game is nearly finished.** Translated code cannot
+run without a runtime under it. That runtime is phases 2–5 — the SDK shim
+layer, the GX renderer at 2–4 months on its own, audio, saves — and it is where
+nearly all the remaining work is.
+
 **This settles the project's central feasibility question.** The Gekko decoder
 handles every instruction Twin Snakes contains, including the paired-single
 maths, and the REL — 92% of the game and the part with no prior art anywhere —

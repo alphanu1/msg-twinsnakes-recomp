@@ -754,6 +754,14 @@ The 1,649 not "known" in `main.dol` are **embedded data** in `.init` — constan
 pools inside the text section, which the decoder correctly refuses to treat as
 code. Not failures.
 
+**Read that as translation, not decompilation.** Every instruction was
+recognised and mechanically rewritten as C against a CPU-state struct — no
+types, no names, no control flow, assembly wearing C syntax. Decompiled in the
+matching-source sense this project is at roughly **0%, by design**: the design
+document rules matching decompilation out in its second paragraph. And 99.87%
+translated does not mean 99.87% finished — translated code needs a runtime
+under it, and that runtime is phases 2–5, where nearly all the work remains.
+
 **The REL decoding at 100% is the result that matters.** It is 92% of the game,
 it is Konami's engine, and no prior art for it exists anywhere. It decoded
 without a single unknown instruction, paired-singles included.
