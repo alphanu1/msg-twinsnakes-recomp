@@ -65,7 +65,52 @@ def align(ours, ref, verbose=False):
             if unnamed(o[2]) and not unnamed(r[2]):
                 assigned[o[0]] = r[2]
 
-    # Pass 2: walk outward from each anchor while sizes agree. Catches the
+    # Pass 2: re-sync across gaps. A run ends at a size mismatch because one
+    # binary links a function the other does not. Rather than stopping there,
+    # look ahead a bounded distance in each list for a point where the next
+    # CONFIRM sizes all agree, and resume from it.
+    #
+    # The guard is what makes this safe: a lone size coincidence is common
+    # (many functions are 0x20 bytes), but CONFIRM consecutive sizes agreeing
+    # by chance is not. Resync is refused unless the whole window matches.
+    LOOKAHEAD, CONFIRM = 24, 3
+
+    def window_matches(i, j):
+        if i + CONFIRM > len(ours) or j + CONFIRM > len(ref):
+            return False
+        return all(ours[i + k][1] == ref[j + k][1] for k in range(CONFIRM))
+
+    resyncs = 0
+    for i0, j0 in anchors:
+        i, j = i0 + 1, j0 + 1
+        while i < len(ours) and j < len(ref):
+            if ours[i][1] == ref[j][1]:
+                name = ref[j][2]
+                if unnamed(ours[i][2]) and not unnamed(name):
+                    prev = assigned.get(ours[i][0])
+                    if prev and prev != name:
+                        del assigned[ours[i][0]]
+                        break
+                    assigned[ours[i][0]] = name
+                i += 1; j += 1
+                continue
+            # mismatch: try to resync, preferring the smallest skip
+            best = None
+            for di in range(0, LOOKAHEAD):
+                for dj in range(0, LOOKAHEAD):
+                    if di == 0 and dj == 0:
+                        continue
+                    if window_matches(i + di, j + dj):
+                        best = (di + dj, i + di, j + dj)
+                        break
+                if best:
+                    break
+            if not best:
+                break
+            _, i, j = best
+            resyncs += 1
+
+    # Pass 3: walk outward from each anchor while sizes agree. Catches the
     # regions beyond the first and last anchor, and segments that pass 1
     # rejected for length.
     for i0, j0 in anchors:
@@ -84,7 +129,7 @@ def align(ours, ref, verbose=False):
                 length += 1
                 i += step; j += step
             if length: runs.append((ours[i0][2], step, length))
-    return anchors, assigned, runs, segments
+    return anchors, assigned, runs, segments, resyncs
 
 def main():
     ap = argparse.ArgumentParser()
@@ -97,7 +142,7 @@ def main():
 
     ours = load(a.ours, a.section)
     ref = load(a.ref, a.section)
-    anchors, assigned, runs, segments = align(ours, ref)
+    anchors, assigned, runs, segments, resyncs = align(ours, ref)
 
     if a.prefix:
         assigned = {k: v for k, v in assigned.items() if v.startswith(a.prefix)}
@@ -106,6 +151,7 @@ def main():
     print(f"reference       {len(ref):>6} functions in {a.section}")
     print(f"anchors         {len(anchors):>6} (same name AND same size in both)")
     print(f"segments mapped {segments:>6} (consecutive anchors, exact size agreement)")
+    print(f"gap resyncs     {resyncs:>6} (3 consecutive sizes must agree)")
     print(f"runs extended   {len(runs):>6}")
     print(f"names assigned  {len(assigned):>6}" + (f" (prefix {a.prefix})" if a.prefix else ""))
 

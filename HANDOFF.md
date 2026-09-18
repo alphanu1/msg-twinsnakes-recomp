@@ -558,5 +558,48 @@ own behaviour**, since it is only worth anything while it stays true. Project
 rule 16 makes that binding explicit: if a change would falsify the notice, the
 change is wrong.
 
+**F18 — gap resync: relaxing the alignment made it *more* accurate.**
+The aligner stopped dead at the first size mismatch, which is why 84 GX
+functions were still unnamed. It now looks ahead a bounded distance for a point
+where **3 consecutive sizes agree** and resumes there. The window guard is the
+whole design: a single size coincidence is common — plenty of functions are
+0x20 bytes — but three in a row agreeing by chance is not.
+
+| | before | after |
+|---|---|---|
+| symbols in the map | 851 | **915** |
+| GX functions named | 93 | **148** |
+| SDK entry points the engine calls, named | 70 | **96** |
+| engine functions classified | 221 | **249** |
+| engine functions identified as renderer | 177 | **203** |
+| GX surface known to be used | 44 | **69** |
+
+**The counter-intuitive part, and the reason to trust it:** a looser rule should
+normally cost precision. It did the opposite. The independent `dolsdk2004`
+cross-check went **82% → 85%**, and resync changed **no** previously-assigned
+name — 0 changed, 1 lost, 64 added. A relaxation that *increases* agreement with
+a source it has never seen is doing real work rather than guessing.
+
+Two addresses where the alignment disagreed with an existing name were left
+alone: `__OSDBINTEND` vs `__OSDBJump`, `__OSSystemCallVectorStart` vs
+`SystemCallVector`. Both are label-versus-function disagreements where each name
+can be legitimately true at one address. Signature matches outrank alignment, so
+the existing names stand.
+
+**F19 — the wider GX surface changes what phase 3 has to build.** Three
+features are now confirmed in use rather than assumed:
+
+- **Render-to-texture.** `GXCopyTex`, `GXSetTexCopySrc`/`Dst` — the renderer
+  needs EFB-to-texture copies, not just display copies to the XFB.
+- **Hardware lighting.** `GXInitLightAttn`/`Color`/`Pos`, `GXLoadLightObjImm`,
+  `GXSetChanCtrl`, `GXSetNumChans`, `GXSetChanAmbColor`/`MatColor`. This is a
+  GX stage distinct from TEV, with its own state model, and the design document
+  does not currently budget for it.
+- **Palettised textures.** `GXInitTexObjCI` alongside `GXLoadTlut` and
+  `GXInitTlutObj` — TLUT handling is required, not optional.
+
+With indirect texturing already confirmed (F15), phase 3's feature set is now
+measured rather than estimated, and it is larger than the plan assumed.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

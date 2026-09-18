@@ -141,9 +141,14 @@ unnamed `fn_*` function whose size matches exactly:
    each binary. If the segments are the same length *and* every size agrees
    pairwise, the linker kept the same functions in the same order between those
    points, and the mapping is 1:1.
-2. **Run extension.** Walk outward from each anchor while sizes agree; a size
-   disagreement ends the run. This catches the regions beyond the first and
-   last anchor.
+2. **Gap resync.** A run ends at a size mismatch because one binary links a
+   function the other does not. Rather than stopping, look ahead a bounded
+   distance in each list for a point where the next **3 consecutive sizes all
+   agree**, and resume there. The window guard is what makes this safe: a lone
+   size coincidence is common — many functions are 0x20 bytes — but three in a
+   row agreeing by chance is not.
+3. **Run extension.** Walk outward from each anchor while sizes agree. This
+   catches the regions beyond the first and last anchor.
 
 A function claimed with two different names by different runs is dropped
 rather than guessed at.
@@ -155,14 +160,16 @@ ours              1804 functions in .text
 reference        15342 functions in .text
 anchors            264 (same name AND same size in both)
 segments mapped     59 (consecutive anchors, exact size agreement)
+gap resyncs       1275 (3 consecutive sizes must agree)
 runs extended      479
-names assigned     352
+names assigned     415
 ```
 
 | | before | after |
 |---|---|---|
-| symbols in the map | 501 | **851** |
-| GX functions named | 13 | **93** |
+| symbols in the map | 501 | **915** |
+| GX functions named | 13 | **148** |
+| SDK entry points the engine calls, named | 70 | **96** |
 
 **Three independent checks, all passed:**
 
@@ -172,11 +179,16 @@ names assigned     352
    available here.
 2. **Sizes match exactly**, by construction — a name is never transferred onto
    a function of a different size.
-3. **Cross-checked against a second, unrelated source.** Of the 76 GX names
-   this stage produced, **62 (82%) appear in `doldecomp/dolsdk2004`'s GX
+3. **Cross-checked against a second, unrelated source.** Of the 131 GX names
+   this stage produced, **111 (85%) appear in `doldecomp/dolsdk2004`'s GX
    sources**, a decompilation of a *different* SDK release by a *different*
-   project. The 14 that do not are all internal `__GX*` statics, where decomp
-   projects legitimately differ on naming — not public API functions.
+   project. Those that do not are internal `__GX*` statics, where decomp
+   projects legitimately differ on naming — no public API function is
+   unaccounted for.
+4. **Gap resync raised precision rather than trading it away.** Before resync,
+   82% of GX names were confirmed by `dolsdk2004`; after, **85%**. It also
+   changed **no** previously-assigned name. A relaxation that increases
+   agreement with an independent source is doing real work, not guessing.
 
 **Remaining:** MKDD names 177 GX functions; we have 93. The rest were not
 recovered because the surrounding runs broke on size disagreement, which

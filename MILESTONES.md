@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-18
 
-**Phase 0, in progress — 851 symbols, 18,485 function boundaries.** The toolchain is
+**Phase 0, in progress — 915 symbols, 18,485 function boundaries.** The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -111,15 +111,17 @@ more.
       construction, and 82% of the GX names cross-checked against
       `dolsdk2004`. Method, commands and numbers in
       `docs/decompilation-process.md` stage 5.
-- [ ] Name the last ~84 GX functions. MKDD names 177; we have 93. The runs
-      broke on size disagreement wherever the two games link different
-      neighbouring functions. Needs the Dolphin SDK-call log or Ghidra.
+- [x] **Gap-resync alignment added** — GX 93 → **148**, map 851 → **915**, SDK
+      entry points the engine calls 70 → **96**. Precision rose with it: the
+      independent `dolsdk2004` cross-check went 82% → 85%.
+- [ ] Name the last ~29 GX functions and the 240 remaining SDK entry points the
+      engine calls. Needs the Dolphin SDK-call log or Ghidra.
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the
       REL.
 - [x] **221 engine functions classified by SDK usage**, 177 of them renderer
       code. Signature matching and debug strings both proved dead ends there
       (only ~25 names in strings); cross-module SDK calls are what scales.
-- [x] **The GX surface the game actually uses is known: 44 functions** of the
+- [x] **The GX surface the game actually uses is known: 69 functions** of the
       SDK's ~200 — `config/gx-surface-used.txt`. This is the phase 3 scope.
 - [ ] Name the 266 unnamed DOL functions the REL calls directly. Each is an SDK
       entry point the engine demonstrably uses; these are the highest-value
@@ -227,6 +229,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [ ] **Texture decoder** — I4, I8, IA4, IA8, RGB565, RGB5A3, RGBA8, CMPR.
       Also a Dolphin lift under GPL-3.
 - [ ] **EFB copy emulation** and display lists via `GXCallDisplayList`.
+      **Confirmed used**: `GXCopyTex`, `GXSetTexCopySrc`/`Dst` mean
+      render-to-texture is in play, not just display copies.
+- [ ] **Hardware lighting — confirmed used.** `GXInitLightAttn`,
+      `GXInitLightColor`, `GXInitLightPos`, `GXLoadLightObjImm`,
+      `GXSetChanCtrl`, `GXSetNumChans`, `GXSetChanAmbColor`/`MatColor`. This is
+      a GX stage distinct from TEV and needs its own model.
+- [ ] **Palettised textures — confirmed used.** `GXInitTexObjCI` with
+      `GXLoadTlut`/`GXInitTlutObj` means TLUT handling is required, not
+      optional.
 - [ ] **Vulkan backend** through the platform layer.
 - [ ] Maintain a list of unsupported GX features, gated by game screen. Phase 3
       targets the first playable area only — indirect texturing, EFB
