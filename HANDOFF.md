@@ -1831,5 +1831,42 @@ dispatch has no code for the address. That is the next piece, and it is a
 different kind of problem from the six before it: not a host bug, but code the
 game creates while running.
 
+**F55 — exception vectors are serviced by the host, and the boot stopped
+faulting.**
+
+`DCFlushRange` ends in `sc`: the SDK uses a system call as a completion
+barrier. The guest took it, landed on the system-call vector at `0xC00`, and
+dispatch had no code there — correctly, because **exception handlers are copied
+into low memory by the OS at runtime and exist in no generated chunk.**
+
+*Why patching `DCFlushRange` did not help, and would not have:* it is called
+from `__OSInitAudioSystem` **inside the same generated chunk**, which compiles
+to a plain `goto`. The patch table is only consulted through dispatch. This is
+the second time that structural limit has bitten (F53 item 2), and it is worth
+stating as a rule: **the patch table cannot intercept intra-chunk calls.**
+Anything that must work regardless of how it was reached belongs at the
+instruction or exception level, not in the table.
+
+*What the host does now:* a pc on a vector is serviced rather than treated as a
+gap. A **system call resumes at `srr0`** — which is what the SDK's own handler
+does, and honest here because this host has no supervisor mode, so the state
+transition an exception performs on hardware has no counterpart. **Program,
+DSI, alignment and FP-unavailable still stop**, because those are faults rather
+than barriers and resuming would hide the cause and fail somewhere unrelated.
+
+**Result: 2,000,000 steps with no fault** — it now runs until the host's own
+step limit rather than crashing, with 143 SDK calls served natively, 173 host
+instructions, 1 system call serviced, and nothing unhandled.
+
+*Where it is:* `__OSInitAudioSystem +0xD0`, polling **DSP registers at
+`0xCC005000`**. That is memory-mapped I/O, and the host implements none: the
+`CPUState` has `external_read`/`external_write` hooks that nothing has filled,
+so every hardware register reads as zero. The game is no longer crashing — it
+is waiting for hardware that does not exist yet.
+
+**That is the next layer, and it is a different kind of work:** VI, PI, DSP and
+the CP registers are what the remaining OS init, the frame loop and eventually
+GX all talk to.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -286,7 +286,8 @@ int main(int argc, char** argv)
                         static const char* why[] = {
                             "no code for that address",
                             "guest is spinning",
-                            "step limit"
+                            "step limit",
+                            "unhandled exception"
                         };
                         printf("\nstopped after %llu steps: %s, pc = 0x%08X\n",
                                (unsigned long long)r.steps, why[r.stop], r.pc);
@@ -315,6 +316,8 @@ int main(int argc, char** argv)
                                mgs_host_patched_calls());
                         printf("host instructions handled: %lu  (unhandled: %lu)\n",
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
+                        printf("system calls serviced: %llu\n",
+                               (unsigned long long)r.syscalls);
                         overlay_line("HOST INSNS: %lu  UNKNOWN: %lu",
                                      mgs_host_spr_handled(), mgs_host_spr_unknown());
                         overlay_line("STOPPED AT PC 0x%08X", r.pc);

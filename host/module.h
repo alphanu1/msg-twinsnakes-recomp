@@ -18,7 +18,8 @@ typedef struct MgsModule {
 typedef enum {
     MGS_STOP_UNCOVERED = 0,   /* dispatch had no code for that address */
     MGS_STOP_SPINNING,        /* pc stopped moving: the guest is waiting */
-    MGS_STOP_STEP_LIMIT       /* ran out of host patience, not guest progress */
+    MGS_STOP_STEP_LIMIT,      /* ran out of host patience, not guest progress */
+    MGS_STOP_EXCEPTION        /* a real fault, not a barrier */
 } MgsStopReason;
 
 typedef struct MgsRunResult {
@@ -31,6 +32,7 @@ typedef struct MgsRunResult {
     uint32_t      program_cause;
     uint32_t      srr0;
     uint32_t      msr;
+    uint64_t      syscalls;   /* barriers serviced, not faults */
 } MgsRunResult;
 
 int   mgs_module_load(MgsModule* mod, const char* path);

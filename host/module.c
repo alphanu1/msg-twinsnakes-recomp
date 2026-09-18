@@ -204,6 +204,44 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
         }
 
+        /* An exception vector is not a gap in the translation. The guest
+         * took an exception, and the handler that would service it is copied
+         * into low memory by the OS at runtime - so it exists in no generated
+         * chunk and dispatch legitimately has no code for it.
+         *
+         * Servicing them here is honest rather than a shortcut: this host has
+         * no supervisor mode and no real interrupts, so the state transition
+         * an exception performs on hardware has no counterpart. What the
+         * guest needs is to resume at srr0, which is exactly what its own
+         * handler would do.
+         */
+        if (pc < 0x3000u && (pc & 0xFFu) == 0u) {
+            uint32_t srr0, srr1;
+            memcpy(&srr0, (uint8_t*)cpu + CPU_SRR0, 4);
+            memcpy(&srr1, (uint8_t*)cpu + CPU_SRR1, 4);
+
+            if (pc == 0xC00u) {
+                /* System call. The SDK issues `sc` as a completion barrier -
+                 * DCFlushRange ends with one - and its handler returns
+                 * immediately. srr0 already points past the sc. */
+                ++r.syscalls;
+                mgs_module_set_pc(cpu, srr0);
+                memset((uint8_t*)cpu + CPU_EXCEPTION, 0, 4);
+                continue;
+            }
+            if (pc == 0x700u || pc == 0x300u || pc == 0x600u || pc == 0x800u) {
+                /* Program, DSI, alignment, FP-unavailable. These are real
+                 * faults rather than barriers, so stopping is right: resuming
+                 * would hide the cause and fail somewhere unrelated. */
+                r.stop = MGS_STOP_EXCEPTION;
+                r.pc = pc;
+                memcpy(&r.exception, (uint8_t*)cpu + CPU_EXCEPTION, 4);
+                memcpy(&r.program_cause, (uint8_t*)cpu + CPU_PROGRAM_EXC, 4);
+                r.srr0 = srr0; r.msr = srr1;
+                return r;
+            }
+        }
+
         if (!mod->dispatch(cpu, pc)) {
             r.stop = MGS_STOP_UNCOVERED;
             r.pc = pc;
