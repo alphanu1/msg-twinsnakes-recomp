@@ -575,7 +575,45 @@ The generated C is a **build artefact**. It is never hand-edited and never
 committed — it is regenerated from the user's own disc on every build, which is
 also why no game code enters this repository.
 
-## Stage 8 — Compile and link · **PLANNED**
+## Stage 8 — Boot under ModernGekko (phase 1) · **IN PROGRESS**
+
+**In:** the extracted disc + the recompiled modules. **Out:** a running module
+under a Dolphin-derived runtime.
+
+Phase 1 is deliberately throwaway: it proves the recompiled CPU code is correct
+*before* our own SDK shims exist to be blamed for anything.
+
+```sh
+tools/phase1-setup.sh                                   # assemble the game tree
+make -C extern/ModernGekko-Template tools                # build DolRecomp + ModernGekko
+make -C extern/ModernGekko-Template run GAME=TwinSnakes-GGSPA4
+```
+
+### Two things had to be bridged
+
+**The overlay name.** ModernGekko looks for `files/_Main.rel`, hardcoded — that
+is Luigi's Mansion's name. Twin Snakes calls it `files/shared/mgso_pal.rel`.
+`tools/phase1-setup.sh` builds a tree of symlinks beside the extracted disc
+with `_Main.rel` pointing at ours, rather than touching `discs/`, which is the
+provenance record. Symlinks, not copies: the disc is 1.2 GB and nothing here
+modifies it.
+
+**The hash pins.** `MODERNGEKKO_REQUIRED_DISC_ID`, `_DOL_SHA256`, `_REL_SHA256`
+and `_ASSETS_SHA256` default to empty in ModernGekko's CMake, so a normal build
+is not locked to the template's own game. Only a packaged release sets them.
+
+### What the first run is expected to do
+
+`main.dol` runs `__start` → `OSInit` → DVD init → reaches `rel_loader_LoadRel`
+at `0x800066F8` → calls `OSLink`. Whether it continues depends on the runtime
+dispatching to recompiled REL code at that point.
+
+**A stop there is the expected outcome, not a failure.** It would still
+demonstrate that the translated CPU code and the runtime work along the whole
+boot path. With `--map` applied, the failure names the SDK function rather than
+an address.
+
+## Stage 8b — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.
 
