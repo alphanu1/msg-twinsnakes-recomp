@@ -1,0 +1,97 @@
+# Twin Snakes Native Port
+
+A **static recompilation** of Metal Gear Solid: The Twin Snakes (GameCube, 2004)
+into native Windows and Linux builds.
+
+The game's PowerPC code is translated ahead of time into C, compiled with a
+normal host compiler, and linked against a runtime that reimplements the
+GameCube SDK on SDL3 and Vulkan. At runtime there is no PowerPC, no interpreter
+and no JIT: the game's own logic runs as native machine code, so behaviour,
+saves and physics match the original disc exactly.
+
+**Status: phase 0 of 6** — symbol recovery. Not playable, not close. See
+[MILESTONES.md](MILESTONES.md) for the plan and [HANDOFF.md](HANDOFF.md) for
+where the work actually stands.
+
+---
+
+## Provenance
+
+**This project does not use, reference, or incorporate any leaked source code.**
+
+Metal Gear Solid 2's source code — the engine this game is built on — was leaked
+publicly in 2026, and Konami is pursuing legal action over it. **That material
+is not used here, in any form, at any point.** It has not been read, consulted,
+or referred to, and it never will be. This is a standing prohibition in the
+project's rules, not a preference.
+
+The same applies to any leaked copy of Nintendo's Dolphin SDK.
+
+Everything in this repository is derived by our own analysis of a legally owned
+copy of the game, by **full decompilation and recompilation**:
+
+1. The user's own disc is extracted, and its executables are hashed.
+2. Those executables are disassembled and analysed — function boundaries,
+   control flow, data-versus-code — with open tools: Ghidra, `decomp-toolkit`,
+   and our own scripts.
+3. Nintendo SDK functions are identified by **byte-signature matching against
+   public clean-room decompilation projects**, which recover the SDK's public
+   API by analysis of retail binaries. Those projects' symbol *names* are the
+   community's own naming, not anyone's source code.
+4. The recovered machine code is translated to C by
+   [DolRecomp](https://github.com/ExpansionPak/DolRecomp), compiled, and linked
+   against an SDK runtime **written from scratch** for this project.
+
+Every symbol name, address and structure layout here was produced by that
+process. Where a name comes from a public decompilation project, it is recorded
+in [THIRD_PARTY.md](THIRD_PARTY.md) with its upstream and commit.
+
+## What is not in this repository
+
+**No game code. No game assets. Ever.**
+
+- No `main.dol`, no `.rel`, no disc image, no extracted textures, audio or video
+- No generated C — it is produced at build time from the user's own disc and is
+  never committed
+- No memory-card saves, no ripped data of any kind
+
+The repository contains our own code, our own configuration, and symbol names.
+You supply your own disc; the build hashes what you give it and refuses anything
+that does not match.
+
+## What you need
+
+Two disc images of a copy of the game **you own**. GameCube discs cannot be read
+by a PC drive; they are dumped on a Wii with CleanRip.
+
+Supported: `.iso`, `.gcm`, `.rvz`, or an extracted folder.
+
+The bring-up target is the PAL release, disc ID `GGSPA4`. US (`GGSEA4`) and
+Japanese (`GGSJA4`) support comes later — every address in the project is tied
+to a specific build.
+
+## Licence
+
+**GPL-3.0.** The runtime reuses code from Dolphin, which is GPL, and the
+recompiler is GPL-3 already. See [THIRD_PARTY.md](THIRD_PARTY.md) for the
+licence position of every dependency.
+
+## Building
+
+```sh
+tools/bootstrap.sh          # fetch pinned dependencies into extern/
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Dependencies are fetched, never vendored: `extern/` is git-ignored and every
+upstream is pinned by commit in [deps.lock](deps.lock).
+
+## Documents
+
+| | |
+|---|---|
+| [twin-snakes-native-port-design.md](twin-snakes-native-port-design.md) | The design. Architecture, the translated/native boundary, the phase plan. |
+| [MILESTONES.md](MILESTONES.md) | Phase order, exit criteria, per-phase checklists. |
+| [HANDOFF.md](HANDOFF.md) | Current state, what is next, and every finding — including the wrong ones. |
+| [THIRD_PARTY.md](THIRD_PARTY.md) | Licence, pin and role for each dependency. |

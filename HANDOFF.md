@@ -39,6 +39,7 @@ more** — what remains is the symbol recovery itself.
 | `.vscode/settings.json` | `git.ignoredRepositories` for the `extern/` clones. Tracked. |
 | `deps.lock` | The ten upstream pins. Committed; `extern/` itself is not. |
 | `tools/bootstrap.sh` | Fetches them. `--all` for the reference group, `--update` to re-pin. |
+| `README.md` | What this is, and the provenance statement: no leaked source, ever. |
 | `THIRD_PARTY.md` | Licence and group per dependency, and the system packages. |
 | `config/GGSPA4.toml` | The target build: SDK, executable hashes, disc paths. |
 | `discs/GGSPA4/disc{1,2}/` | Extracted discs, 2.5 GB. **Git-ignored**, never committed. |
@@ -395,7 +396,21 @@ platform and wrong engine for us, but Twin Snakes is MGS1's *content* on MGS2's
 *engine*, so its naming of stages and game logic may map onto ours. Worth a look
 when the REL's engine functions need names, not before.
 
-**Stay away from the leaked MGS2 source.** MGS2's source code leaked publicly in
+**Stay away from the leaked MGS2 source — now a hard rule and a public
+statement.** Project rule 9 was rewritten to make this absolute, and
+`README.md` states it publicly: the project does not use, reference or
+incorporate leaked source, and everything here comes from full decompilation
+and recompilation of a legally owned disc.
+
+**The repository is currently private**, which matters for how to read all of
+this. Nothing has been distributed, so the legal questions the design document's
+legal section raises are not yet live — they become live at publication. That is
+the moment to re-read that section and confirm the README's claims are still
+true of every file. The value of keeping the provenance rule absolute *now* is
+precisely that it cannot be retrofitted later: a contaminated symbol recovered
+today would still be contaminated on the day the repository goes public.
+
+The original note, for the record: MGS2's source code leaked publicly in
 2026 and **Konami is actively litigating to identify the leaker**. That code is
 the engine in this very game. Project rule 9 already forbids verbatim leaked SDK
 source; this is the same category with far more legal heat, and touching it
