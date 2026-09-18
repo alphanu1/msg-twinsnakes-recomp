@@ -10,6 +10,25 @@ typedef void (*MgsSdkFn)(CPUState* ctx);
 /* Returns the native implementation for a guest address, or NULL. */
 MgsSdkFn mgs_patch_lookup(uint32_t address);
 
+void mgs_PPCMfmsr(CPUState* ctx);
+void mgs_PPCMtmsr(CPUState* ctx);
+void mgs_PPCMfhid0(CPUState* ctx);
+void mgs_PPCMthid0(CPUState* ctx);
+void mgs_PPCHalt(CPUState* ctx);
+void mgs_PPCMfhid2(CPUState* ctx);
+void mgs_PPCMthid2(CPUState* ctx);
+void mgs_PPCDisableSpeculation(CPUState* ctx);
+void mgs_PPCSetFpNonIEEEMode(CPUState* ctx);
+void mgs_DCEnable(CPUState* ctx);
+void mgs_DCInvalidateRange(CPUState* ctx);
+void mgs_DCFlushRange(CPUState* ctx);
+void mgs_DCStoreRange(CPUState* ctx);
+void mgs_DCFlushRangeNoSync(CPUState* ctx);
+void mgs_ICInvalidateRange(CPUState* ctx);
+void mgs_ICFlashInvalidate(CPUState* ctx);
+void mgs_ICEnable(CPUState* ctx);
+void mgs_LCDisable(CPUState* ctx);
+void mgs_L2GlobalInvalidate(CPUState* ctx);
 void mgs_OSReport(CPUState* ctx);
 void mgs_OSDisableInterrupts(CPUState* ctx);
 void mgs_OSEnableInterrupts(CPUState* ctx);

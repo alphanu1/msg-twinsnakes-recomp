@@ -53,6 +53,11 @@ typedef struct {
 #define CPU_RAM_OFFSET   3456u
 #define CPU_RAM_SIZE     3464u
 #define CPU_DOWNCOUNT    3480u
+#define CPU_MSR           664u
+#define CPU_SRR0          668u
+#define CPU_SRR1          672u
+#define CPU_EXCEPTION     800u
+#define CPU_PROGRAM_EXC   804u
 
 int mgs_module_load(MgsModule* mod, const char* path)
 {
@@ -124,11 +129,125 @@ uint32_t* mgs_module_gpr(void* cpu_state)
     return (uint32_t*)((uint8_t*)cpu_state + CPU_GPR_OFFSET);
 }
 
+#define CPU_LR_OFFSET 644u
+
+uint32_t mgs_module_lr(const void* cpu_state)
+{
+    uint32_t lr;
+    memcpy(&lr, (const uint8_t*)cpu_state + CPU_LR_OFFSET, sizeof lr);
+    return lr;
+}
+
+void mgs_module_set_pc(void* cpu_state, uint32_t pc)
+{
+    memcpy((uint8_t*)cpu_state + CPU_PC_OFFSET, &pc, sizeof pc);
+}
+
 uint32_t mgs_module_pc(const void* cpu_state)
 {
     uint32_t pc;
     memcpy(&pc, (const uint8_t*)cpu_state + CPU_PC_OFFSET, sizeof pc);
     return pc;
+}
+
+/* Run the guest until it stops.
+ *
+ * Translated code does not run to completion: it returns to the host at chunk
+ * boundaries, when its cycle budget expires, and whenever it reaches an
+ * address its own tables do not cover. So the host must re-enter at the
+ * current pc, repeatedly. Calling dispatch once executes a few instructions
+ * and returns, which looks exactly like "the game stopped here" and is why
+ * the first run appeared to stall at __OSPSInit's entry.
+ *
+ * Stops when dispatch reports it could not handle an address - that is a
+ * genuine gap, and the pc names it - or when the step ceiling is reached,
+ * which catches a guest spinning rather than letting it hang the host.
+ */
+MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
+{
+    MgsRunResult r;
+    uint32_t last_pc = 0u;
+    uint64_t same_pc = 0u;
+    uint64_t trace_steps = 0u;
+
+    /* MGS_TRACE_STEPS=N prints the first N guest pcs. A stop address alone
+     * says where execution ended, not how it got there, and for a boot the
+     * path is the interesting part. */
+    {
+        const char* env = getenv("MGS_TRACE_STEPS");
+        trace_steps = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
+    }
+
+    /* A ring of recent addresses. A stop address says where execution ended;
+     * for a jump to a bad address the interesting part is what branched
+     * there, and that is always a few steps back. */
+    #define RECENT 12
+    static uint32_t recent[RECENT];
+    unsigned recent_n = 0u;
+
+    memset(&r, 0, sizeof r);
+    for (r.steps = 0; r.steps < max_steps; ++r.steps) {
+        uint32_t pc = mgs_module_pc(cpu);
+
+        recent[recent_n % RECENT] = pc;
+        ++recent_n;
+
+        if (r.steps < trace_steps)
+            fprintf(stderr, "  step %4llu  pc = 0x%08X\n",
+                    (unsigned long long)r.steps, pc);
+
+        /* Refill the cycle budget. The translated code decrements it and
+         * returns when it hits zero; leaving it empty would return
+         * immediately every time and make no progress at all. */
+        {
+            uint32_t budget = 100000u;
+            memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
+        }
+
+        if (!mod->dispatch(cpu, pc)) {
+            r.stop = MGS_STOP_UNCOVERED;
+            r.pc = pc;
+            /* An uncovered address at an exception vector is not a gap in the
+             * translation - it is the guest taking an exception the OS has
+             * not installed a handler for yet. Reporting the cause turns
+             * "stopped at 0x700" into something actionable. */
+            memcpy(&r.exception, (uint8_t*)cpu + CPU_EXCEPTION, 4);
+            memcpy(&r.program_cause, (uint8_t*)cpu + CPU_PROGRAM_EXC, 4);
+            memcpy(&r.srr0, (uint8_t*)cpu + CPU_SRR0, 4);
+            memcpy(&r.msr, (uint8_t*)cpu + CPU_MSR, 4);
+            {
+                unsigned k, start = recent_n > RECENT ? recent_n - RECENT : 0u;
+                fprintf(stderr, "  path in:");
+                for (k = start; k < recent_n; ++k)
+                    fprintf(stderr, " 0x%08X", recent[k % RECENT]);
+                fprintf(stderr, "\n");
+            }
+            return r;
+        }
+
+        /* A repeated pc is NOT evidence of spinning. Translated code returns
+         * to the host whenever its cycle budget expires, so a long loop -
+         * __fill_mem clearing 615 KB of .bss, say - re-enters at the same
+         * loop head thousands of times while making perfect progress. A
+         * threshold low enough to catch a genuine spin quickly would report
+         * every large memset as a hang, which is how this first presented.
+         *
+         * So the bar is high, and it only bounds how long the host waits
+         * before saying something; it is not a correctness check. */
+        if (pc == last_pc) {
+            if (++same_pc > 2000000u) {
+                r.stop = MGS_STOP_SPINNING;
+                r.pc = pc;
+                return r;
+            }
+        } else {
+            same_pc = 0u;
+            last_pc = pc;
+        }
+    }
+    r.stop = MGS_STOP_STEP_LIMIT;
+    r.pc = mgs_module_pc(cpu);
+    return r;
 }
 
 void mgs_module_unload(MgsModule* mod)

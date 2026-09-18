@@ -9,6 +9,25 @@
 typedef struct { uint32_t address; MgsSdkFn fn; } MgsPatch;
 
 static const MgsPatch k_patches[] = {
+    {0x8001B5FCu, mgs_PPCMfmsr},   /* PPCMfmsr */
+    {0x8001B604u, mgs_PPCMtmsr},   /* PPCMtmsr */
+    {0x8001B60Cu, mgs_PPCMfhid0},   /* PPCMfhid0 */
+    {0x8001B614u, mgs_PPCMthid0},   /* PPCMthid0 */
+    {0x8001B63Cu, mgs_PPCHalt},   /* PPCHalt */
+    {0x8001B6C8u, mgs_PPCMfhid2},   /* PPCMfhid2 */
+    {0x8001B6D0u, mgs_PPCMthid2},   /* PPCMthid2 */
+    {0x8001B6ECu, mgs_PPCDisableSpeculation},   /* PPCDisableSpeculation */
+    {0x8001B714u, mgs_PPCSetFpNonIEEEMode},   /* PPCSetFpNonIEEEMode */
+    {0x8001D058u, mgs_DCEnable},   /* DCEnable */
+    {0x8001D06Cu, mgs_DCInvalidateRange},   /* DCInvalidateRange */
+    {0x8001D098u, mgs_DCFlushRange},   /* DCFlushRange */
+    {0x8001D0C8u, mgs_DCStoreRange},   /* DCStoreRange */
+    {0x8001D0F8u, mgs_DCFlushRangeNoSync},   /* DCFlushRangeNoSync */
+    {0x8001D150u, mgs_ICInvalidateRange},   /* ICInvalidateRange */
+    {0x8001D184u, mgs_ICFlashInvalidate},   /* ICFlashInvalidate */
+    {0x8001D194u, mgs_ICEnable},   /* ICEnable */
+    {0x8001D2ACu, mgs_LCDisable},   /* LCDisable */
+    {0x8001D3B8u, mgs_L2GlobalInvalidate},   /* L2GlobalInvalidate */
     {0x8001DF44u, mgs_OSReport},   /* OSReport */
     {0x8001FCCCu, mgs_OSDisableInterrupts},   /* OSDisableInterrupts */
     {0x8001FCE0u, mgs_OSEnableInterrupts},   /* OSEnableInterrupts */
@@ -25,7 +44,7 @@ static const MgsPatch k_patches[] = {
     {0x80029DE8u, mgs_DVDCompareDiskID},   /* DVDCompareDiskID */
 };
 
-#define MGS_PATCH_COUNT 14u
+#define MGS_PATCH_COUNT 33u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {

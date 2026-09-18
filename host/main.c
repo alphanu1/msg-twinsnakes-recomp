@@ -9,6 +9,7 @@
 #include "dvd/disc.h"
 #include "dvd/disc_locate.h"
 #include "dvd/dvd.h"
+#include "dvd/dol.h"
 #include "os/os_runtime.h"
 #include "os/patch_table.h"
 #include "platform/jobs.h"
@@ -84,9 +85,19 @@ static unsigned long s_patched_calls;
 static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 {
     MgsSdkFn fn = mgs_patch_lookup(address);
-    (void)cpu_state;
     if (!fn) return 0;
+
     fn((CPUState*)cpu_state);
+
+    /* A native replacement stands in for a function that ended in `blr`, so
+     * it must RETURN: the translated caller left its resume address in lr and
+     * expects control there. Without this the pc never moves, the host
+     * re-dispatches the same address forever, and it looks exactly like the
+     * guest spinning - which is how this first presented, at
+     * ICFlashInvalidate, after 1002 otherwise correct native calls.
+     */
+    mgs_module_set_pc(cpu_state, mgs_module_lr(cpu_state));
+
     ++s_patched_calls;
     return 1;
 }
@@ -204,6 +215,23 @@ int main(int argc, char** argv)
         overlay_line("DVD SELF-CHECK: %ld BYTES OK", n);
     }
 
+    /* Load the executable into guest memory, as the apploader would. Without
+     * this the right code runs against zeroed memory, and the failure is
+     * quiet: an unloaded .sdata reads as zeros and zero is a plausible value
+     * for almost anything. */
+    {
+        MgsDolInfo dol;
+        if (!mgs_dol_load_from_disc(&rt.mem, &disc1, &dol)) {
+            fprintf(stderr, "could not load main.dol into guest memory\n");
+        } else {
+            printf("loaded main.dol: %u sections, %u bytes, bss 0x%08X+%u, entry 0x%08X\n",
+                   dol.section_count, dol.loaded_bytes, dol.bss_address,
+                   dol.bss_size, dol.entry_point);
+            overlay_line("DOL: %u SECTIONS  %u KB", dol.section_count,
+                         dol.loaded_bytes / 1024u);
+        }
+    }
+
     if (!module_path) {
         printf("\nNo --module given: the runtime is up, but there is no game\n"
                "code to run. Pass --module <gGGSPA4_recomp.so> to boot.\n");
@@ -239,6 +267,7 @@ int main(int argc, char** argv)
                     /* Point the SDK shims at the module's registers, so a
                      * shim reads exactly what the translated code passed. */
                     mgs_cpu_bind_registers(mgs_module_gpr(cpu));
+                    mgs_host_install_spr_handler(cpu);
                     if (mod.set_patch_hook) {
                         mod.set_patch_hook(mgs_host_patch_dispatch);
                         printf("  patch table  : installed\n");
@@ -253,12 +282,32 @@ int main(int argc, char** argv)
                     if (!headless) { overlay_draw(1); mgs_video_present(); }
                     printf("\nrunning from 0x%08X ...\n\n", mod.entry_point);
                     {
-                        int handled = mod.dispatch(cpu, mod.entry_point);
-                        printf("\nstopped: dispatch returned %d, pc = 0x%08X\n",
-                               handled, mgs_module_pc(cpu));
+                        MgsRunResult r = mgs_module_run(&mod, cpu, 2000000ull);
+                        static const char* why[] = {
+                            "no code for that address",
+                            "guest is spinning",
+                            "step limit"
+                        };
+                        printf("\nstopped after %llu steps: %s, pc = 0x%08X\n",
+                               (unsigned long long)r.steps, why[r.stop], r.pc);
+                        if (r.exception) {
+                            printf("  exception 0x%08X  cause 0x%08X  "
+                                   "faulting instruction srr0 = 0x%08X  msr = 0x%08X\n",
+                                   r.exception, r.program_cause, r.srr0, r.msr);
+                            if (r.program_cause & 0x00080000u) printf("  -> illegal instruction\n");
+                            if (r.program_cause & 0x00040000u) printf("  -> privileged instruction\n");
+                            if (r.program_cause & 0x00100000u) printf("  -> floating point\n");
+                            if (r.program_cause & 0x00020000u) printf("  -> trap\n");
+                        }
+                        overlay_line("STEPS: %llu", (unsigned long long)r.steps);
+                        overlay_line("STOP: %s", why[r.stop]);
                         printf("SDK calls served natively: %lu\n",
                                mgs_host_patched_calls());
-                        overlay_line("STOPPED AT PC 0x%08X", mgs_module_pc(cpu));
+                        printf("host instructions handled: %lu  (unhandled: %lu)\n",
+                               mgs_host_spr_handled(), mgs_host_spr_unknown());
+                        overlay_line("HOST INSNS: %lu  UNKNOWN: %lu",
+                                     mgs_host_spr_handled(), mgs_host_spr_unknown());
+                        overlay_line("STOPPED AT PC 0x%08X", r.pc);
                         overlay_line("SDK CALLS NATIVE: %lu", mgs_host_patched_calls());
                     }
                     mgs_cpu_unbind();

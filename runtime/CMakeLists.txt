@@ -9,12 +9,14 @@ add_library(mgs_runtime STATIC
   os/os_time.c
   os/os_thread.c
   os/cpu_seam.c
+  os/ppc_shims.c
   os/patch_table.c
   platform/jobs.c
   dvd/fst.c
   dvd/disc.c
   dvd/disc_locate.c
   dvd/dvd.c
+  dvd/dol.c
   dvd/dvd_shims.c
   dvd/disc_swap.c
   pad/pad.c)

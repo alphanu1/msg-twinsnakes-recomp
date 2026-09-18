@@ -50,3 +50,29 @@ DVDGetCommandBlockStatus
 # swap is answering differently. See runtime/dvd/disc_swap.c.
 DVDGetCurrentDiskID
 DVDCompareDiskID
+
+# --- processor and cache control --------------------------------------------
+# DolRecomp does not translate SPR access - it emits a fallback instruction and
+# expects an interpreter. These are the SDK wrappers over HID0/HID2/MSR and the
+# cache ops, and a boot stops inside ICFlashInvalidate two instructions in
+# without them. Cache operations are honest no-ops: the host has one coherent
+# memory and no guest instruction cache. See runtime/os/ppc_shims.c.
+PPCMfhid0
+PPCMthid0
+PPCMfhid2
+PPCMthid2
+PPCMfmsr
+PPCMtmsr
+PPCHalt
+PPCDisableSpeculation
+PPCSetFpNonIEEEMode
+ICFlashInvalidate
+ICEnable
+ICInvalidateRange
+DCEnable
+DCInvalidateRange
+DCFlushRange
+DCFlushRangeNoSync
+DCStoreRange
+L2GlobalInvalidate
+LCDisable

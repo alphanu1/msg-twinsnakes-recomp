@@ -1737,5 +1737,58 @@ replace it.
 **Nothing Dolphin-derived is in this process.** Our guest memory, disc layer,
 worker pool, patch table, CPU seam, window and font.
 
+**F53 — the boot went from 2 steps to 12,553, and every step of that was a
+distinct bug in the host rather than in the translation.**
+Worth recording individually, because each one presented as something other
+than what it was.
+
+**1. The host called `dispatch` once.** Translated code returns to the host at
+chunk boundaries, when its cycle budget expires, and at addresses its tables do
+not cover — so the host must re-enter at the current `pc`, repeatedly. One call
+executes a few instructions and returns, which looks exactly like *"the game
+stopped here"*. It reported a stall at `__OSPSInit`'s entry that was really a
+missing loop.
+
+**2. `mfhid0` is not translated.** DolRecomp emits
+`ppc_fallback_instruction` for SPR access and leaves it to the host — which is
+the right division, since an SPR means whatever the machine underneath says it
+means. Without a handler the default is an illegal-instruction exception, two
+instructions into `ICFlashInvalidate`. `cpu->instruction_fallback` is the
+provided seam; `host/spr.c` fills it.
+
+*And it catches what the patch table structurally cannot:* a patched SDK
+function is only intercepted when reached **through dispatch**. A call inside
+the same generated chunk compiles to a plain `goto` and never consults the
+hook — which is why patching `ICFlashInvalidate` alone changed nothing.
+`__OSPSInit` calls it that way.
+
+**3. A native replacement must return.** It stands in for a function ending in
+`blr`, so the host has to set `pc = lr` after it runs. Without that the pc
+never moves and the host re-dispatches forever — indistinguishable from a
+spinning guest, and it appeared *after 1,002 otherwise correct native calls*.
+
+**4. A handled instruction must advance the pc.** Same shape one level down:
+performing the effect is not completing the instruction. The translated code
+returns with `pc` still on it.
+
+**5. Nobody had loaded the DOL.** The host allocated 24 MB of zeros and jumped
+to the entry point, so the right code ran against the wrong memory. **The
+failure was silent**, because an unloaded `.sdata` reads as zeros and zero is a
+plausible value for almost anything: `VIGetTvFormat` read the TV mode through
+r13, got zero, and branched through a null pointer. `runtime/dvd/dol.c` now
+does what the apploader does — 8 sections, 1,987,872 bytes, `.bss` cleared at
+`0x801E7DC0+615068`, entry `0x80005240`, all matching what `dtk` reports.
+
+**6. A repeated pc is not a spin.** A loop re-enters at the same head every
+time its cycle budget expires, so `__fill_mem` clearing 615 KB of `.bss`
+tripped a hang detector thousands of times while making perfect progress.
+
+*Where it is now:* **12,553 steps, 143 SDK calls served natively, 169 host
+instructions handled, none unhandled — and `OSReport` firing, so the game is
+printing through our implementation.** It stops in `__OSThreadInit +0x80`,
+inside `OSInit`, branching through a null where the first thread context
+should be. That is the next piece: the scheduler has a selection policy
+(F39) but no context switch yet.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
