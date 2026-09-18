@@ -1790,5 +1790,46 @@ inside `OSInit`, branching through a null where the first thread context
 should be. That is the next piece: the scheduler has a selection policy
 (F39) but no context switch yet.
 
+**F54 — the quietest bug yet: clearing `.bss` wiped `.sdata`.**
+
+A DOL header's bss entry is one address and length covering everything the
+linker left out of the file — and on this game **it spans `.sdata`**. bss runs
+`0x801E7DC0 + 615068`, ending at `0x8027DFC4`; `.sdata` sits at `0x8027D980`,
+in the middle of it. Our loader copied the sections and *then* cleared bss,
+erasing initialised data it had just written.
+
+**The symptom was as quiet as it gets.** Every small-data-area read returned
+zero, and zero is a plausible value everywhere. It surfaced as `__OSThreadInit`
+branching through a null `SwitchThreadCallback` — a function pointer whose
+correct value, `0x80022E7C` (`DefaultSwitchThreadCallback`), was sitting in the
+DOL the entire time.
+
+*What made it findable:* dumping r13 at the stop and checking it against the
+SDA convention. r13 was **correct** — `0x80285980`, which is `.sdata + 0x8000`,
+exactly where PowerPC puts the small-data base so signed 16-bit offsets reach
+the whole area. A correct base reading zeros means the memory is wrong, not the
+register, and that points at the loader rather than the translation.
+
+**Clear bss first, then load sections.** The order is the fix.
+
+**The result, and it closes a loop:**
+
+```
+[OSReport] << Dolphin SDK - EXI  release build: Apr 17 2003 12:33:17 (0x2301) >>
+[OSReport] << Dolphin SDK - SI   release build: Apr 17 2003 12:33:19 (0x2301) >>
+```
+
+**The game prints its own SDK version banners through our native `OSReport`.**
+Phase 0 identified SDK `0x2301` by reading strings out of the binary; the
+running game now reports the same build itself, through our implementation of
+the function it uses to say so.
+
+*Where it stops:* **14,940 steps**, at `pc = 0x00000C00` — the PowerPC **system
+call vector**. The guest executed `sc`. Exception handlers are copied into low
+memory by the OS at runtime, so they are in no generated chunk, which is why
+dispatch has no code for the address. That is the next piece, and it is a
+different kind of problem from the six before it: not a host bug, but code the
+game creates while running.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

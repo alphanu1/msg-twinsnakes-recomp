@@ -38,6 +38,27 @@ int mgs_dol_load(GuestMemory* mem, const void* data, size_t size, MgsDolInfo* in
     if (!dol || size < 0x100u) return 0;
     memset(info, 0, sizeof *info);
 
+    /* CLEAR .bss FIRST, THEN LOAD SECTIONS. The order is not arbitrary.
+     *
+     * A DOL header's bss entry is a single address and length covering
+     * everything the linker did not put in the file - and on this game it
+     * SPANS .sdata: bss runs 0x801E7DC0 + 615068, ending at 0x8027DFC4, while
+     * .sdata sits at 0x8027D980 in the middle of it. Clearing afterwards
+     * wipes initialised data that was just copied in.
+     *
+     * The symptom is as quiet as it gets: every small-data-area read returns
+     * zero, which is a plausible value everywhere. It showed up as
+     * __OSThreadInit branching through a null SwitchThreadCallback - a
+     * function pointer whose correct value, 0x80022E7C, was sitting in the
+     * DOL the whole time.
+     */
+    info->bss_address = be32(dol + 0xD8u);
+    info->bss_size    = be32(dol + 0xDCu);
+    if (info->bss_address && info->bss_size) {
+        uint8_t* bss = guest_ptr(mem, info->bss_address, info->bss_size);
+        if (bss) memset(bss, 0, info->bss_size);
+    }
+
     for (i = 0; i < DOL_SECTIONS; ++i) {
         uint32_t off  = be32(dol + 0x00u + i * 4u);
         uint32_t addr = be32(dol + 0x48u + i * 4u);
@@ -56,17 +77,6 @@ int mgs_dol_load(GuestMemory* mem, const void* data, size_t size, MgsDolInfo* in
         info->sections[info->section_count].is_text = (i < DOL_TEXT_COUNT);
         ++info->section_count;
         info->loaded_bytes += len;
-    }
-
-    /* .bss is not in the file - it is an address and a length to clear. The
-     * SDK's own startup relies on it being zero, and guest memory is already
-     * zeroed, but clearing explicitly means a reused GuestMemory behaves the
-     * same as a fresh one. */
-    info->bss_address = be32(dol + 0xD8u);
-    info->bss_size    = be32(dol + 0xDCu);
-    if (info->bss_address && info->bss_size) {
-        uint8_t* bss = guest_ptr(mem, info->bss_address, info->bss_size);
-        if (bss) memset(bss, 0, info->bss_size);
     }
 
     info->entry_point = be32(dol + 0xE0u);

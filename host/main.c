@@ -290,6 +290,16 @@ int main(int argc, char** argv)
                         };
                         printf("\nstopped after %llu steps: %s, pc = 0x%08X\n",
                                (unsigned long long)r.steps, why[r.stop], r.pc);
+                        {
+                            /* r13 and r2 are the small-data-area bases, set
+                             * once by __init_registers. A wrong r13 makes
+                             * every sda-relative read return whatever happens
+                             * to be at the wrong address - usually zero,
+                             * which is plausible and therefore silent. */
+                            const uint32_t* g = mgs_module_gpr(cpu);
+                            printf("  r1(sp)=0x%08X r2=0x%08X r13=0x%08X r3=0x%08X\n",
+                                   g[1], g[2], g[13], g[3]);
+                        }
                         if (r.exception) {
                             printf("  exception 0x%08X  cause 0x%08X  "
                                    "faulting instruction srr0 = 0x%08X  msr = 0x%08X\n",
