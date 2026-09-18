@@ -75,11 +75,10 @@ layout" section is the target, not the current state.
 
 ## NEXT, IN ORDER
 
-1. **Recover engine function boundaries in `mgso_pal.rel`.** `dtk` found
-   **16,667 functions** there and can name none of them — the engine appears in
-   no other binary, so signature matching is structurally impossible. This is
-   Ghidra work at `PowerPC:BE:32:Gekko_Broadway`, it is the bulk of phase 0's
-   remaining effort, and it is now the critical path.
+1. **Name the 266 DOL functions the REL calls but we have not named.** Of 336
+   SDK entry points the engine calls directly, 70 are named. These 266 are the
+   highest-value targets in the project — each is demonstrably used. The
+   Dolphin SDK-call log is the best route.
 2. **Log 60 seconds of SDK calls from Dolphin.** Still the specification for
    phase 2, and the better route to the last ~84 GX names than more alignment.
 3. **Name the last ~84 GX functions.** 93 of MKDD's 177 are named; the runs
@@ -449,6 +448,38 @@ edits appended to it instead of rewriting it. Rule 14 says this file is updated
 every commit; the lesson is that *updating* means re-reading the whole section
 against reality, not adding a line to the top. A stale NEXT is worse than no
 NEXT — it sends the next session to work that is already finished.
+
+**F15 — the engine is mapped, and phase 3 is scoped to 44 GX functions.**
+
+Boundaries: **16,667 functions** in the REL (`dtk dol split`).
+
+*Two naming routes tried and rejected, recorded so they are not re-attempted:*
+signature matching is structurally impossible — the engine appears in no other
+binary, and `dtk` finds three symbols in 4.3 MB. Debug strings yield only
+**~25** function names and 8 source filenames; worth harvesting once, not a
+strategy.
+
+*The route that works:* the REL calls the DOL's SDK by cross-module relocation,
+and the DOL is 851 named symbols. `tools/classify-rel.py` classified **221
+engine functions by the SDK they call — 177 of them renderer code**. It assigns
+no names; it says where to look, which is the expensive part of reading 16,667
+functions.
+
+**The most valuable output is the GX surface.** The game calls **44 GX
+functions** of the SDK's ~200 (`config/gx-surface-used.txt`). That is phase 3's
+scope, measured rather than estimated.
+
+**And it confirms the design document's biggest phase-3 risk is real.** The
+document lists indirect texturing among the edge cases that make phase 3
+overrun. The engine calls `GXSetTevIndirect`, `GXSetIndTexMtx`,
+`GXSetIndTexOrder`, `GXSetIndTexCoordScale` and `GXSetNumIndStages`. **It is
+used.** Fourteen `GXSetTev*` calls, including `GXSetTevSwapModeTable`,
+`GXSetTevKColor` and `GXSetTevColorS10`, say the TEV space is used broadly.
+Phase 3 should plan for indirect texturing rather than discover it.
+
+*Known incompleteness:* direct calls only. `GXCallDisplayList` and raw FIFO
+writes bypass the API, so the FIFO parser is still required and the real surface
+is a superset of these 44. The Dolphin SDK-call log will settle it.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -114,9 +114,17 @@ more.
 - [ ] Name the last ~84 GX functions. MKDD names 177; we have 93. The runs
       broke on size disagreement wherever the two games link different
       neighbouring functions. Needs the Dolphin SDK-call log or Ghidra.
-- [ ] Recover engine function boundaries in `mgso_pal.rel` — 4.3 MB, and `dtk`
-      found only `_prolog`, `_epilog` and `_unresolved` there, as expected for
-      game-specific code with no signatures.
+- [x] **Engine function boundaries recovered** — **16,667 functions** in the
+      REL.
+- [x] **221 engine functions classified by SDK usage**, 177 of them renderer
+      code. Signature matching and debug strings both proved dead ends there
+      (only ~25 names in strings); cross-module SDK calls are what scales.
+- [x] **The GX surface the game actually uses is known: 44 functions** of the
+      SDK's ~200 — `config/gx-surface-used.txt`. This is the phase 3 scope.
+- [ ] Name the 266 unnamed DOL functions the REL calls directly. Each is an SDK
+      entry point the engine demonstrably uses; these are the highest-value
+      naming targets left.
+- [ ] Name engine functions in the REL itself. Ghidra work, the long tail.
 - [ ] Recover engine function boundaries with `dtk` and Ghidra + the Gekko spec.
       Engine functions are mapped by address only; that is sufficient.
 - [ ] **Decompile, in Ghidra, whatever signature matching misses.** An SDK
@@ -205,6 +213,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       single fixed host layout, so the host renderer sees exactly one format.
 - [ ] **FIFO command parser** — games write raw FIFO commands, not just API
       calls.
+- [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine
+      calls `GXSetTevIndirect`, `GXSetIndTexMtx`, `GXSetIndTexOrder`,
+      `GXSetIndTexCoordScale` and `GXSetNumIndStages`. The design document
+      lists this among the edge cases that overrun phase 3. Plan for it rather
+      than discovering it.
 - [ ] **TEV shader generator** — up to 16 stages, per-stage input selection,
       bias, scale, clamp, indirect texturing, alpha compare. One fragment
       shader per unique configuration, cached by hash; expect a few hundred to

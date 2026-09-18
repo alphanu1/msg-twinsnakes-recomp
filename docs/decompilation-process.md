@@ -25,7 +25,9 @@ flowchart TD
     B -->|dtk signature match| E["501 symbols<br/>origin: dtk-sig"]
     B -->|dtk split: 18,485 functions| E
     E -->|ordered run alignment<br/>vs doldecomp/mkdd| F["+350 symbols, GX 13 to 93<br/>origin: mkdd-align"]
-    F -->|Ghidra, Gekko spec| G["engine boundaries in the REL<br/>origin: ghidra"]
+    F -->|dtk split| G2["16,667 REL function boundaries"]
+    G2 -->|classify by SDK calls| G3["177 renderer functions<br/>44 GX functions used"]
+    G3 -->|Ghidra, Gekko spec| G["engine names<br/>origin: ghidra"]
     G --> H["config/symbols/<br/>the symbol map"]
     H -->|DolRecomp| I["generated C<br/>build artefact, never committed"]
     I -->|clang| J["native binary"]
@@ -187,9 +189,86 @@ is copied — only names, and only where our own binary's function sizes
 independently confirm the match. `tools/align-symbols.py` is our own code and
 is committed, so the derivation can be re-run and checked.
 
-## Stage 6 — Recover the engine · **PLANNED**
+## Stage 6 — Recover the engine · **IN PROGRESS**
 
-**In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, origin `ghidra`.
+**In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.
+
+### 6a. Function boundaries · **DONE**
+
+```sh
+dtk dol config -o build/phase0/config.yml \
+    discs/GGSPA4/disc1/sys/main.dol \
+    discs/GGSPA4/disc1/files/shared/mgso_pal.rel
+dtk dol split build/phase0/config.yml build/phase0/out
+```
+
+**18,485 functions** — 1,818 in the DOL, **16,667 in the REL**.
+
+### 6b. Naming: what does not work, and why · **DONE (negative result)**
+
+**Signature matching cannot help and never will.** The REL is Konami's MGS2
+engine as built for this game; it appears in no other binary, so there is
+nothing to match against. `dtk` finds exactly three symbols in it — `_prolog`,
+`_epilog`, `_unresolved`.
+
+**Debug strings barely help either.** The engine does leave some assert strings
+that name their own function (`... :: NewPutBreakObject`), but there are only
+**about 25** of them and **8 source filenames**. Worth harvesting; not a
+strategy. Recording this as a negative result so it is not re-attempted.
+
+### 6c. Classify by SDK usage · **DONE**
+
+What *does* scale: the REL calls into the DOL's SDK by cross-module relocation,
+and the DOL is now 851 named symbols. A function that calls `GXSetTevOp` is
+renderer code whatever it is called.
+
+```sh
+tools/classify-rel.py \
+    --asm build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --out build/phase0/rel-areas.txt
+```
+
+```
+REL functions calling named SDK      221
+distinct SDK functions called         80
+
+engine functions by area:
+  renderer         177
+  os/threads        32
+  file i/o           6
+  input              3
+  video              3
+```
+
+This assigns **no names** — it is a map of where to look, which is the
+expensive part of reading 16,667 functions.
+
+### 6d. The GX surface, and what it implies · **DONE**
+
+The same pass answers a question phase 3 depends on: **which GX functions does
+this game actually call?** [`config/gx-surface-used.txt`](../config/gx-surface-used.txt)
+is the answer — **44 functions**, against the SDK's ~200. That is the renderer's
+scope.
+
+**It also confirms the design document's biggest phase-3 risk is real.** The
+document lists indirect texturing among the GX edge cases that "take far longer
+than planned". The game calls `GXSetTevIndirect`, `GXSetIndTexMtx`,
+`GXSetIndTexOrder`, `GXSetIndTexCoordScale` and `GXSetNumIndStages` — **indirect
+texturing is used, not hypothetical**. Fourteen `GXSetTev*` calls indicate the
+TEV configuration space is used broadly, including `GXSetTevSwapModeTable`,
+`GXSetTevKColor` and `GXSetTevColorS10`.
+
+**Known incompleteness:** this covers direct calls only. `GXCallDisplayList` and
+raw FIFO writes bypass the API, so the FIFO command parser is still required.
+The Dolphin SDK-call log (stage 9's harness) will confirm the remainder.
+
+### 6e. Next: name the entry points the engine actually uses · **PLANNED**
+
+Of **336 DOL functions called directly from the REL**, 70 are named and **266
+are not**. Those 266 are the highest-value naming targets in the project: each
+is an SDK entry point the engine demonstrably uses. Routes are the Dolphin
+SDK-call log and Ghidra:
 
 ```sh
 tools/ghidra.sh <project-dir> twinsnakes \
@@ -197,21 +276,11 @@ tools/ghidra.sh <project-dir> twinsnakes \
     -processor "PowerPC:BE:32:Gekko_Broadway"
 ```
 
-**Signature matching cannot help here and never will.** The REL is Konami's
-MGS2 engine as built for this game: it appears in no other binary, so there are
-no signatures to match. `dtk` finds exactly three symbols in it — `_prolog`,
-`_epilog`, `_unresolved`. This stage is our own analysis, and it is the bulk of
-phase 0.
-
 Use `PowerPC:BE:32:Gekko_Broadway`, not `PowerPC:BE:32:default` — the stock
 variant mis-decodes the paired-single instructions.
 
-Anchors that make the work tractable: `OSReport` format strings name their own
-functions, every SDK call site named in stage 4 or 5 labels its caller, and the
-engine leaves source filenames in the binary (`libgv_cnf.c`, `brk_potato.c`,
-`gcn_dgd.c`).
-
-**Provenance:** our own analysis, in Ghidra, of the user's own binary.
+**Provenance:** our own analysis, with our own tools, of the user's own binary.
+`tools/classify-rel.py` is committed so every claim here can be re-derived.
 
 ## Stage 7 — Translate to C · **PLANNED**
 

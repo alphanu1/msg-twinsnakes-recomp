@@ -1,0 +1,61 @@
+# The GX surface this game actually uses
+#
+# Every GX function called directly from the engine (mgso_pal.rel), recovered
+# by tools/classify-rel.py from the REL's cross-module calls into the DOL.
+#
+# THIS IS THE PHASE 3 SPECIFICATION. The SDK's GX is ~200 functions; the
+# renderer only has to implement what the game calls. This list is that scope.
+#
+# Incomplete in one known way: it covers direct calls only. Display lists
+# (GXCallDisplayList) and raw FIFO writes bypass the API, so the renderer
+# still needs the FIFO command parser the design document calls for. The
+# Dolphin SDK-call log will confirm the rest.
+#
+# Regenerate:
+#   tools/classify-rel.py --asm build/phase0/out/mgso_pal/asm/*_text.s \
+#       --symbols config/symbols/main.dol.symbols.txt --out build/phase0/rel-areas.txt
+#
+GXBegin
+GXEnableTexOffsets
+GXFlush
+GXGetTexObjFmt
+GXInitTlutObj
+GXInvalidateTexAll
+GXInvalidateVtxCache
+GXLoadTexObj
+GXLoadTlut
+GXSetAlphaCompare
+GXSetAlphaUpdate
+GXSetArray
+GXSetBlendMode
+GXSetColorUpdate
+GXSetCullMode
+GXSetDither
+GXSetFog
+GXSetIndTexCoordScale
+GXSetIndTexMtx
+GXSetIndTexOrder
+GXSetLineWidth
+GXSetMisc
+GXSetNumIndStages
+GXSetNumTevStages
+GXSetNumTexGens
+GXSetPixelFmt
+GXSetPointSize
+GXSetTevAlphaIn
+GXSetTevAlphaOp
+GXSetTevColor
+GXSetTevColorIn
+GXSetTevColorOp
+GXSetTevColorS10
+GXSetTevDirect
+GXSetTevIndirect
+GXSetTevKColor
+GXSetTevKColorSel
+GXSetTevOp
+GXSetTevOrder
+GXSetTevSwapMode
+GXSetTevSwapModeTable
+GXSetTexCoordGen2
+GXSetZCompLoc
+GXSetZMode
