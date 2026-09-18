@@ -1,0 +1,247 @@
+# Milestones
+
+Ordered to answer one question as early and as cheaply as possible:
+
+> **Is the recompiled CPU code correct?**
+
+Everything is sequenced so that question is answered before a single line of our
+own SDK shim can be blamed for anything. `twin-snakes-native-port-design.md` is
+the analysis; this is the order of work. The study sets the *content*, this sets
+the *order*. Both are checked.
+
+**Updated on every commit.** A phase moves when its exit criterion is met, not
+when the work feels done.
+
+---
+
+## Status, 2026-09-18
+
+**Phase 0, in progress — toolchain complete and verified.** `extern/` holds all
+ten upstreams pinned in `deps.lock` (git-ignored). Ghidra + GameCubeLoader,
+Dolphin, `dtk` 1.8.4 and DolRecomp (LLVM 20 backend, 33/33 tests) are all
+installed and tested. No symbols and no disc dump yet.
+
+**The only remaining blocker is a disc dump** (CleanRip on a Wii; PC drives
+cannot read GameCube discs). Every tool is installed — see `THIRD_PARTY.md`.
+
+**The licence question is settled: GPL-3.0.** Dolphin's texture decoder and TEV
+shader generator are lifted rather than reimplemented, which takes months off
+phase 3.
+
+| Phase | Goal | Exit criterion | Estimate | State |
+|---|---|---|---|---|
+| 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — toolchain ready, awaiting a disc |
+| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | blocked on 0 |
+| 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | blocked on 1 |
+| 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
+| 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
+| 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 4 |
+| 6 | Port features | Public release | ongoing | blocked on 5 |
+
+---
+
+## Why this order
+
+**Phase 1 is deliberately throwaway.** Running under the Dolphin-derived
+ModernGekko/RecompCore runtime first proves the recompiled CPU code is correct
+*before* our own shims exist to be blamed. Skipping it means every phase-2 bug
+has two possible causes instead of one.
+
+The differential harness built for phase 1 — diff `OSReport` logs and
+guest-memory snapshots at fixed frame counts, Dolphin against the port — stays
+useful for the rest of the project and is the main debugging tool in phases 3
+and 4. Build it properly.
+
+**Audio is last of the core work** because the game runs silently. **GX is the
+project**, and it is the row with the widest error bars.
+
+---
+
+## Phase 0 — Ground truth and symbols
+
+*Exit: a symbol map covering every SDK entry point the game calls, plus function
+boundaries for the engine code.*
+
+The absence of a public decomp is the main cost of the whole approach, and it is
+paid here. The recompiler needs function boundaries and SDK symbols — nothing
+more.
+
+- [x] **Fetch the toolchain.** `tools/bootstrap.sh --all` — ten upstreams into
+      `extern/`, pinned in `deps.lock`, licences recorded in `THIRD_PARTY.md`.
+- [x] **Ghidra** — 12.1.3 flatpak, already installed, bundles its own JDK.
+      Driven through `tools/ghidra.sh`.
+- [x] **GameCubeLoader extension built and installed**, against Ghidra 12.1.3
+      exactly. It supplies both the DOL/REL/ISO loader *and*
+      `PowerPC:BE:32:Gekko_Broadway` — stock Ghidra has no Gekko variant and
+      mis-decodes paired-singles. Do not also install the standalone language
+      (F3).
+- [x] **Dolphin installed** (flatpak) with `dolphin-tool` for headless
+      extraction and hashing. `tools/dolphin.sh`.
+- [x] **DolRecomp built** with the LLVM 20 backend, 33/33 tests passing (F5).
+- [x] **`dtk` 1.8.4 built.**
+
+
+- [ ] Dump both discs (CleanRip on a Wii; PC drives cannot read GameCube discs).
+      Record the hashes into `config/GGSEA4.toml`.
+- [ ] Extract `sys/main.dol` from both discs, any `.rel` files, and the FST —
+      `tools/dolphin.sh tool extract`.
+- [ ] Identify the SDK build from `main.dol` strings — the version string is the
+      key that unlocks signature matching.
+- [ ] Signature-match the ~400 public SDK functions against other games' decomps
+      (decomp.dev). The same SDK build appears in many titles whose decomps *do*
+      name these.
+- [ ] Recover engine function boundaries with `dtk` and Ghidra + the Gekko spec.
+      Engine functions are mapped by address only; that is sufficient.
+- [ ] **Decompile, in Ghidra, whatever signature matching misses.** An SDK
+      function only matches if the same build appears in a decomp we have; for
+      the rest, read the pseudo-C and recognise it by behaviour. The same tool
+      resolves jump tables and tells code from data. Targeted decompilation is
+      cheap and in scope — it is a *matching* decomp of the whole binary that
+      is not. See the design doc, "Where Ghidra's decompiler earns its place".
+- [ ] Run the game in Dolphin and log every SDK call for the first 60 seconds.
+      This log is the specification for what phase 2 must implement.
+
+**Open questions from the design doc that phase 0 answers:**
+
+- Single `main.dol` or REL overlays, and approximate function count.
+- Whether the engine calls the Nintendo SDK directly or wraps it.
+- Which disc-change path the game uses (`DVDGetCurrentDiskID`, cover polling) —
+  this determines the virtual two-disc mount.
+- Stock AX or custom DSP microcode. This is the difference between "medium" and
+  "high" on the whole of phase 4. If it is custom there is no signature
+  database for it, and reading it in Ghidra is the only route.
+- Any Bink/THP use for logos or the intro.
+- The CARD enumeration surface, since Psycho Mantis reads *other games'* saves.
+- Whether game logic is frame-locked at 30 fps — decides whether phase 6's 60
+  fps is possible at all.
+
+---
+
+## Phase 1 — Boot in ModernGekko
+
+*Exit: title screen renders through recompiled CPU code with no interpreter
+fallback hits on the boot path.*
+
+- [ ] Run DolRecomp over both `main.dol` files.
+- [ ] Build under the ModernGekko/RecompCore template, Dolphin providing GX,
+      audio and HLE.
+- [ ] Log every interpreter-fallback hit. The boot path must reach zero; the
+      list of everything else is the phase-2 and phase-3 backlog.
+- [ ] Stand up the differential harness: `OSReport` diff and guest-memory
+      checksums at fixed frames, Dolphin vs. port. When it reports a
+      divergence, decompile the *caller* and read what it does with the value —
+      usually faster than instrumenting the shim.
+
+---
+
+## Phase 2 — Native OS + DVD + PAD, headless
+
+*Exit: the game runs its main loop headless, reads assets, responds to input,
+and its `OSReport` output matches Dolphin's.*
+
+Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
+
+- [ ] **OS** — fiber/ucontext scheduler running exactly one guest thread at a
+      time, arena allocator over guest memory, monotonic clock scaled to the
+      40.5 MHz timebase, alarms driven from the frame loop, REL loader with
+      relocation. *The high-risk item: threading semantics must be exact.*
+- [ ] **DVD** — FST lookup, `DVDReadAsync` on a worker thread with callbacks
+      fired on the guest thread. `.iso`/`.gcm` direct, `.rvz` decoded,
+      extracted folder for development. `.nkit` refused.
+- [ ] **Virtual two-disc mount** — mount both images at startup; when the game
+      polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
+      the SDK's expected timing.
+- [ ] **VI** — stubs, plus the frame loop.
+- [ ] **PAD** — SDL3 gamepad, GC layout, analog triggers and C-stick semantics.
+- [ ] GX calls log and discard.
+
+---
+
+## Phase 3 — GX renderer
+
+*Exit: the title screen, the Dock and the Heliport render correctly at native
+resolution, compared frame-by-frame against Dolphin screenshots.*
+
+This is the project. ~200 functions and the widest error bars in the plan.
+
+- [ ] **Vertex converter** — one converter turning any GX vertex stream
+      (direct/8-bit/16-bit indexed, s8/s16/f32 with fractional shift) into a
+      single fixed host layout, so the host renderer sees exactly one format.
+- [ ] **FIFO command parser** — games write raw FIFO commands, not just API
+      calls.
+- [ ] **TEV shader generator** — up to 16 stages, per-stage input selection,
+      bias, scale, clamp, indirect texturing, alpha compare. One fragment
+      shader per unique configuration, cached by hash; expect a few hundred to
+      a few thousand. **Now that the port is GPL-3, lift Dolphin's
+      `PixelShaderGen.cpp` rather than reimplementing it** — record the source
+      commit in `THIRD_PARTY.md`.
+- [ ] **Texture decoder** — I4, I8, IA4, IA8, RGB565, RGB5A3, RGBA8, CMPR.
+      Also a Dolphin lift under GPL-3.
+- [ ] **EFB copy emulation** and display lists via `GXCallDisplayList`.
+- [ ] **Vulkan backend** through the platform layer.
+- [ ] Maintain a list of unsupported GX features, gated by game screen. Phase 3
+      targets the first playable area only — indirect texturing, EFB
+      peek/poke, Z-textures and bump mapping are where this phase overruns.
+
+---
+
+## Phase 4 — Audio
+
+*Exit: music, codec calls and SFX match Dolphin's output within tolerance.*
+
+- [ ] AX voice mixer, `AXRegisterCallback` at 5 ms, mix at 32 kHz into SDL3.
+- [ ] DSP-ADPCM / AFC and PCM decoders, per-voice sample-rate conversion.
+- [ ] ARAM as a second 16 MB host buffer; DMA is a memcpy plus completion.
+- [ ] Disc streaming for voice-over and music.
+
+Cost here depends entirely on the phase-0 answer about custom microcode.
+
+---
+
+## Phase 5 — Saves and completeness
+
+*Exit: the game is completable start to finish on both platforms.*
+
+- [ ] CARD emulation over a per-user save directory, keeping the 8 KB block
+      format so saves stay Dolphin-compatible.
+- [ ] The Psycho Mantis save-file scan — the runtime must expose a *directory*
+      of save files, not just the game's own.
+- [ ] Disc-2 swap exercised in the real story flow.
+- [ ] Every remaining SDK stub replaced with a real implementation.
+- [ ] Memory-leak and thread audit.
+- [ ] Replay-based regression suite: recorded Dolphin inputs, guest-memory
+      checksums at fixed frames.
+
+---
+
+## Phase 6 — Port features
+
+*Exit: public release.*
+
+- [ ] Widescreen — needs game-side patches in `patches/` for culling frustum
+      and UI, the first legitimate use of a hand-written function replacement.
+      This work starts in Ghidra's decompiler view: the replacement cannot be
+      written without understanding the function it replaces. The pseudo-C
+      stays out of the repository; the replacement written from it is our own
+      code and is committed.
+- [ ] 60 fps, *if* phase 0 found the logic is not frame-locked.
+- [ ] Resolution scaling, keyboard and mouse.
+- [ ] Launcher with ISO picker and hash check.
+- [ ] Packaging: portable zip on Windows; AppImage or Flatpak on Linux, with
+      Steam Deck as a first-class target.
+
+---
+
+## Decisions still open
+
+These are from the design doc and are not milestones — but each one changes the
+shape of a phase, so none should be discovered late:
+
+- [x] **Settled 2026-09-18: GPL-3.0**, reusing Dolphin's texture decoder and
+      shader generator. Months off phase 3.
+- [ ] Vulkan-only, or SDL3 GPU for one code path at the cost of GX expressiveness?
+- [ ] Is Steam Deck a launch target? Changes phase 6 packaging and controller work.
+- [ ] Contribute the runtime back as a shared GameCube runtime, or keep it Twin
+      Snakes-specific? Shared is more work up front and more valuable.
+- [ ] How public is the project, given Konami's ownership of the game code and
+      Nintendo's of the SDK and platform?

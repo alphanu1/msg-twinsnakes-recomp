@@ -63,6 +63,49 @@ Tools by stage:
 | Build | CMake + Ninja, vcpkg or system packages on Linux | One tree, both platforms |
 | Reference | Dolphin source (GPL) for exact hardware semantics; libogc headers for the public GX/OS API shapes | Read for behaviour, do not copy code unless you accept GPL for the whole port |
 
+### Where Ghidra's decompiler earns its place
+
+"Matching decompilation is out of scope" is a statement about the *whole binary*
+— recovering C that recompiles byte-exactly, for every function, is what would
+take years. It is not a statement about reading code. Targeted decompilation of
+individual functions in Ghidra is cheap, and it should be used freely wherever
+it removes guesswork. Four places pay for themselves:
+
+1. **Phase 0, the functions signature matching misses.** A byte signature only
+   finds an SDK function if the same build appears in a decomp we have. For the
+   rest, read the pseudo-C and recognise the function by what it does — an
+   allocator, a list insert, a DMA kick. This is also how code is told from
+   data, and how jump tables are resolved into the entries the function table
+   needs.
+2. **Phases 2–4, diagnosing a shim.** Because the game's logic is unchanged,
+   every divergence from Dolphin localises to a shim — but localising it to a
+   shim is not the same as knowing what the game expected. When the port
+   diverges at a fixed frame, decompile the *caller* and read what it does with
+   the return value. That is usually faster than instrumenting the shim.
+3. **Phase 6, port features.** A `patches/` replacement cannot be written
+   without understanding the function it replaces. Widening the culling frustum
+   for widescreen starts in the decompiler view, not in the generated C.
+4. **Custom DSP microcode**, if phase 0 finds any. There is no signature
+   database for a game-specific ucode; reading it is the only route.
+
+Anchors that make the pseudo-C readable: `OSReport` format strings name their
+own functions, the paired-single instructions mark out the maths, and every
+identified SDK call site labels its caller by what it is doing.
+
+Its limits are worth knowing before relying on it. Paired-single and other
+Gekko-specific instructions decompile poorly or not at all, so the maths is
+usually clearer in the disassembly. Ghidra recovers no struct layouts on its
+own — those are inferred by hand from access patterns, and once inferred they
+are *our* naming and belong in `config/symbols/` where the next person gets
+them for free.
+
+**The discipline is unchanged: the decompiler's output is for humans.** It is
+never compiled into the port, and it is never committed — it is derived
+directly from the game's code, which rule 8 keeps out of the repository. A
+`patches/` replacement written *from* that understanding is our own code and is
+committed; the pseudo-C it was read from is not, and neither are notes that
+quote it. Record what a function *does*, not what Ghidra printed.
+
 The DolRecomp discord and the [Recompendium catalog](https://nio03.github.io/unricopie/en/) are where the active GameCube work is coordinated; check both before building anything the ww or Wiicompiled authors have already solved.
 
 ## Architecture
@@ -214,12 +257,12 @@ The biggest technical risk is the GX renderer; the biggest project risk is a tak
 - The repository contains only your own code, the recompiler configuration and symbol names. No DOL, no generated C, no assets, no extracted textures, no screenshots with copyrighted art in the README if you want to be conservative.
 - The user supplies their own disc image; the build hashes it and refuses anything else.
 - Symbol names and struct layouts from a decomp project are the community's own naming and are considered fine; verbatim SDK source (leaked Dolphin SDK) must never be referenced or included. Use libogc's headers for API shapes, or write your own from the decomp's headers.
-- If you copy from Dolphin the whole port becomes GPL-2.0-or-later; if you want a permissive licence, read Dolphin for semantics and write your own implementation.
+- If you copy from Dolphin the whole port becomes GPL-2.0-or-later. **This project has accepted that: the port is GPL-3.0** (see the settled question below), so Dolphin's texture decoder and `PixelShaderGen.cpp` are lifted directly, with the source commit recorded in `THIRD_PARTY.md`. The rule that remains is unchanged and is not about licences: no game code or assets, ever.
 - Nintendo's position on this category is hostile; that is why a native runtime, not a Dolphin fork, is also the safer legal shape. A GitHub takedown of a Nintendo-title recomp is a plausible outcome regardless of how careful you are.
 
 **Open questions to settle before phase 0:**
 
-- [ ] Permissive (MIT) runtime written from scratch, or GPL and freely reuse Dolphin's texture decoder and shader generator? The GPL route is months faster on the renderer.
+- [x] **Settled, 2026-09-18: GPL-3.0.** The port is GPL-3, and Dolphin's texture decoder and TEV shader generator are reused rather than reimplemented. This takes months off phase 3, the longest phase in the plan. It also makes RecompCore's interpreter fallback and ModernGekko's runtime liftable rather than reference-only, and it costs nothing that was wanted: DolRecomp is already GPL-3, and permissive redistribution was never a goal.
 - [ ] Vulkan-only, or SDL3 GPU for one code path across Vulkan/D3D12/Metal at the cost of some GX features being harder to express?
 - [ ] Is a Steam Deck build a launch target? It changes the packaging and controller work in phase 6.
 - [ ] Do you want to contribute the runtime back as a shared GameCube runtime (the way N64ModernRuntime works for N64Recomp), or keep it Twin Snakes-specific? Shared is more work up front and more valuable.

@@ -1,0 +1,92 @@
+# ---- Local working notes — never committed ----
+CLAUDE.md
+
+# ---- Vendored / fetched dependencies ----
+# extern/ holds DolRecomp, SDL3, volk, VMA, spdlog and anything else pulled in
+# from upstream. These are separate git repositories with their own history and
+# their own licences; they are fetched or submoduled, never vendored into this
+# repository's history.
+extern/
+third_party/
+vendor/
+
+# ---- Editor / OS ----
+# .vscode/ IS TRACKED and is deliberately absent from this file. It carries the
+# reasoning for why the vendored git repositories under extern/ are hidden from
+# Source Control, and the git.ignoredRepositories list that does the hiding.
+# That list is shared project configuration, not personal state.
+.idea/
+*.swp
+*~
+.DS_Store
+
+# ---- Game code and assets — LEGAL, not tidiness ----
+# Nothing derived from the disc enters this repository. The user supplies their
+# own images; the build hashes them and refuses anything else. No DOL, no REL,
+# no generated C, no extracted assets or textures.
+*.iso
+*.gcm
+*.rvz
+*.nkit
+*.nkit.iso
+*.dol
+*.rel
+*.thp
+*.dsp
+*.adp
+*.brstm
+*.gcz
+*.ciso
+discs/
+assets/
+extracted/
+
+# ---- Recompiler output ----
+# DolRecomp emits 50-150 MB of C per DOL into build/generated/. It is a build
+# artefact, regenerated from the user's own disc every build, and never edited.
+build/
+generated/
+
+# ---- Symbol / analysis working files ----
+# The recovered symbol map under config/symbols/ IS committed — it is our own
+# naming work. Ghidra project state is not.
+*.gpr
+*.rep/
+ghidra_*/
+*.gzf
+
+# ---- Native build output ----
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+compile_commands.json
+install_manifest.txt
+*.o
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.lib
+.ninja_deps
+.ninja_log
+build.ninja
+rules.ninja
+
+# ---- Shader / runtime caches and logs ----
+shadercache/
+*.spv
+*.log
+osreport-*.txt
+frames/
+saves/
+memcard/
+
+# ---- Python bytecode from tools/ ----
+__pycache__/
+*.pyc

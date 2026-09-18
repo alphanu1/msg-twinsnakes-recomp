@@ -1,0 +1,71 @@
+{
+  // Every dependency under extern/ is its own git repository. VS Code
+  // auto-detects each nested .git and lists them all in Source Control, which
+  // is worse than noise: the panel silently switches which repo it is showing,
+  // so an upstream project's commits appear under this workspace and read as
+  // contamination when nothing has crossed over.
+  //
+  //   extern/DolRecomp              PowerPC-to-C recompiler. Build-time tool.
+  //   extern/decomp-toolkit         dtk: function boundaries, DOL/REL. Phase 0.
+  //   extern/ghidra-gekko-broadway-lang   Gekko processor spec for Ghidra.
+  //   extern/Ghidra-GameCube-Loader       DOL/REL/ISO loader for Ghidra.
+  //   extern/VulkanMemoryAllocator  MIT, linked into the renderer.
+  //
+  // Reference-only clones (read for behaviour; copying any of the GPL ones
+  // makes the whole port GPL -- see THIRD_PARTY.md and project rule 10):
+  //
+  //   extern/dolphin                the oracle for hardware semantics. GPL.
+  //                                 Sparse checkout, 17 MB not ~1 GB.
+  //   extern/ModernGekko-Template   phase 1 host. GPL, never shipped.
+  //   extern/RecompCore             interpreter-fallback design. GPL. 102 MB.
+  //   extern/libogc                 public GX/OS API shapes. BSD-style.
+  //   extern/ww                     native Wind Waker port. MIT.
+  //
+  // ALWAYS UPDATE THIS LIST, AND files.watcherExclude BELOW, IN THE SAME
+  // CHANGE THAT ADDS A REPOSITORY TO deps.lock. A missing entry is not a
+  // cosmetic problem -- it is how a commit lands in the wrong repository.
+  //
+  // Listed explicitly rather than using git.autoRepositoryDetection, because
+  // reading Dolphin's PixelShaderGen.cpp and libogc's headers is routine work
+  // during phases 2 and 3, and the "openEditors" mode would re-activate the
+  // repo the moment those files are opened.
+  "git.ignoredRepositories": [
+    "extern/DolRecomp",
+    "extern/ModernGekko-Template",
+    "extern/decomp-toolkit",
+    "extern/ghidra-gekko-broadway-lang",
+    "extern/Ghidra-GameCube-Loader",
+    "extern/VulkanMemoryAllocator",
+    "extern/libogc",
+    "extern/dolphin",
+    "extern/ww",
+    "extern/RecompCore"
+  ],
+
+  // Keep the file watcher off vendored source, its history, and the
+  // recompiler's output — build/generated/ alone is 50-150 MB of C per DOL and
+  // is rewritten on every build.
+  //
+  // Deliberately NOT added to search.exclude: Dolphin is the oracle for GX and
+  // paired-single semantics, and grepping it is a daily activity.
+  "files.watcherExclude": {
+    "**/extern/**": true,
+    "**/build/**": true,
+    "**/generated/**": true,
+    "**/cmake-build-*/**": true,
+    "**/shadercache/**": true
+  },
+
+  // The generated C is machine output and must never be reformatted or
+  // hand-edited (project rules, standing engineering rules).
+  "files.readonlyInclude": {
+    "build/generated/**": true
+  },
+
+  "[c]": { "editor.insertSpaces": true, "editor.tabSize": 4 },
+  "[cpp]": { "editor.insertSpaces": true, "editor.tabSize": 4 },
+  "[cmake]": { "editor.insertSpaces": true, "editor.tabSize": 2 },
+  "[toml]": { "editor.insertSpaces": true, "editor.tabSize": 2 },
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true
+}

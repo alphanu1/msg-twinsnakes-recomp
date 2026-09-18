@@ -1,0 +1,20 @@
+# Pinned upstream dependencies. tools/bootstrap.sh reads this file.
+#
+# Nothing here is vendored into the repository — extern/ is git-ignored (see
+# project rule 4). This file IS committed: it is the record of exactly what
+# was fetched, so a clone of this repo reproduces the same tree.
+#
+# Update a pin deliberately, in its own commit, saying what moved and why.
+# THIRD_PARTY.md carries the licence position for each entry.
+#
+# name                        commit                                    url                                                          mode     group
+DolRecomp                     71ce7f97419b1bb1ba9a9596c41507f6629e0fb0  https://github.com/ExpansionPak/DolRecomp                         full     core
+ModernGekko-Template          c2553a99584b2045dbe46a70e1570994dae8beef  https://github.com/ExpansionPak/ModernGekko-Template              full     core
+decomp-toolkit                0645e16511814920ffb05b25615dd71f1af73e4c  https://github.com/encounter/decomp-toolkit                       full     core
+ghidra-gekko-broadway-lang    48228fb828dfb6bbec93d250c6f7b78db6d91aa1  https://github.com/aldelaro5/ghidra-gekko-broadway-lang           full     core
+Ghidra-GameCube-Loader        921504c9ddba6e8d9b3655b665a60f1a33306220  https://github.com/Cuyler36/Ghidra-GameCube-Loader                full     core
+VulkanMemoryAllocator         3aa921224c154a0d2c43912bc88e1c42ce1f7607  https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator  full     core
+libogc                        49b62a0dc6c8915229c4f40f04b2a18ce30aea82  https://github.com/devkitPro/libogc                               full     reference
+dolphin                       ee018d00e60b9eb727489908a8daec5c537f44a8  https://github.com/dolphin-emu/dolphin                            sparse   reference
+ww                            b9fcecd24ee25c75d18c6bcba18a10f449c5b68a  https://github.com/sp00nznet/ww                                   full     reference
+RecompCore                    283baee01e54b6c3f71e441bb78fc77b260512fa  https://github.com/aharonahdoot/RecompCore                        full     reference
