@@ -6,7 +6,7 @@ a commit message is lost.
 
 ---
 
-## STATE, 2026-09-18: DISCS EXTRACTED, SDK IDENTIFIED, TARGET IS PAL
+## STATE, 2026-09-18: 501 SYMBOLS RECOVERED, STRUCTURE UNDERSTOOD
 
 The repository holds the design document, the project configuration, and a
 pinned dependency set. `extern/` has all ten upstreams (146 MB, git-ignored).
@@ -295,6 +295,51 @@ risk in the current setup: it stays unverified until someone with a
 redump-clean dump confirms `main.dol` SHA-1
 `124bca49886033df5053d3be1f8748a218ddf60f`. If it ever fails to match, every
 address recovered before that point is suspect.
+
+**F9 — the DOL/REL split *is* the translated/native boundary, and that is the
+most useful thing phase 0 has produced.**
+
+| | `.text` | Share | Contents |
+|---|---|---|---|
+| `main.dol` | 380 KB | **7.9%** | Nintendo SDK, CodeWarrior runtime, Metrowerks TRK debugger |
+| `mgso_pal.rel` | 4.3 MB | **92.1%** | The entire game engine |
+
+The REL contains **no copy of the SDK** — no `Dolphin SDK` build strings, no
+`GX*` symbol strings — so it calls into the DOL by relocation. The DOL is
+therefore very nearly *the thing being replaced natively* and the REL very
+nearly *the thing being translated*. DolRecomp's real work is the REL; the patch
+table maps DOL addresses.
+
+`dtk` recovered **501 symbols** from the DOL by signature matching against the
+SDK `0x2301` build — OS 87, TRK 79, CodeWarrior runtime 78, DVD 21, PPC 20, GX
+17, EXI 13, SI 7. Saved with addresses and sizes to
+`config/symbols/main.dol.symbols.txt`.
+
+**The gap that matters: only 17 GX functions were named, and the SDK's GX is
+~200.** The rest are in the DOL and unnamed. That is the largest hole in the
+symbol map and it blocks phase 3. The phase-0 Dolphin SDK-call log is probably
+the fastest way to close it — a logged call with a known caller identifies its
+callee.
+
+**F10 — the engine is Konami's, not Silicon Knights'.** The design document said
+"Silicon Knights' own (shared lineage with Eternal Darkness)". The REL says
+otherwise: `MGS2MAIN`, `libgv_cnf.c`, `.kms` model lookups, `data.cnf`,
+`gcn_dgd.c`, `GCN_prim2.c`, `gcn_spheremap.c`. Silicon Knights built the game on
+**Konami's MGS2 engine**. This is better for us than the original assumption —
+`libgv` and the `.kms` format have prior art in the MGS modding community,
+whereas the Eternal Darkness engine has none. The SDK-boundary argument is
+unaffected.
+
+**And 95 MB of MPEG video.** `files/shared/movie.dat` carries MPEG pack,
+sequence and GOP start codes, decoded by the game's own `mpegGCN.c`. The
+document asked "any Bink or THP?" and the answer is neither. **This is new work
+the plan did not carry**: the runtime needs an MPEG decode and presentation
+path. Cheap in absolute terms — the game decodes in software, as with Vorbis —
+but it is not in any phase's checklist yet.
+
+Disc layout for reference: `demo.dat` 426 MB, `stage.dat` 199 MB,
+`shared/vox.dat` 97 MB, `shared/movie.dat` 95 MB, `shared/codec.dat` 12 MB,
+`shared/face.dat` 7 MB.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

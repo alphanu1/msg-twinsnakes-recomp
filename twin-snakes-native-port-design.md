@@ -12,7 +12,7 @@ Why this is the right shape for Twin Snakes specifically:
 
 - Twin Snakes has no public decompilation, so a matching decomp would start from zero symbols and take years. Static recompilation needs function boundaries and SDK symbols only, which can be recovered from the DOL in weeks. (Confirmed in practice: the SDK build was identified within minutes of the first extraction.)
 - The Gekko is an in-order 32-bit PowerPC with no self-modifying code in retail titles, the ideal input for static translation, and [DolRecomp](https://github.com/ExpansionPak/DolRecomp) already handles it.
-- The engine is Silicon Knights' own (shared lineage with Eternal Darkness) sitting on the standard Nintendo SDK, so the translated/native boundary can be drawn at the SDK's public API, which is the same for every GameCube game.
+- **The engine is Konami's MGS2 engine, not Silicon Knights' own** (corrected 2026-09-18 — the REL carries `MGS2MAIN`, `libgv_cnf.c`, `.kms` model references and `data.cnf` lookups). Silicon Knights built the game on Konami's technology rather than the Eternal Darkness engine. This is *better* for the port than the original assumption: MGS2's `libgv` and the `.kms` model format are documented by the MGS modding community, so the asset side has prior art. The SDK-boundary argument is unaffected — it sits on the standard Nintendo SDK either way.
 
 The finished port has three parts: generated code from both discs' executables, a runtime library that implements the GameCube SDK natively, and a loader that reads assets from the user's own disc images.
 
@@ -26,7 +26,7 @@ What is known and what phase 0 must establish:
 
 | Property | Known | To verify in phase 0 |
 | --- | --- | --- |
-| Developer / engine | Silicon Knights, in-house engine descended from Eternal Darkness; published by Konami, 2004 | Whether the engine uses Nintendo's standard SDK libraries directly or wraps them; SDK version string in `main.dol` |
+| Developer / engine | Silicon Knights, building on **Konami's MGS2 engine** (`libgv`, `.kms` models, `data.cnf`); published by Konami, 2004 | **Answered: the SDK is used directly and lives entirely in `main.dol`** — the REL contains no SDK copy and calls in by relocation |
 | Discs | Two discs; the game prompts for a swap mid-story | Which SDK disc-change path it uses (`DVDGetCurrentDiskID`, cover-status polling) so the runtime can present disc 2 without a physical swap |
 | Decomp status | No public decompilation or symbol map exists | Function boundaries and SDK symbols must be recovered by signature matching against known SDK builds (Ghidra with the Gekko spec plus dtk's analyser) |
 | **SDK build** | **Answered: Dolphin SDK `0x2301`**, newest component 2003-08-06, Metrowerks CodeWarrior. Components AI, AR, ARQ, AX, CARD, DSP, DVD, EXI, GX, OS, PAD, SI, VI | Done — this is the key for signature matching |
@@ -34,7 +34,7 @@ What is known and what phase 0 must establish:
 | **Both discs' executables** | **Answered: byte-identical.** `main.dol`, the REL and the apploader have the same SHA-1 on both discs; only the asset filesystem differs | Done |
 
 | Audio | Voice-over and music streamed from disc; Dolby Pro Logic II output | **Answered: stock AX, no custom microcode** — the SDK's own AX build string is present. **The stream codec is Ogg Vorbis (Tremor), not DSP-ADPCM**: `floor0.c`, `floor1.c`, `codebook.c`, `mapping0.c`, `res012.c`, `sharedbook.c`, `framing.c` are all in the DOL, alongside the engine's `sd_ogg.c`, `sd_stream2.c`, `sd_sound.c` |
-| Video | Cutscenes are real-time in-engine, not pre-rendered | Any use of Bink or THP for logos or the intro |
+| Video | Cutscenes are real-time in-engine | **Answered: there is also 95 MB of MPEG video** in `files/shared/movie.dat` (pack, sequence and GOP start codes present), decoded by the game's own `mpegGCN.c`. Not Bink, not THP. The runtime needs an MPEG decoder and a presentation path |
 | Memory card | Psycho Mantis reads other games' save files (Eternal Darkness, Wind Waker, Sunshine, Melee) | CARD enumeration API surface used; the runtime must expose a directory of save files, not just the game's own |
 | Frame rate | 30 fps, 480p and progressive-scan supported | Whether game logic is frame-locked at 30 |
 
@@ -131,6 +131,21 @@ flowchart TD
 ```
 
 The generated code layer is the whole game translated mechanically: every function becomes `void fn_80xxxxxx(PPCContext* ctx, uint8_t* mem)`. Indirect calls go through a function table keyed by guest address, which is also how REL overlays and the patch table plug in.
+
+**The translated/native boundary falls almost exactly on the file boundary.**
+This was measured in phase 0 and it is the most useful structural fact about the
+game:
+
+| | `.text` | Share of all code | Contents |
+| --- | --- | --- | --- |
+| `main.dol` | 380 KB | **7.9%** | Nintendo SDK, CodeWarrior runtime, Metrowerks TRK debugger. Almost no game code |
+| `mgso_pal.rel` | 4.3 MB | **92.1%** | The entire game engine. No SDK copy — it calls into the DOL by relocation |
+
+So the DOL is very nearly *the thing being replaced* and the REL is very nearly
+*the thing being translated*. The patch table maps DOL addresses to native
+implementations; DolRecomp's real work is the REL. This is a far cleaner split
+than the design assumed, and it means the 400-function SDK surface is a
+self-contained 380 KB rather than something tangled through the game.
 
 **Guest memory model.** Allocate one 24 MB block for MEM1 at a fixed host address and keep every guest pointer as a 32-bit offset into it. All loads and stores byte-swap, because the Gekko is big-endian and both targets are little-endian. Structures the SDK shims read from guest memory (GX display lists, OS threads, file info blocks) are read through explicit swap accessors, never cast.
 

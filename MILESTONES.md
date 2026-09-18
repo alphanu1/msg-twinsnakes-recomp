@@ -16,7 +16,7 @@ when the work feels done.
 
 ## Status, 2026-09-18
 
-**Phase 0, in progress — discs extracted, SDK identified.** The toolchain is
+**Phase 0, in progress — 501 symbols recovered, structure understood.** The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -94,9 +94,19 @@ more.
 - [x] **SDK identified: Dolphin SDK `0x2301`**, newest component 2003-08-06,
       Metrowerks CodeWarrior. All thirteen component build strings are recorded
       in `config/GGSPA4.toml`. This is the key for signature matching.
-- [ ] Signature-match the ~400 public SDK functions against other games' decomps
-      (decomp.dev). The same SDK build appears in many titles whose decomps *do*
-      name these.
+- [x] **501 symbols recovered** by `dtk` signature matching — OS (87), the
+      Metrowerks TRK debugger (79), CodeWarrior runtime (78), DVD (21), PPC
+      (20), GX (17), EXI (13), SI (7). Saved to
+      `config/symbols/main.dol.symbols.txt` with addresses and sizes.
+- [x] **The DOL/REL split is the translated/native boundary.** `main.dol` is
+      7.9% of the code and is almost entirely SDK + runtime + debugger; the REL
+      is 92.1% and is the whole engine, with no SDK copy. See F9.
+- [ ] Name the remaining GX surface. Only 17 GX functions matched by signature
+      but the SDK's GX is ~200 — the rest are in the DOL and unnamed. This is
+      the largest remaining gap in the symbol map and it blocks phase 3.
+- [ ] Recover engine function boundaries in `mgso_pal.rel` — 4.3 MB, and `dtk`
+      found only `_prolog`, `_epilog` and `_unresolved` there, as expected for
+      game-specific code with no signatures.
 - [ ] Recover engine function boundaries with `dtk` and Ghidra + the Gekko spec.
       Engine functions are mapped by address only; that is sufficient.
 - [ ] **Decompile, in Ghidra, whatever signature matching misses.** An SDK
@@ -106,7 +116,9 @@ more.
       cheap and in scope — it is a *matching* decomp of the whole binary that
       is not. See the design doc, "Where Ghidra's decompiler earns its place".
 - [ ] Run the game in Dolphin and log every SDK call for the first 60 seconds.
-      This log is the specification for what phase 2 must implement.
+      This log is the specification for what phase 2 must implement, and it is
+      now also the fastest way to name the unmatched GX functions: a logged call
+      with a known caller identifies the callee.
 
 **Open questions from the design doc that phase 0 answers:**
 
@@ -114,14 +126,17 @@ more.
   — most of the game's code is in the overlay, and both must be recompiled.
   The engine has its own `rel_loader.c`. *Remaining: function count, and whether
   `rel_loader.c` wraps `OSLink` or replaces it.*
-- Whether the engine calls the Nintendo SDK directly or wraps it.
+- [x] **Directly.** The SDK lives entirely in `main.dol`; the REL holds no
+  copy and calls in by relocation.
 - Which disc-change path the game uses (`DVDGetCurrentDiskID`, cover polling) —
   this determines the virtual two-disc mount.
 - [x] **Stock AX, no custom microcode** — phase 4 takes the cheaper branch.
 - [x] **The stream codec is Ogg Vorbis (Tremor), not DSP-ADPCM.** The game
   decodes it in software, so the translated code may simply run as-is rather
   than needing a native decoder.
-- Any Bink/THP use for logos or the intro.
+- [x] **Neither — it is MPEG.** 95 MB in `files/shared/movie.dat`, decoded by
+  the game's own `mpegGCN.c`. The runtime needs an MPEG decoder and a
+  presentation path; that is new work the plan did not carry.
 - The CARD enumeration surface, since Psycho Mantis reads *other games'* saves.
 - Whether game logic is frame-locked at 30 fps — decides whether phase 6's 60
   fps is possible at all.
