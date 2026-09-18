@@ -990,5 +990,47 @@ implementations, so this is the patch-table mechanism arriving early.
 the REL bridge compiles against the REL's header, exports `mgs_rel_call`, and
 resolves to the REL's `func_*` chunk symbols. The interfaces fit.
 
+**F32 — the module descriptor now covers both modules.**
+`game/module/gen_combined_tables.py` produces `module_tables.inc` over
+`main.dol` *and* `mgso_pal.rel`, where upstream's `gen_module_tables.py` reads
+one DOL.
+
+```
+3 code ranges (2 DOL + 1 REL), 161 smc ranges, 303 chunk ranges (hashed)
+```
+
+The REL's coverage is `0x805000EC .. 0x809564EC`, and chunk counts line up
+exactly with what was compiled: **25 DOL + 278 REL = 303**, with 303 hashes.
+
+**Validated against upstream rather than assumed:** our DOL tables are
+identical to the ones `gen_module_tables.py` emits for the same input — 144
+entries either way. So the generator is a faithful extension, not a
+reimplementation that happens to run.
+
+*Two things I got wrong first, both worth recording:*
+
+- **Chunk ranges are not code ranges.** They are one per generated
+  `func_XXXXXXXX` translation unit, each running to the next. My first version
+  reused the code ranges and produced **3** chunks instead of 303. That is not
+  cosmetic: **a chunk is the SMC demotion granule**, so a single patched
+  instruction retires its whole chunk to the interpreter. Three chunks would
+  have meant one patch anywhere demoting a third of the game — and it would
+  still have run, just slowly, which is the kind of bug that hides.
+- **`generated_smc.txt` already contains ranges**, `0xSTART-0xEND` with an
+  inclusive end. I was scraping individual addresses and re-coalescing them,
+  which gave 168 ranges where the correct parse gives 161.
+
+*Why hashes cannot simply be concatenated from two runs:* each chunk's hash is
+FNV-1a-64 over the **original bytes** at that address, so every range has to be
+read from the file it came from. The REL maps by simple subtraction from
+`0x80500000` — DolRecomp preserves file offsets, which the entry point
+confirms: `.text` at file offset `0xEC`, entry reported at base + `0xEC`.
+
+*The module target* links both static libraries under
+`--whole-archive` — chunk functions are reached only through the dispatch
+tables, never by direct reference, so a normal static link would discard every
+one of them — plus the router, behind upstream's unmodified `module_export.c`
+and version script.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -53,3 +53,45 @@ add_library(mgs_dispatch OBJECT dispatch.c)
 target_include_directories(mgs_dispatch PRIVATE
   "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(mgs_dispatch PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# --- the loadable module ----------------------------------------------------
+# ModernGekko dlopen()s this and calls staticrecomp_get_module(). The export
+# glue is upstream's module_export.c, unmodified: it builds the descriptor from
+# module_tables.inc, which we generate for BOTH modules rather than just the
+# DOL.
+set(MODULE_TEMPLATE "${GXRUNTIME_DIR}/../module-template" CACHE PATH "upstream module-template")
+set(CHASSIS_ABI_DIR "${GXRUNTIME_DIR}/../Source/Core/Core/PowerPC/StaticRecomp" CACHE PATH "")
+set(DOL_FILE "" CACHE FILEPATH "main.dol, for chunk hashes")
+set(REL_FILE "" CACHE FILEPATH "mgso_pal.rel, for chunk hashes")
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(TABLES "${CMAKE_CURRENT_BINARY_DIR}/module_tables.inc")
+add_custom_command(
+  OUTPUT "${TABLES}"
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/gen_combined_tables.py"
+          --dol-generated "${DOL_GENERATED}" --dol "${DOL_FILE}"
+          --rel-generated "${REL_GENERATED}" --rel "${REL_FILE}"
+          --out "${TABLES}"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gen_combined_tables.py"
+          "${DOL_GENERATED}/generated.h" "${REL_GENERATED}/generated.h"
+  COMMENT "Generating module tables for main.dol + mgso_pal.rel")
+add_custom_target(mgs_tables DEPENDS "${TABLES}")
+
+add_library(mgs_module SHARED "${MODULE_TEMPLATE}/module_export.c")
+add_dependencies(mgs_module mgs_tables)
+target_include_directories(mgs_module PRIVATE
+  "${CMAKE_CURRENT_BINARY_DIR}"      # module_tables.inc, ours not upstream's
+  "${DOL_GENERATED}"                 # module_export.c includes generated.h
+  "${GXRUNTIME_DIR}/include" "${CHASSIS_ABI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(mgs_module PRIVATE
+  DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="GGSPA4")
+
+# --whole-archive: the chunk functions are only ever reached through the
+# dispatch tables, never by a direct reference, so a normal static link would
+# drop every one of them as unused.
+target_link_libraries(mgs_module PRIVATE
+  -Wl,--whole-archive mgs_dol_code mgs_rel_code -Wl,--no-whole-archive
+  $<TARGET_OBJECTS:mgs_dispatch>)
+set_target_properties(mgs_module PROPERTIES
+  OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
+  LINK_FLAGS "-Wl,--version-script=${MODULE_TEMPLATE}/module.exports")
