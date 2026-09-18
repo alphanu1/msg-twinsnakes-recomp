@@ -9,7 +9,8 @@ add_library(mgs_runtime STATIC
   os/os_time.c
   os/os_thread.c
   os/patch_table.c
-  platform/jobs.c)
+  platform/jobs.c
+  dvd/fst.c)
 
 target_include_directories(mgs_runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"

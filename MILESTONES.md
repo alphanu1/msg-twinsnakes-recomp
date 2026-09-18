@@ -234,8 +234,10 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       count, leaving one for the guest thread. This is where multi-core is
       available: guest threads cannot be parallelised (F39/F40), the runtime's
       own work can.
-- [ ] **DVD** — FST lookup, `DVDReadAsync` on a worker thread with callbacks
-      fired on the guest thread. `.iso`/`.gcm` direct, `.rvz` decoded,
+- [x] **FST parsing and path lookup** — validated against the real 1,653-entry
+      disc FST, which independently recovers the REL's recorded size (F41).
+- [ ] **DVD** — `DVDOpen`/`DVDReadAsync` over the FST, reads on the worker
+      pool, callbacks fired on the guest thread. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.
 - [ ] **Virtual two-disc mount** — mount both images at startup; when the game
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on

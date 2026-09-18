@@ -9,3 +9,8 @@ add_test(NAME os_thread COMMAND test_os_thread)
 add_executable(test_jobs test_jobs.c)
 target_link_libraries(test_jobs PRIVATE mgs_runtime)
 add_test(NAME jobs COMMAND test_jobs)
+
+add_executable(test_fst test_fst.c)
+target_link_libraries(test_fst PRIVATE mgs_runtime)
+# Run from the repo root so the test can find an extracted disc if one exists.
+add_test(NAME fst COMMAND test_fst WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

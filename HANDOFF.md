@@ -1331,5 +1331,35 @@ guest thread, not on whichever host thread finished the read.
 decode and shader compilation (a few hundred to a few thousand shaders, by the
 design document's estimate), phase 4's audio mixing.
 
+**F41 — FST parsing, and a bug that only nesting exposed.**
+`runtime/dvd/` parses the disc filesystem table and resolves paths. The format
+has two traps, both taken:
+
+- **The name offset is 24-bit**, packed into the same word as the type byte.
+  Reading that word as a `be32` folds the type in and puts the name megabytes
+  away.
+- **Directories are ranges, not links.** A directory at index *i* owns entries
+  *i+1 .. next-1*, so a lookup scans the current directory's range and skips a
+  nested directory by jumping to its own `next` rather than descending. That is
+  also what stops a file inside a directory being visible at the top level.
+
+*The bug worth recording:* `name_eq` compared the entry name against the path
+segment and then checked that **the path** ended there, rather than that **the
+entry name** did. For a top-level file the path really does end at the segment,
+so every top-level lookup passed — `demo.dat`, `stage.dat` — and every nested
+one failed. A fixture with only flat files would have shown nothing.
+
+**Validated against the real disc, not just a fixture.** The test loads
+`discs/GGSPA4/disc1/sys/fst.bin` when a disc is extracted: **1,653 entries**,
+and `shared/mgso_pal.rel` resolves to offset `0x3DCCE870`, length **`0x578CF4`**
+— *exactly* the 5,737,716 bytes `config/GGSPA4.toml` records for the REL,
+recovered here by a completely independent route. 1,653 entries of a 2004 disc
+break parsers that a three-entry fixture will not.
+
+*Design decision taken without asking, and easily revisited:* reads will come
+from an **extracted folder first**, disc images after. The design document
+lists both, an extracted folder is what we have and what it calls the
+development path, and the FST gives the path-to-file mapping either way.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
