@@ -1383,5 +1383,62 @@ Verified against the real disc: mounts as `GGSPA4`, disc number 0, 1,653 FST
 entries, and the REL reads back at its recorded 5,737,716 bytes with the
 module id `1` in its first word.
 
+**F43 — where the user's disc images live, and why not the program folder.**
+`runtime/dvd/disc_locate.c`. The program folder is **supported but last**: the
+images are the user's property and should not be tied to an install that
+updates or is reinstalled under them, and the design document specifies a
+launcher that asks for them and hash-checks them.
+
+Resolution order, most explicit first: command-line argument, `$MGS_DISC1`/
+`$MGS_DISC2`, a remembered path from a previous run, `discs/<id>/discN` (this
+repository's layout), then beside the executable.
+
+*Three deliberate choices:*
+
+- **An explicit path is returned even if it does not exist.** The useful error
+  is "that path did not mount", naming what the user asked for — not silently
+  falling through to something they did not choose.
+- **A remembered path is honoured only if it still exists**, so an image the
+  user has moved does not resolve to a stale location.
+- **Nothing ever searches the filesystem for a disc image.** A port that goes
+  hunting for game data it was not pointed at is doing something the user did
+  not ask for.
+
+The remembered path goes in the user's config directory (XDG), never into the
+install. We write the *path*; the image itself is the user's and is never
+copied or moved.
+
+*Bug found by the tests:* `mkdir` created only the last directory level, so
+remembering a path failed whenever `$XDG_CONFIG_HOME` pointed somewhere whose
+parent did not already exist — precisely the case the feature is for. Now
+creates every missing parent.
+
+**F44 — the phase 3 estimate should probably come down, and the reason is new
+information rather than optimism.**
+
+The design document's 2–4 months for the GX renderer was written under an
+assumption that no longer holds: **a from-scratch, permissively-licensed
+renderer.** Two things have changed since.
+
+- **GPL-3 was accepted**, so Dolphin's `PixelShaderGen.cpp` and texture decoder
+  are *liftable rather than reference-only*. Those are the two hardest parts of
+  phase 3 — TEV semantics and the eight texture formats — and they are the
+  parts the estimate was mostly made of.
+- **The GX surface is measured, not guessed**: 81 functions actually called,
+  against the SDK's ~200. Scope roughly halved.
+
+*What pushes the other way, and should not be forgotten:* the feature set is
+**larger** than the plan assumed — indirect texturing, hardware lighting,
+render-to-texture and palettised textures are all confirmed in use, and display
+lists mean the FIFO parser is required. Lifting Dolphin's code still means
+adapting it to our GX state model and our Vulkan backend rather than dropping
+it in.
+
+*Not revised in the design document yet, deliberately:* an estimate should move
+when there is evidence, and the honest evidence is "two of the largest cost
+drivers were removed and one was added". That argues for less than 2–4 months,
+but the number should come from starting the work rather than from reasoning
+about it.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
