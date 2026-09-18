@@ -285,9 +285,14 @@ which throws in headless mode and fails the run outright.
 
 | | |
 |---|---|
-| functions found by Ghidra | 1,687 |
-| functions found by `dtk` | 1,818 |
-| agreement | **92.8%** |
+| | Ghidra | `dtk` | agreement |
+|---|---|---|---|
+| `main.dol` functions | 1,687 | 1,818 | **92.8%** |
+| `mgso_pal.rel` functions | 16,323 | 16,667 | **97.9%** |
+
+The REL agreement matters most: that is 4.3 MB of code with no symbols, no
+signatures and no prior art, and two analysers sharing no code independently
+resolve it to within 2%.
 
 | | |
 |---|---|

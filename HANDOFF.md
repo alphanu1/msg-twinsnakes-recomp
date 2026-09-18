@@ -481,5 +481,27 @@ Phase 3 should plan for indirect texturing rather than discover it.
 writes bypass the API, so the FIFO parser is still required and the real surface
 is a superset of these 44. The Dolphin SDK-call log will settle it.
 
+**F16 — Ghidra independently corroborates the whole symbol map.** Run via
+`tools/ghidra-analyse.sh`, output in `docs/evidence/`.
+
+| | Ghidra | `dtk` | agreement |
+|---|---|---|---|
+| `main.dol` functions | 1,687 | 1,818 | 92.8% |
+| `mgso_pal.rel` functions | 16,323 | 16,667 | **97.9%** |
+
+Of our 773 named symbols, Ghidra confirms **606 at the same addresses**. The
+167 it does not are all *data* symbols — `__GXData`, `__PADSpec`,
+`__DVDVersion` — which it correctly declines to call functions. So the two
+agree wherever they are describing the same kind of thing.
+
+The REL number is the one that matters: 4.3 MB with no symbols, no signatures
+and no prior art, and two analysers sharing no code land within 2% of each
+other.
+
+*Practical trap:* `-loader-autoloadMaps false` is required. With map autoloading
+on, the GameCube loader opens a GUI "load a symbol map?" dialog mid-import,
+which throws headless and fails the run with a stack trace that does not say
+why.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

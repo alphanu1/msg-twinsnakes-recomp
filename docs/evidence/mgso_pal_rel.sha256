@@ -1,0 +1,4 @@
+# SHA-256 of this analysis run's outputs.
+# Re-run tools/ghidra-analyse.sh and compare to verify.
+1fef55de3a3a522b258055a54a20abca4dd214f4a46bb57fe30d3c813ccc9b1f  discs/GGSPA4/disc1/files/shared/mgso_pal.rel
+55654ee7b2f4213378b02f1e12b3606c8f14aa378ff767e3972be25f2d685033  docs/evidence/mgso_pal_rel.functions.txt
