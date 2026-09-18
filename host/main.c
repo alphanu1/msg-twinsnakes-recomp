@@ -13,10 +13,15 @@
 #include "os/patch_table.h"
 #include "platform/jobs.h"
 #include "module.h"
+#include "platform/sdl_video.h"
+#include <SDL3/SDL.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+
+static void overlay_line(const char* fmt, ...);
 
 static void report_to_stdout(void* user, const char* line)
 {
@@ -25,9 +30,49 @@ static void report_to_stdout(void* user, const char* line)
      * harness diffs these against Dolphin's, so they must not be interleaved
      * with host chatter in a way that a diff would trip over.
      */
+    overlay_line("OSREPORT: %.40s", line);
     fprintf(out, "[OSReport] %s", line);
     if (!*line || line[strlen(line) - 1] != '\n') fputc('\n', out);
     fflush(out);
+}
+
+/* The boot overlay.
+ *
+ * The screen is the only output channel that survives into a shipped build: a
+ * terminal is there now and will not be later, and a boot that fails in front
+ * of a black window tells you nothing. So the window shows real state from the
+ * first frame, and game output replaces it when there is any.
+ */
+#define OVERLAY_LINES 14
+static char s_overlay[OVERLAY_LINES][64];
+static int  s_overlay_used;
+
+static void overlay_line(const char* fmt, ...)
+{
+    va_list ap;
+    if (s_overlay_used >= OVERLAY_LINES) {
+        memmove(s_overlay[0], s_overlay[1], sizeof s_overlay - sizeof s_overlay[0]);
+        --s_overlay_used;
+    }
+    va_start(ap, fmt);
+    vsnprintf(s_overlay[s_overlay_used], sizeof s_overlay[0], fmt, ap);
+    va_end(ap);
+    ++s_overlay_used;
+}
+
+static void overlay_draw(int running)
+{
+    int i;
+    mgs_video_clear(0x00101018u);
+    mgs_video_rect(0, 0, MGS_XFB_WIDTH, 20, 0x00202838u);
+    mgs_video_text(8, 6, 0x00E0E0F0u, "MGS TWIN SNAKES - NATIVE PORT");
+    mgs_video_text(MGS_XFB_WIDTH - 130, 6,
+                   running ? 0x0060E060u : 0x00E06060u,
+                   running ? "RUNNING" : "STOPPED");
+    for (i = 0; i < s_overlay_used; ++i)
+        mgs_video_text(8, 32 + i * 10, 0x00C0C8D0u, s_overlay[i]);
+    mgs_video_rect(0, MGS_XFB_HEIGHT - 16, MGS_XFB_WIDTH, 16, 0x00181C24u);
+    mgs_video_text(8, MGS_XFB_HEIGHT - 12, 0x00808890u, "ESC TO QUIT");
 }
 
 /* The patch table, as the module's dispatch hook sees it. Returns 1 when a
@@ -68,6 +113,7 @@ int main(int argc, char** argv)
     const char* disc2_arg = NULL;
     const char* report_path = NULL;
     const char* module_path = NULL;
+    int headless = 0;
     char path1[1024], path2[1024];
     MgsDiscSource src1, src2;
     MgsDisc disc1, disc2;
@@ -82,6 +128,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--disc2") && i + 1 < argc)  disc2_arg = argv[++i];
         else if (!strcmp(argv[i], "--report") && i + 1 < argc) report_path = argv[++i];
         else if (!strcmp(argv[i], "--module") && i + 1 < argc) module_path = argv[++i];
+        else if (!strcmp(argv[i], "--headless")) headless = 1;
         else { usage(argv[0]); return 2; }
     }
 
@@ -92,6 +139,13 @@ int main(int argc, char** argv)
     }
     printf("guest memory: %u MB MEM1, %u MB ARAM\n",
            GUEST_RAM_SIZE / (1024u*1024u), GUEST_ARAM_SIZE / (1024u*1024u));
+
+    if (!headless && !mgs_video_init("MGS: Twin Snakes")) {
+        fprintf(stderr, "no window (%s); continuing headless\n", "SDL video unavailable");
+        headless = 1;
+    }
+    overlay_line("MEM1 %u MB   ARAM %u MB",
+                 GUEST_RAM_SIZE/(1024u*1024u), GUEST_ARAM_SIZE/(1024u*1024u));
 
     src1 = mgs_disc_locate(1u, disc1_arg, NULL, "GGSPA4", path1, sizeof path1);
     if (src1 == MGS_DISC_SOURCE_NONE) {
@@ -110,6 +164,7 @@ int main(int argc, char** argv)
     printf("disc 1: %s  [%s, disc %u]  via %s\n",
            path1, disc1.game_id, disc1.disc_number + 1u,
            mgs_disc_source_name(src1));
+    overlay_line("DISC 1: %s  (%u FST ENTRIES)", disc1.game_id, disc1.fst.entry_count);
 
     memset(&disc2, 0, sizeof disc2);
     src2 = mgs_disc_locate(2u, disc2_arg, NULL, "GGSPA4", path2, sizeof path2);
@@ -121,6 +176,8 @@ int main(int argc, char** argv)
 
     jobs = mgs_jobs_create(0u);
     printf("worker pool: %u threads\n", mgs_jobs_worker_count(jobs));
+    overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
+    overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));
 
     mgs_dvd_init(&dvd, &disc1, jobs, &rt.mem);
     mgs_disc_set_bind(&rt, &disc1, disc2.mounted ? &disc2 : NULL);
@@ -144,6 +201,7 @@ int main(int argc, char** argv)
         long n = mgs_dvd_read_sync(&dvd, "shared/mgso_pal.rel", 0x80100000u, 0u, 32u);
         printf("self-check: read %ld bytes of the overlay; first word 0x%08X "
                "(its module id)\n", n, guest_read32(&rt.mem, 0x80100000u));
+        overlay_line("DVD SELF-CHECK: %ld BYTES OK", n);
     }
 
     if (!module_path) {
@@ -157,6 +215,8 @@ int main(int argc, char** argv)
         if (!mgs_module_load(&mod, module_path)) {
             fprintf(stderr, "  failed: %s\n", mod.error);
         } else {
+            overlay_line("MODULE: %s  ENTRY 0x%08X", mod.game_id, mod.entry_point);
+            overlay_line("CHUNKS: %u   REL MODULES: %u", mod.chunk_ranges, mod.rel_modules);
             printf("  game id      : %s\n", mod.game_id);
             printf("  entry point  : 0x%08X\n", mod.entry_point);
             printf("  cpu state    : %u bytes\n", mod.cpu_state_size);
@@ -187,6 +247,10 @@ int main(int argc, char** argv)
                                "                 translated SDK will run instead\n");
                     }
 
+                    overlay_line("PATCH TABLE: %s",
+                                 mod.set_patch_hook ? "INSTALLED" : "NOT AVAILABLE");
+                    overlay_line("RUNNING FROM 0x%08X", mod.entry_point);
+                    if (!headless) { overlay_draw(1); mgs_video_present(); }
                     printf("\nrunning from 0x%08X ...\n\n", mod.entry_point);
                     {
                         int handled = mod.dispatch(cpu, mod.entry_point);
@@ -194,6 +258,8 @@ int main(int argc, char** argv)
                                handled, mgs_module_pc(cpu));
                         printf("SDK calls served natively: %lu\n",
                                mgs_host_patched_calls());
+                        overlay_line("STOPPED AT PC 0x%08X", mgs_module_pc(cpu));
+                        overlay_line("SDK CALLS NATIVE: %lu", mgs_host_patched_calls());
                     }
                     mgs_cpu_unbind();
                     free(cpu);
@@ -201,6 +267,14 @@ int main(int argc, char** argv)
             }
             mgs_module_unload(&mod);
         }
+    }
+
+    /* Hold the window open so the result can be read. The boot is over; this
+     * is the only chance to see how it ended. */
+    if (!headless) {
+        overlay_draw(0);
+        while (mgs_video_present()) SDL_Delay(16);
+        mgs_video_shutdown();
     }
 
     if (report != stdout) fclose(report);

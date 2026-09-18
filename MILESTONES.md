@@ -254,7 +254,9 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 - [ ] **Virtual two-disc mount** — mount both images at startup; when the game
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
       the SDK's expected timing.
-- [ ] **VI** — stubs, plus the frame loop.
+- [x] **A window** — SDL3, 640×480 XFB geometry, nearest scaling, with a boot
+      overlay showing real state from the first frame (F52).
+- [ ] **VI** — stubs, plus the frame loop, presenting the XFB the game writes.
 - [x] **PAD mapping** — GC layout, analog triggers with a late digital click,
       C-stick, inverted Y, SDK-clamped stick ranges. Pure layer, tested with
       no hardware present (F49).

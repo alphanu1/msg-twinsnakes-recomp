@@ -1708,5 +1708,34 @@ and `OSInit` completing.
 process is Dolphin-derived: our guest memory, our disc layer, our worker pool,
 our patch table, our CPU seam.
 
+**F52 — there is a window, and it shows real state from the first frame.**
+`runtime/platform/sdl_video.c` plus a boot overlay in the host. On screen now:
+MEM1/ARAM sizes, disc 1 with its 1,653 FST entries, disc 2 mounted, 31 worker
+threads, the DVD self-check, the module's id and entry point, 303 chunks with
+1 REL module, the patch table installed, and where execution stopped.
+
+*Opened early on purpose, and the reasoning is borrowed from the Model 2
+rules:* **the screen is the only output channel that survives into a shipped
+build.** A terminal is available now and will not be later, and a boot that
+fails in front of a black window tells you nothing. So the window presents a
+framebuffer from frame one and shows real state until there is game output to
+replace it.
+
+*Three decisions in the video layer:*
+
+- **The framebuffer is the GameCube's own XFB geometry, 640×480**, and the
+  window scales it. That keeps the eventual GX path honest — whatever the
+  renderer produces lands in exactly this buffer, at exactly this size, rather
+  than in something shaped for convenience now.
+- **Nearest-neighbour scaling, not linear.** This is a 640×480 image on a 4K
+  display and the pixels are the point; smoothing them is a decision for a
+  later upscaling pass, not a default that quietly hides what was drawn.
+- **Hex digits and short labels, not blocks.** Also from the Model 2 rules,
+  and immediately worth it: `STOPPED AT PC 0x8001C174` is actionable where a
+  coloured square is not.
+
+**Nothing Dolphin-derived is in this process.** Our guest memory, disc layer,
+worker pool, patch table, CPU seam, window and font.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
