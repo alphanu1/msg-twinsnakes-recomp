@@ -120,7 +120,31 @@ def main():
     ap.add_argument('--rel', required=True)
     ap.add_argument('--rel-base', default='0x80500000')
     ap.add_argument('--out', required=True)
+    # REL metadata, from `dtk rel info`. Declared rather than re-parsed so the
+    # values in the module are the ones a human checked.
+    ap.add_argument('--rel-module-id', type=int, default=1)
+    ap.add_argument('--rel-version', type=int, default=3)
+    ap.add_argument('--rel-section-count', type=int, default=20)
+    ap.add_argument('--rel-text-index', type=int, default=1)
+    ap.add_argument('--rel-text-off', type=lambda x: int(x, 0), default=0xEC)
+    ap.add_argument('--rel-text-size', type=lambda x: int(x, 0), default=0x456400)
     a = ap.parse_args()
+
+    # Read the REL header rather than trusting flags. The runtime validates
+    # section_info_offset >= 0x40 and file_size >= 0x40, and a hand-passed 0
+    # for the former is rejected as "invalid REL module metadata" - which
+    # names the struct but not the field.
+    hdr = Path(a.rel).read_bytes()[:0x50]
+    be = lambda o: int.from_bytes(hdr[o:o + 4], 'big')
+    a.rel_module_id = be(0x00)
+    a.rel_section_count = be(0x0C)
+    a.rel_section_info_offset = be(0x10)
+    a.rel_version = be(0x1C)
+    a.rel_file_size = Path(a.rel).stat().st_size
+    print(f"REL header: id={a.rel_module_id} version={a.rel_version} "
+          f"sections={a.rel_section_count} "
+          f"section_info_offset=0x{a.rel_section_info_offset:X} "
+          f"file_size=0x{a.rel_file_size:X}")
 
     dol_code, dol_smc, dol_chunks = collect(Path(a.dol_generated), dol_reader(Path(a.dol)))
     rel_code, rel_smc, rel_chunks = collect(
@@ -146,6 +170,23 @@ def main():
         f.write("static const u64 s_chunk_hashes[] = {\n")
         for _, _, h in chunks: f.write(f"    0x{h:016X}u,\n")
         f.write("};\n")
+
+        # REL section table. ONLY executable sections are declared: the
+        # runtime validates that every section's linked_start falls inside a
+        # code range, so declaring .rodata or .data - which have no recompiled
+        # code and therefore no code range - would fail validation outright.
+        f.write("static const ModernGekkoRelSection s_rel_sections[] = {\n")
+        f.write(f"    {{{a.rel_module_id}u, {a.rel_text_index}u, "
+                f"0x{int(a.rel_base,16) + a.rel_text_off:08X}u, "
+                f"0x{a.rel_text_size:08X}u}},\n")
+        f.write("};\n")
+        f.write("static const ModernGekkoRelModule s_rel_modules[] = {\n")
+        f.write(f"    {{{a.rel_module_id}u, {a.rel_version}u, "
+                f"{a.rel_section_count}u, 0x{a.rel_section_info_offset:X}u, "
+                f"0x{a.rel_file_size:08X}u, "
+                f"s_rel_sections, 1u}},\n")
+        f.write("};\n")
+        f.write("#define MODULE_REL_MODULE_COUNT 1u\n")
 
     print(f"{a.out}: {len(code)} code ranges ({len(dol_code)} DOL + {len(rel_code)} REL), "
           f"{len(smc)} smc ranges, {len(chunks)} chunk ranges (hashed)")

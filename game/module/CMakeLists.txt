@@ -82,7 +82,7 @@ add_custom_target(mgs_tables DEPENDS "${TABLES}")
 # path. Omitting them links cleanly and then fails at dlopen with an undefined
 # symbol, because nothing in the module references them directly.
 add_library(mgs_module SHARED
-  "${MODULE_TEMPLATE}/module_export.c"
+  module_export.c          # ours: upstream's, plus the rel_modules fields
   "${GXRUNTIME_DIR}/src/core/cpu.c"
   "${GXRUNTIME_DIR}/src/core/cpu_exception.c"
   "${GXRUNTIME_DIR}/src/core/cpu_interpreter.c"
@@ -91,6 +91,7 @@ add_library(mgs_module SHARED
   "${GXRUNTIME_DIR}/src/core/cpu_interpreter_integer.c")
 add_dependencies(mgs_module mgs_tables)
 target_include_directories(mgs_module PRIVATE
+  "${GXRUNTIME_DIR}/../../../include"    # moderngekko/module_abi.h
   "${CMAKE_CURRENT_BINARY_DIR}"      # module_tables.inc, ours not upstream's
   "${DOL_GENERATED}"                 # module_export.c includes generated.h
   "${GXRUNTIME_DIR}/include" "${CHASSIS_ABI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")

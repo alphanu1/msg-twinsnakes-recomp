@@ -1068,5 +1068,59 @@ immediately, and then let the descriptor be diffed field-by-field against the
 template's. Worth reaching for first next time rather than reading validation
 code.
 
+**F34 — measured where it is stuck, and it is not what I assumed.**
+`game/module/dispatch.c` now keeps an address histogram when
+`MGS_DISPATCH_TRACE` is set; `tools/trace-report.py` resolves it against the
+symbol map. One traced run answered what several rounds of reasoning had not:
+
+```
+dispatched=187,948,404   rel=0   dol=187,948,404   unclaimed=0
+
+0x8001B640  155,459,478  82.7%  PPCHalt +0x4
+0x8001FCCC    3,102,225   1.7%  OSDisableInterrupts
+0x8001FCF4    3,102,218   1.7%  OSRestoreInterrupts
+0x8002342C    3,004,915   1.6%  SelectThread +0x104
+...                             OSYieldThread, OSSaveContext, OSLoadContext
+```
+
+**The REL is never executed — `rel=0` across 188 million dispatches** — and
+`unclaimed=0` means the game never jumps outside the DOL at all. It is sitting
+in the idle loop: halt, yield, reschedule, halt. A thread is waiting for work
+that never completes.
+
+So this was never a dispatch problem. The router is correct and simply never
+consulted for a REL address.
+
+**F35 — ModernGekko never loads a REL. It only hashes one.**
+Every use of `metadata.main_rel` is a SHA-256 for identity and netplay
+compatibility. Nothing maps it, relocates it or dispatches into it, and nothing
+in the runtime reads `rel_modules` beyond validating it. **The `_Main.rel`
+symlink was a red herring**, and so was populating `rel_modules`: both are
+accepted and then ignored.
+
+*The architectural problem underneath, now established rather than suspected:*
+the game loads its own REL from disc through `rel_loader_LoadRel` → `OSLink`,
+into guest RAM at **whatever address its allocator returns**. DolRecomp emitted
+our recompiled REL at `REL_AUTO_BASE` `0x805000EC`, which is **synthetic** — a
+convenience base, not where the overlay actually lives at runtime. Those two
+addresses will never coincide by luck.
+
+**What phase 1 actually needs, and it is more than wiring:**
+
+1. Hook `OSLink` (or `rel_loader_LoadRel` at `0x800066F8`, which we named) to
+   learn the **real** base address the game linked the overlay at.
+2. Translate in the router: `guest_addr` → `0x805000EC + (guest_addr - real_base)`.
+3. Only then does REL dispatch resolve.
+
+*What was nonetheless gained, and it is not nothing:* the module builds, loads
+and validates with both modules in it; the descriptor is correct;
+`native=147M, fallback=0` says the translated DOL code runs natively with no
+interpreter cost; and the dispatch trace is now a permanent instrument for
+answering "where is it" in one run instead of by argument.
+
+*The lesson worth keeping:* I reasoned about the REL path for several rounds
+before measuring it. The histogram took twenty minutes to build and settled it
+immediately. **Instrument first.**
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
