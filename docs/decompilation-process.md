@@ -201,6 +201,79 @@ is copied — only names, and only where our own binary's function sizes
 independently confirm the match. `tools/align-symbols.py` is our own code and
 is committed, so the derivation can be re-run and checked.
 
+## Stage 5b — Match inline-assembly bodies · **DONE**
+
+**In:** our disassembly + `doldecomp/dolsdk2004` sources.
+**Out:** 3 symbols, origin `sdk2004-asm`.
+
+Parts of the SDK — the paired-single maths especially — are written as **inline
+assembly** rather than C. That makes them the strongest signature available:
+the compiler emits those instructions verbatim, so the machine code is identical
+across SDK revisions, link orders and games. Unlike stage 5, this needs no
+anchors and no assumptions about what either binary links.
+
+```sh
+tools/match-sdk-asm.py \
+    --sdk extern/dolsdk2004/src/mtx/*.c \
+          extern/dolsdk2004/src/gx/GXTransform.c \
+          extern/dolsdk2004/src/gx/GXLight.c \
+          extern/dolsdk2004/src/base/PPCArch.c \
+    --asm build/phase0/out/asm/auto_01_800055E0_text.s
+```
+
+A match requires the **full opcode sequence, in order, same length**. A prefix
+match is not a match.
+
+```
+SDK inline-asm signatures     31
+our functions               1806
+exact full-sequence matches    3
+ambiguous signature (skip)     2
+non-unique body (refused)      4
+```
+
+**The refusals are the important part.** Four of our functions matched, but in
+pairs: two matched `PSQUATAdd`, two matched `PSQUATSubtract`. A 4-float add is a
+4-float add — the SDK contains distinct functions with identical instruction
+sequences, so matching one name to two addresses proves the sequence does *not*
+identify the function. The tool refuses both rather than pick one.
+
+Those four are the *hottest* unnamed functions in the binary — `0x80025800`
+alone has **913 call sites**. Naming them on a 50/50 guess would have been the
+single most damaging error available. They stay unnamed until something
+disambiguates them.
+
+Accepted, each verified instruction-for-instruction against the SDK source:
+`PSVECSquareMag`, `PSQUATDotProduct`, `PSVECSquareDistance`.
+
+**Provenance:** the name comes from a public clean-room decompilation; the
+confirmation that it belongs at that address comes from our own binary.
+
+## How complete is this?
+
+"Percent decompiled" has no single honest answer for a recompilation, because
+we are not producing matching source. Four different numbers, and the last one
+is the one that governs the work:
+
+| Measure | | |
+|---|---|---|
+| **1. Functions named** | 717 / 18,485 | **3.9%** |
+| — `main.dol` | 717 / 1,818 | 39.4% |
+| — `mgso_pal.rel` | 0 / 16,667 | 0% |
+| **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
+| **3. SDK entry points the engine calls, named** | 99 / 336 | **29.5%** |
+| — weighted by call sites | 1,882 / 7,078 | **26.6%** |
+| **4. GX surface known to be used** | 69 functions | the renderer's scope |
+
+**Why 3.9% is the least useful number here.** The engine is translated
+mechanically — DolRecomp does not care what a function is called. Names in the
+REL buy debugging and hand-written patches, not correctness, which is why 0%
+there is not a blocker. What the runtime must replace is the **SDK boundary**,
+and that is measure 3.
+
+**Measure 2 is the one that unblocks the build.** The recompiler consumes
+function boundaries, and those are complete for both modules.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

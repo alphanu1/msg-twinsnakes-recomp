@@ -14,6 +14,10 @@
 #   dtk-sig     decomp-toolkit signature match against the SDK 0x2301 build
 #   mkdd-align  ordered run alignment against doldecomp/mkdd's symbol map
 #   sdk2004     name confirmed against doldecomp/dolsdk2004 sources
+#   sdk2004-asm full inline-assembly body matched against dolsdk2004 - the
+#               strongest signature there is: the compiler emits those
+#               instructions verbatim, so they are identical across SDK
+#               revisions, link orders and games
 #   ghidra      recovered by our own analysis in Ghidra
 #   own         named by our own reasoning about behaviour
 #
@@ -542,6 +546,9 @@
 .text 0x80024600 0x10 __DBExceptionDestination dtk-sig
 .text 0x80024610 0x1C __DBIsExceptionMarked dtk-sig
 .text 0x8002462C 0x50 DBPrintf dtk-sig
+.text 0x800256CC 0x18 PSVECSquareMag sdk2004-asm
+.text 0x80025728 0x20 PSQUATDotProduct sdk2004-asm
+.text 0x80025784 0x28 PSVECSquareDistance sdk2004-asm
 .text 0x80025ABC 0x40 __DVDInitWA dtk-sig
 .text 0x80025AFC 0x2E0 __DVDInterruptHandler dtk-sig
 .text 0x80025DDC 0x84 AlarmHandler mkdd-align

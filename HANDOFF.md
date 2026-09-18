@@ -601,5 +601,46 @@ features are now confirmed in use rather than assumed:
 With indirect texturing already confirmed (F15), phase 3's feature set is now
 measured rather than estimated, and it is larger than the plan assumed.
 
+**F20 — inline-assembly matching, and the four names worth not guessing.**
+Parts of the SDK are written as inline asm, so the compiler emits them verbatim
+and the machine code is identical across SDK revisions, link orders and games.
+`tools/match-sdk-asm.py` matches full opcode sequences against `dolsdk2004`,
+needing no anchors at all — a completely independent technique from stage 5.
+
+It produced **3** names, and **refused 4**. The refusals matter more. Four of
+our functions matched, in pairs: two matched `PSQUATAdd`, two matched
+`PSQUATSubtract`. A 4-float add is a 4-float add, so a name matching two
+addresses proves the sequence does not identify the function.
+
+Those four are the **hottest unnamed functions in the binary** — `0x80025800`
+alone has **913 call sites**, `0x80025824` has 687. Naming them on a coin-flip
+would have been the most damaging single error available, and it would have
+looked like progress. They stay unnamed until something disambiguates them.
+
+Accepted, each verified instruction-for-instruction against SDK source:
+`PSVECSquareMag`, `PSQUATDotProduct`, `PSVECSquareDistance`.
+
+**F21 — how complete phase 0 is, stated four ways.** "Percent decompiled" has
+no single honest answer here, because this is a recompilation and we are not
+producing matching source.
+
+| Measure | | |
+|---|---|---|
+| Functions named | 717 / 18,485 | **3.9%** |
+| Function boundaries recovered | 18,485 / 18,485 | **100%** |
+| SDK entry points the engine calls, named | 99 / 336 | **29.5%** |
+| — weighted by call sites | 1,882 / 7,078 | 26.6% |
+
+**3.9% is the least useful of these.** The engine is translated mechanically;
+DolRecomp does not care what a function is called. Names in the REL buy
+debugging and hand-written patches, not correctness — which is why 0% named
+there is not a blocker and should not be treated as one.
+
+**100% boundaries is what unblocks the build**, since boundaries are what the
+recompiler consumes.
+
+**29.5% of the SDK boundary is the real progress number**, and the honest read
+is that phase 0 is roughly a third done by the measure that matters.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
