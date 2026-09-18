@@ -1290,5 +1290,46 @@ selection policy is testable without it and is where the subtle bugs live;
 fibers or `ucontext` come next, and the policy being already pinned means a
 switching bug cannot be mistaken for a scheduling one.
 
+**F40 — multi-core, aimed at the half of the work that can take it.**
+There are two kinds of concurrency here and only one is available.
+
+**Guest threads cannot go parallel.** Not a performance trade: the game
+assumes every sequence between two yield points is atomic, because that is
+what a cooperative single-core scheduler guarantees. Parallelising them breaks
+an assumption already baked into the game's code, and no locking in the
+runtime can restore it. The failure mode is rare corruption, not a crash
+(F39).
+
+**The runtime's own work can, and there is a lot of it.** The design document
+already names audio callback, file prefetch and GPU submission. Add the two
+that dominate phase 3 — **texture decoding and shader compilation** — both
+pure functions over independent inputs.
+
+`runtime/platform/jobs.c` is the pool. On this machine: **32 hardware threads,
+31 workers, 31-way measured peak concurrency.**
+
+*Three decisions worth keeping:*
+
+- **One core is left to the guest thread**, deliberately. It is the critical
+  path, it cannot be parallelised, and starving it to run background work is a
+  net loss however many cores are spare.
+- **A refused submission returns 0 rather than failing**, so a caller always
+  has the option of running the job inline. That keeps the single-core path
+  and the many-core path the same code, instead of two paths where only one
+  gets exercised.
+- **`wait()` means finished, not dequeued.** Workers signal completion only
+  when the queue is empty *and* nothing is in flight, so a waiter cannot wake
+  early and read results that are still being written. Tested.
+
+**The rule that makes it safe: a job never touches guest memory.** It works on
+host buffers, and results reach the guest through a queue the guest thread
+drains at a point it chose. That is the same discipline the DVD shim needs
+regardless — the SDK's contract is that a `DVDReadAsync` callback runs on the
+guest thread, not on whichever host thread finished the read.
+
+*Where this pays off, in order:* phase 2's file prefetch, phase 3's texture
+decode and shader compilation (a few hundred to a few thousand shaders, by the
+design document's estimate), phase 4's audio mixing.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

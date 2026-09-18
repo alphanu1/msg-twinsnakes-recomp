@@ -8,11 +8,15 @@ add_library(mgs_runtime STATIC
   os/os_report.c
   os/os_time.c
   os/os_thread.c
-  os/patch_table.c)
+  os/patch_table.c
+  platform/jobs.c)
 
 target_include_directories(mgs_runtime PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/os")
+
+find_package(Threads REQUIRED)
+target_link_libraries(mgs_runtime PUBLIC Threads::Threads)
 
 set_target_properties(mgs_runtime PROPERTIES
   C_STANDARD 11 POSITION_INDEPENDENT_CODE ON)
