@@ -24,6 +24,7 @@ else()
 endif()
 
 add_subdirectory(runtime)
+add_subdirectory(host)
 
 # game/ holds game-specific glue: the module dispatch router, and later the
 # asset paths and REL list. Built separately for now, since it needs DolRecomp

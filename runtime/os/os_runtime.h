@@ -51,5 +51,12 @@ uint32_t    mgs_guest_gpr(const MgsRuntime* rt, unsigned index);
 void        mgs_set_guest_gpr(MgsRuntime* rt, unsigned index, uint32_t value);
 
 void mgs_os_report_sink(MgsRuntime* rt, const char* line);
+void mgs_sched_init(MgsRuntime* rt);
+
+/* The CPU seam. See cpu_seam.c: bound to a loaded module's register file, or
+ * free-standing so the runtime can be run and tested without one. */
+void mgs_cpu_bind_registers(uint32_t* gpr_array);
+void mgs_cpu_unbind(void);
+void mgs_runtime_set_current(MgsRuntime* rt);
 
 #endif

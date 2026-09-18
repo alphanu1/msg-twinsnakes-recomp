@@ -87,6 +87,15 @@ typedef struct MgsDvd {
 
 void mgs_dvd_init(MgsDvd* dvd, MgsDisc* disc, MgsJobPool* jobs, GuestMemory* mem);
 
+/* Bind the shims to a runtime and a mounted disc set. Declared here so the
+ * host does not have to reach into individual translation units. */
+struct MgsRuntime;
+void mgs_dvd_bind(struct MgsRuntime* rt, MgsDvd* dvd);
+void mgs_disc_set_bind(struct MgsRuntime* rt, MgsDisc* disc1, MgsDisc* disc2);
+unsigned mgs_disc_set_current(void);
+int mgs_disc_set_select(unsigned index);
+MgsDisc* mgs_disc_set_active(void);
+
 /* Queue a read. Returns the request, or NULL if the table is full - the
  * caller then reports failure to the guest rather than blocking, because
  * blocking here would stall the only thread allowed to run.

@@ -8,6 +8,7 @@ add_library(mgs_runtime STATIC
   os/os_report.c
   os/os_time.c
   os/os_thread.c
+  os/cpu_seam.c
   os/patch_table.c
   platform/jobs.c
   dvd/fst.c
