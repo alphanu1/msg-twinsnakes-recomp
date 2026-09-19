@@ -621,11 +621,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       of the truncated text** (F146): nothing samples what those copies write,
       and the text's own texture is fully populated. Still worth implementing
       on its own merits.
-- [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
-      million times in a long run. The probe does resolve — EXT is clear, so
-      `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own
-      idle behaviour rather than a stall, but it is worth confirming the card
-      layer is not waiting on something.
+- [x] **The boot's end is a prompt, not a wall** (F149). It reaches the game's
+      "No Memory Card" warning and cannot leave it: **3** serial-interface
+      reads in a whole boot, so PAD found no controller and stopped polling,
+      and nothing can press Retry or Continue. The port is doing exactly what
+      a console with no card and no controller would do.
+- [ ] **Report a controller (PAD over SDL3), then a memory card.** Both Low
+      difficulty in the design document's SDK table. Until one exists, that
+      warning screen is the end of the boot — and everything downstream,
+      including the opening video, is never reached rather than broken.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F148**. The two worth reading first are
+Findings from this session are **F90-F149**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,11 +166,15 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The memory card probe (F136).** The load has finished (disc reads stop
-   at 271) and the engine renders continuously, but it polls EXI channel 0
-   and 1 status 2.65 million times — both card slots. Nothing models the EXT
-   "device present" bit. Make the absence of a card *answerable*; inventing a
-   card is probably the wrong fix, since the game must handle an empty slot.
+1. **Report a controller, then a memory card (F149).** The boot ends at the
+   "No Memory Card" warning and **cannot leave it**: only **3**
+   serial-interface reads happen in a whole boot, so PAD found no controller
+   and stopped polling, and nothing can press Retry or Continue. Everything
+   downstream — the opening video included — is simply never reached, which
+   supersedes F136's reading of that screen as an idle wall. Both are Low
+   difficulty in the design document's SDK table (PAD: SDL3 gamepad; CARD:
+   files in a save directory; EXI/SI: stubs that return success). The
+   controller is the smaller job and unblocks every menu, not just this one.
 2. **Watch `0x7F50068C` — the font's `GXTexObj` (F141).** A static global in
    the overlay's `.bss` holding `0x941A8036`. The address it carries (55.6 MB)
    is beyond anything a GameCube has, which is the shape of an unrelocated
@@ -5184,6 +5188,50 @@ whether it is gated on something the runtime reports wrongly — a capability
 check, a region or hardware test, or a state the memory-card path sets. The
 boot reaching the card screen at all suggests the video was skipped rather
 than attempted and failed.
+
+---
+
+**F149 — the boot is not stuck, it is waiting for hardware we do not
+provide.** F148 asked why the opening video is never requested. The answer is
+that the boot never gets past the screen before it, and it cannot, because
+**nothing is listening for a button**:
+
+```
+serial interface (controller) reads: 3
+```
+
+**Three, in a whole boot.** SI is the controller bus; a screen offering
+"Retry" and "Continue without saving" polls it every frame. This one checked
+once at init and stopped — the `PAD` library initialised (its banner prints),
+found no controller, and gave up.
+
+So the chain is:
+
+1. EXI reports **no memory card** (EXT clear, F136) — correct, we have none;
+2. the game shows its "No Memory Card" warning, which is **right behaviour**;
+3. SI reports **no controller**, so the game stops polling for input;
+4. the warning can never be dismissed;
+5. everything downstream — including the video — is never reached.
+
+**The port is not stuck. It is doing exactly what a console with no card and
+no controller would do.** That reframes the last several findings: the boot
+"idling" at a memory-card probe (F136) is not a wall, it is a prompt nobody
+can answer.
+
+**And it means the video is probably fine.** `mpegGCN.c` is the game's own
+code, already recompiled to native (F148). It is never reached rather than
+broken.
+
+**Both gaps are planned, low-difficulty work.** The design document's SDK
+table lists PAD as "SDL3 gamepad; map GC layout" at Low difficulty, CARD as
+"files in a per-user save directory" at Low, and "DSP init, EXI, SI" as
+"stubs that return success". Neither is a new problem; they simply have not
+been done, and until one of them is, this screen is the end of the boot.
+
+**Which to do first:** a controller is the smaller job and unblocks every
+menu, not just this one. A memory card additionally makes the card check pass
+outright, which is what a Dolphin run with a card does — and is how the video
+was seen there.
 
 ---
 

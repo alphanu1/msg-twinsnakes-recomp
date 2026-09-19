@@ -539,6 +539,22 @@ void mgs_mmio_report_hot(const MgsMmio* m, unsigned top)
     unsigned n = (MMIO_END - MMIO_BASE) / 2u, i, k, shown = 0u;
 
     if (!m) return;
+    /* The serial interface gets its own line whatever its rank.
+     *
+     * SI is the controller bus. Whether the game is POLLING it decides a
+     * question the hottest-six list cannot answer: a screen that waits for a
+     * button reads SI constantly, and one that has given up does not. The
+     * memory-card warning offers Retry and Continue, so it should be
+     * polling - and if it is, the boot is waiting for us rather than stuck. */
+    {
+        unsigned q; uint64_t si = 0u;
+        for (q = 0; q < n; ++q) {
+            uint32_t a = MMIO_BASE + q * 2u;
+            if (a >= 0xCC006400u && a < 0xCC006800u) si += m->read_hist[q];
+        }
+        printf("serial interface (controller) reads: %llu\n",
+               (unsigned long long)si);
+    }
     printf("hottest MMIO reads:\n");
     for (k = 0; k < top; ++k) {
         unsigned best = 0u; uint32_t bestc = 0u; uint32_t addr; const char* nm = "?";
