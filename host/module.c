@@ -1174,7 +1174,11 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             last_pc = pc;
         }
     }
-    r.stop = MGS_STOP_STEP_LIMIT;
+    /* A run that was ASKED to stop did not run out of patience, and saying
+     * "step limit" when a signal arrived at step 446,813 of 1,200,000 is
+     * simply untrue - it reads as though the budget was the constraint when
+     * the budget was never reached. */
+    r.stop = mgs_module_interrupted ? MGS_STOP_INTERRUPTED : MGS_STOP_STEP_LIMIT;
     r.pc = mgs_module_pc(cpu);
     return r;
 }

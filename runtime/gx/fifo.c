@@ -1,5 +1,7 @@
 #include "fifo.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 volatile const char* mgs_gx_phase = "idle";
@@ -133,12 +135,42 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
     memset(gx, 0, sizeof *gx);
     gx->mem = mem;
     mgs_bp_init(&gx->bp);
+    {
+        const char* e = getenv("MGS_TRACE_GXDESYNC");
+        gx->trace_desync = e ? strtoull(e, NULL, 0) : 0u;
+    }
 }
 
 static uint32_t be32(const uint8_t* p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+/* Say WHY the stream was lost, for the first few times it happens.
+ *
+ * A desync count alone is not actionable: 841,627,908 of them says the
+ * parser is manufacturing noise, and nothing about where it started. Only
+ * the FIRST few matter - everything after the stream is lost is a
+ * consequence - so this prints a bounded number and then goes quiet.
+ *
+ * The state printed is what decides a command's length: the opcode, the
+ * vertex descriptor, and the attribute table the opcode selects. A draw
+ * command sized wrongly consumes the wrong number of bytes, and from then
+ * on every byte is read at the wrong offset.
+ */
+static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
+{
+    ++gx->desyncs;
+    if (!gx->trace_desync || gx->desyncs > gx->trace_desync) return;
+    fprintf(stderr,
+            "[gx] desync %llu: %s  op=0x%02X fmt=%u prim=%u detail=%u  "
+            "vcd=%08X/%08X vat=%08X/%08X/%08X  cmds=%llu tris=%llu\n",
+            (unsigned long long)gx->desyncs, why, op, op & 7u,
+            (op >> 3) & 7u, detail,
+            gx->vcd_lo, gx->vcd_hi,
+            gx->vat_a[op & 7u], gx->vat_b[op & 7u], gx->vat_c[op & 7u],
+            (unsigned long long)gx->commands, (unsigned long long)gx->triangles);
 }
 
 static void cp_write(MgsGx* gx, uint8_t reg, uint32_t value)
@@ -287,7 +319,8 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
 
         if (gx->have >= sizeof gx->buf) {       /* a vertex run longer than
                                                  * the staging buffer */
-            ++gx->desyncs;
+            desync(gx, "command longer than the staging buffer",
+                   gx->opcode, gx->have);
             gx->have = gx->want = 0u;
             continue;
         }
@@ -300,20 +333,53 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
             if (need_more) continue;
             if (!len && gx->opcode >= GX_OP_DRAW_FIRST) {
                 /* Unsizable draw: the stream cannot be followed from here. */
-                ++gx->desyncs;
+                desync(gx, "draw command cannot be sized", gx->opcode, gx->have);
                 gx->have = gx->want = 0u;
                 continue;
             }
             if (len > sizeof gx->buf) {
                 /* A legitimate but very long vertex run. Dropped rather than
                  * mis-parsed, and counted so it is visible. */
-                ++gx->desyncs;
+                desync(gx, "vertex run longer than the staging buffer",
+                       gx->opcode, len);
                 gx->have = gx->want = 0u;
                 continue;
             }
+            /* THE REST OF THE COMMAND IN ONE GO.
+             *
+             * `command_length` is a pure function of the opcode and the
+             * bytes already seen, and once it has returned a definite
+             * length that length cannot change - a draw command's size is
+             * fixed by the vertex count, which is in the first two body
+             * bytes. So re-deriving it for every remaining byte is pure
+             * waste, and for the sizes the engine actually sends it is the
+             * dominant cost in the parser: a strip of 66 vertices is around
+             * 1,500 bytes, which meant 1,500 calls instead of three.
+             *
+             * The bytes land in the buffer in the same order either way, so
+             * this changes nothing about what is parsed. */
+            if (gx->have < len) {
+                unsigned need  = len - gx->have;
+                unsigned avail = n - (i + 1u);
+                unsigned take  = need < avail ? need : avail;
+                if (take) {
+                    memcpy(gx->buf + gx->have, data + i + 1u, take);
+                    gx->have += take;
+                    i += take;
+                }
+            }
+
             if (gx->have >= len) {
                 dispatch(gx, gx->opcode, gx->buf, len);
                 gx->have = gx->want = 0u;
+
+                /* Once per COMMAND, which is the granularity that matters:
+                 * a display list is a single write from the guest's point of
+                 * view, so without a check here the host cannot be stopped
+                 * for as long as the list takes - and the engine's lists run
+                 * for minutes. The rasteriser's own checks do not help,
+                 * because most of that time is spent in this parser. */
+                if (gx->abandon && gx->abandon()) return;
             }
         }
     }
@@ -326,8 +392,32 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
     /* Display lists nest. Four deep is well past anything a game does and
      * turns a corrupt pointer into a refusal rather than a stack overflow. */
     if (gx->dl_depth >= 4u || !size) return;
+
+    /* WHAT THE HARDWARE REQUIRES, used here as a validity check.
+     *
+     * `GXCallDisplayList` takes a 32-byte-aligned address and a 32-byte
+     * multiple of a size - the command processor fetches display lists in
+     * 32-byte units and the SDK asserts on both. A list that satisfies
+     * neither did not come from the game; it came from this parser reading a
+     * byte of vertex data as an opcode.
+     *
+     * Checking matters far more than it looks. A bogus call is not one bad
+     * command, it is an ARBITRARY REGION OF MEMORY fed back through the
+     * parser - and a region of zeroes parses as one NOP per byte. That is
+     * how a single lost byte turned into 23,157,036,840 "commands" and
+     * 841,627,908 desyncs: the stream desynchronised once, read garbage as a
+     * display-list call, and executed megabytes of whatever was there. */
+    if ((addr & 0x1Fu) || (size & 0x1Fu)) {
+        desync(gx, "display list is not 32-byte aligned",
+               GX_OP_CALL_DL, size & 0x1Fu);
+        return;
+    }
+
     p = guest_ptr(gx->mem, addr, size);
-    if (!p) return;
+    if (!p) {
+        desync(gx, "display list is not in mapped memory", GX_OP_CALL_DL, size);
+        return;
+    }
 
     ++gx->dl_depth;
     {
@@ -335,13 +425,18 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
          * end, and carrying parser state across would corrupt the caller's. */
         uint8_t  saved_buf_op = gx->opcode;
         unsigned saved_have = gx->have, saved_want = gx->want;
-        uint8_t  saved[512];
-        memcpy(saved, gx->buf, sizeof saved);
+        /* Only the bytes actually held, not the whole buffer. The buffer is
+         * now 64 KB and this runs on every display-list call, so copying all
+         * of it would cost more than the list usually does - and everything
+         * past `have` is stale in any case. */
+        uint8_t* saved = gx->dl_save;
+        if (saved_have > sizeof gx->dl_save) saved_have = sizeof gx->dl_save;
+        memcpy(saved, gx->buf, saved_have);
         gx->have = gx->want = 0u;
 
         feed(gx, p, size);
 
-        memcpy(gx->buf, saved, sizeof saved);
+        memcpy(gx->buf, saved, saved_have);
         gx->opcode = saved_buf_op;
         gx->have = saved_have;
         gx->want = saved_want;
@@ -398,7 +493,7 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 
     mgs_gx_vertex_format(gx, op & 7u, &f);
     vsize = mgs_gx_vertex_size(&f);
-    if (!vsize) { ++gx->desyncs; return; }
+    if (!vsize) { desync(gx, "vertex size is zero", op, 0u); return; }
 
     ++gx->primitives;
     at = 2u;
@@ -409,7 +504,10 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 
         if (at + vsize > len) break;
         used = mgs_gx_decode_vertex(gx, &f, body + at, vsize, &cur);
-        if (used != vsize) { ++gx->desyncs; return; }
+        if (used != vsize) {
+            desync(gx, "vertex decoded to a different size", op, used);
+            return;
+        }
         at += vsize;
         ++gx->vertices;
 

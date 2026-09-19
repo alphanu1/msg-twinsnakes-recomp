@@ -69,6 +69,7 @@ void mgs_display_init(GuestMemory* mem)
      * drew. mgs_raster_triangle explains why the run loop's own check is not
      * enough. */
     s_raster.abandon = raster_abandon;
+    s_gx.abandon = raster_abandon;
     s_gx.triangle = mgs_raster_triangle;
     s_gx.user = &s_raster;
     mgs_mmio_set_fifo_sink(mgs_host_mmio(), fifo_sink, NULL);

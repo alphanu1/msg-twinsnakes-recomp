@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F100**. The two worth reading first are
+Findings from this session are **F90-F101**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -2897,18 +2897,47 @@ overlay copy went native, and none of them was a hang.
    generated C for that loop was then read directly, and it is correct: bounded
    counters, and a cycle-budget check on the back edge.
 
-What it actually is: **the steps are advancing, just slowly.** A heartbeat
-shows step 0, then 300,007 with 55 frames - roughly 3,000-5,000 steps per
-second against about 37,000 before. Rasterisation happens INSIDE the guest's
-dispatch call, so every triangle the game draws is host work charged to the
-step that issued it, and the boot has gone from a byte-copy loop to real
-rendering.
+4. **A per-scanline abandon check in the rasteriser did not release it
+   either**, which finally ruled out the renderer altogether.
 
-**The lesson is about instruments, not about the bug.** Every one of the three
-observations was produced by a tool that was itself wrong or too coarse, and
-each one pointed somewhere confident and false. The heartbeat aliasing (F91)
-was the same failure a day earlier. When a measurement says something
-surprising, the measurement is the first thing to check.
+**What answered it was the host's own call stack**, printed from the signal
+handler with `backtrace_symbols_fd` and the host linked `-rdynamic`:
+
+```
+on_interrupt  <-  <signal>  <-  feed  <-  dispatch  <-  feed  <-  dispatch
+              <-  feed  <-  dispatch  <-  feed  <-  dispatch  <-  feed
+              <-  mgs_gx_write  <-  <translated code>  <-  mgs_module_run
+```
+
+Four nested `feed`/`dispatch` pairs - which is the display-list depth limit
+of four, working correctly. **The host was in the GX parser, not the
+rasteriser and not the guest.** See F101 for what it was doing there.
+
+**The lesson is about instruments, not about the bug.** Four observations, all
+produced by tools that were wrong or too coarse, all pointing somewhere
+confident and false. The heartbeat aliasing (F91) was the same failure a day
+earlier. `backtrace()` cost ten lines and answered in one run what four rounds
+of inference had not. **Reach for the stack first.**
+
+---
+
+**F101 — the GX parser re-derived every command's length once per byte.**
+`feed()` appends one byte, calls `command_length()`, and repeats. That is
+correct and it is also the dominant cost in the whole renderer: a triangle
+strip of 66 vertices is about 1,500 bytes, so the length was computed 1,500
+times instead of three - and the length cannot change once known, because a
+draw command's size is fixed by the vertex count in its first two body bytes.
+
+Once the length is definite the remaining bytes are now copied in one
+`memcpy`. The bytes land in the buffer in the same order, so nothing about
+what is parsed changes; `test_gx`'s "the stream survives being split" case is
+what guards that.
+
+**`feed()` also had no way to be interrupted.** A display list is a single
+write from the guest's point of view, so the run loop cannot regain control
+for as long as the list takes - and the engine's lists run for minutes. The
+rasteriser's own abandon checks did not help because most of the time was
+never in the rasteriser. The parser now checks once per command.
 
 ---
 

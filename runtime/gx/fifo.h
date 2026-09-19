@@ -136,7 +136,31 @@ typedef struct MgsGx {
 
     /* Parser state. The stream arrives in fragments of one to four bytes, so
      * a partially decoded command has to survive between writes. */
-    uint8_t  buf[512];
+    /* THE STAGING BUFFER, and it must hold a WHOLE primitive.
+     *
+     * 512 bytes was too small by a factor of three for the first thing the
+     * engine draws. `GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT2, 66)` with a
+     * 20-byte vertex is 2 + 66 * 20 = 1,322 bytes, so the command was
+     * dropped - and dropping a draw does not lose one triangle, it loses the
+     * STREAM: every byte after it is read at the wrong offset. That single
+     * undersized buffer produced 841,627,908 desyncs and 23,157,036,840
+     * bogus commands, because the garbage that followed eventually parsed as
+     * a display-list call into arbitrary memory.
+     *
+     * 64 KB covers about 3,200 vertices at this game's vertex size. It is
+     * NOT the hardware's worst case - GX allows 65,535 vertices in one
+     * primitive, which with a large vertex format is megabytes - so the
+     * oversize path remains, and now says so rather than counting silently.
+     * Handling the true maximum means decoding vertices as they arrive
+     * instead of buffering the primitive, which is a larger change than this
+     * one and is not needed yet. */
+    uint8_t  buf[65536];
+
+    /* Where a nested display list parks the partial command it interrupted.
+     * Four deep at most, and a partial command is small - a whole primitive
+     * cannot be in progress here, because a command is only partial while
+     * its bytes are still arriving. */
+    uint8_t  dl_save[4096];
     unsigned have;
     unsigned want;                       /* 0 = opcode not yet decoded */
     uint8_t  opcode;
@@ -147,6 +171,18 @@ typedef struct MgsGx {
 
     MgsGxTriangleFn triangle;
     void* user;
+
+    /* Returns non-zero when the host has been asked to quit and this parser
+     * should stop. Checked once per command. Optional; NULL parses
+     * everything. See feed() for why the rasteriser's own check is not
+     * enough - a display list is one write from the guest's point of view,
+     * and most of its cost is here rather than in the triangles. */
+    int (*abandon)(void);
+
+    /* MGS_TRACE_GXDESYNC=N explains the first N lost-stream events. Only the
+     * first few can mean anything: once the stream is lost every byte after
+     * it is read at the wrong offset, so the rest are consequences. */
+    uint64_t trace_desync;
 
     /* Work the host must do, noticed here because this is the only place
      * that knows where a command starts. The naive alternative - scanning the

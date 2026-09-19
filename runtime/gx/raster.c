@@ -15,7 +15,20 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->depth_test = 1;
     r->depth_update = 1;
     r->depth_func = 3;            /* less-or-equal, the usual default */
-    r->trace = getenv("MGS_TRACE_RASTER") != NULL;
+    /* MGS_TRACE_RASTER=N explains the first N triangles; bare =1 keeps the
+     * old behaviour of eight. Configurable because the interesting geometry
+     * is no longer the first thing drawn: the boot logo's handful of
+     * triangles now come and go long before the engine's own geometry
+     * starts, and a fixed count of eight can only ever describe the logo. */
+    {
+        const char* e = getenv("MGS_TRACE_RASTER");
+        r->trace = e != NULL;
+        r->trace_limit = 8u;
+        if (e) {
+            unsigned long v = strtoul(e, NULL, 0);
+            if (v > 1ul) r->trace_limit = (unsigned)v;
+        }
+    }
     mgs_raster_reset_depth(r);
 }
 
@@ -255,7 +268,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
          * straddles the camera rather than drawing it inside out. */
         if (w <= 0.0001f) {
             ++r->clipped;
-            if (r->trace && r->clipped < 8u)
+            if (r->trace && r->clipped < r->trace_limit)
                 fprintf(stderr, "[raster] behind eye: v=(%.3f %.3f %.3f) "
                                 "view=(%.3f %.3f %.3f) w=%.4f mtx=%u ortho=%u\n",
                         vin[i]->x, vin[i]->y, vin[i]->z,
@@ -269,7 +282,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     }
 
     area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
-    if (r->trace && r->drawn + r->clipped < 8u)
+    if (r->trace && r->drawn + r->clipped < r->trace_limit)
         fprintf(stderr, "[raster] screen: (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f) "
                         "area=%.1f vp=(%.1f %.1f %.1f / %.1f %.1f %.1f)\n",
                 sx[0], sy[0], sx[1], sy[1], sx[2], sy[2], area,

@@ -611,7 +611,8 @@ int main(int argc, char** argv)
                             "no code for that address",
                             "guest is spinning",
                             "step limit",
-                            "unhandled exception"
+                            "unhandled exception",
+                            "interrupted"
                         };
                         printf("\nstopped after %llu steps: %s, pc = 0x%08X\n",
                                (unsigned long long)r.steps, why[r.stop], r.pc);

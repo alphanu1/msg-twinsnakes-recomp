@@ -21,7 +21,8 @@ typedef enum {
     MGS_STOP_UNCOVERED = 0,   /* dispatch had no code for that address */
     MGS_STOP_SPINNING,        /* pc stopped moving: the guest is waiting */
     MGS_STOP_STEP_LIMIT,      /* ran out of host patience, not guest progress */
-    MGS_STOP_EXCEPTION        /* a real fault, not a barrier */
+    MGS_STOP_EXCEPTION,       /* a real fault, not a barrier */
+    MGS_STOP_INTERRUPTED      /* asked to stop: Ctrl-C, SIGTERM, a timeout */
 } MgsStopReason;
 
 typedef struct MgsRunResult {
