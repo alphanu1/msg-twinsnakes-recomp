@@ -1337,6 +1337,58 @@ int main(int argc, char** argv)
                                 }
                                 printf("\n");
                             }
+                            {
+                                /* MGS_FIND_WORD=<hex>: where does a value LIVE?
+                                 *
+                                 * The font's texture address is written by the
+                                 * game and points above its own arena, so the
+                                 * fault is upstream of GX. Finding every place
+                                 * that value is stored is the cheapest way to
+                                 * reach whatever computed it: a texture object,
+                                 * an asset header, or the allocation it should
+                                 * have come from. */
+                                const char* fw = getenv("MGS_FIND_WORD");
+                                if (fw) {
+                                    uint32_t want = (uint32_t)strtoul(fw, NULL, 0);
+                                    /* MGS_FIND_MASK: match only some bits.
+                                     * GXInitTexObj stores the image base
+                                     * PACKED WITH its BP register byte, so a
+                                     * raw search for the address cannot find
+                                     * it and a masked one can. */
+                                    const char* fm = getenv("MGS_FIND_MASK");
+                                    uint32_t mask = fm ? (uint32_t)strtoul(fm, NULL, 0)
+                                                       : 0xFFFFFFFFu;
+                                    uint32_t hits = 0u;
+                                    unsigned w;
+                                    /* BOTH WINDOWS. The engine lives in the
+                                     * second one at 0x7E000000, so a search
+                                     * of MEM1 alone can only find what the
+                                     * SDK put there - and the value in
+                                     * question is written by the engine. */
+                                    struct { uint32_t lo, hi; const char* n; } win[2] = {
+                                        { 0x80000000u, 0x81800000u, "MEM1"   },
+                                        { GUEST_VMEM_BASE,
+                                          GUEST_VMEM_BASE + GUEST_VMEM_SIZE, "overlay" },
+                                    };
+                                    printf("searching for 0x%08X:\n", want);
+                                    for (w = 0; w < 2u; ++w) {
+                                        uint32_t a;
+                                        for (a = win[w].lo; a + 4u < win[w].hi; a += 4u)
+                                            if ((guest_read32(&rt.mem, a) & mask) == want) {
+                                                if (hits < 24u)
+                                                    printf("   %-7s 0x%08X = 0x%08X  "
+                                                           "prev 0x%08X  next 0x%08X\n",
+                                                           win[w].n, a,
+                                                           guest_read32(&rt.mem, a),
+                                                           guest_read32(&rt.mem, a - 4u),
+                                                           guest_read32(&rt.mem, a + 4u));
+                                                ++hits;
+                                            }
+                                    }
+                                    printf("   %u occurrence%s\n",
+                                           hits, hits == 1u ? "" : "s");
+                                }
+                            }
                             if (getenv("MGS_FIND_ZMSG")) {
                                 printf("inflate error messages in guest RAM:\n");
                                 find_inflate_error(&rt.mem);

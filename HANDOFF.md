@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F140**. The two worth reading first are
+Findings from this session are **F90-F141**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -171,14 +171,13 @@ renderer.
    and 1 status 2.65 million times — both card slots. Nothing models the EXT
    "device present" bit. Make the absence of a card *answerable*; inventing a
    card is probably the wrong fix, since the game must handle an empty slot.
-2. **Who computes the font pointer `0x835006C0`? (F139).** All 2,964 texture
-   refusals are ONE texture — format 0x6 (RGBA8) 8x8 — and the cause is now
-   narrowed hard: **not** TMEM preload (zero draws set `image_type`), and
-   **not** our BP decode (14 of 15 texture addresses parse fine through the
-   same path). The game itself writes an address above its own arena top
-   (`0x8028e700-0x817f8ee0`). So the fault is upstream of GX — an allocation,
-   a file load, or a pointer derived from something we supplied. Watch the
-   value, not the renderer.
+2. **Watch `0x7F50068C` — the font's `GXTexObj` (F141).** A static global in
+   the overlay's `.bss` holding `0x941A8036`. The address it carries (55.6 MB)
+   is beyond anything a GameCube has, which is the shape of an unrelocated
+   file offset rather than a pointer. A watch on that word names whoever
+   fills it, and says whether an asset load failed or a relocation step was
+   skipped. All 2,964 texture refusals are this one texture, and F139/F140
+   already rule out TMEM preload and our own BP decode.
 3. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
@@ -4775,6 +4774,47 @@ check cost one command.
 "the thing did not happen" or "I did not run". Those are indistinguishable in
 the output and have to be distinguished in the source, every time, before the
 number is used for anything.
+
+---
+
+**F141 — the font's texture object found, and its address is not a pointer at
+all.** Searching guest memory for the bad value found nothing twice, and both
+failures were informative rather than dead ends:
+
+- searching MEM1 for `0x835006C0`: **0 occurrences** — the full pointer is
+  never stored, because `GXInitTexObj` keeps the address already shifted;
+- searching both windows for `0x1A8036`: **0 occurrences** — because it is
+  stored PACKED with its BP register byte.
+
+Matching on the low 24 bits finds it, once:
+
+```
+overlay 0x7F50068C = 0x941A8036   prev 0x88601C07   next 0x00000000
+```
+
+That is a `GXTexObj`, unambiguously. `0x94` is `TX_SETIMAGE3` for map 0 with
+base `0x1A8036`; the word before it is `TX_SETIMAGE0` = `0x88601C07`, which
+decodes as width `(0x1C07 & 0x3FF)+1 = 8`, height `8`, format
+`(0x601C07 >> 20) & 0xF = 6` — **RGBA8 8x8, the font**.
+
+**It lives in the overlay's `.bss`** (`0x7F499B7C + 0x700F8`), so it is a
+static global in the engine rather than a heap allocation — initialised once,
+used 2,964 times.
+
+**And the address is almost certainly not a pointer.** `0x1A8036 << 5` is
+`0x35006C0` = **55.6 MB**, beyond any address a GameCube has: past MEM1's 24
+MB, past ARAM's 16 MB, past the game's own arena top of `0x817f8ee0`. A
+corrupted pointer would be arbitrary; this has the shape of an **unrelocated
+offset** — into an archive or a file — that was never turned into a pointer.
+
+That fits the rest of the picture: disc reads stop at 271 and never resume, so
+a texture load that should have happened has not. The bug is an asset that was
+never fetched, not a renderer that cannot draw it.
+
+**Next:** find what writes `0x7F50068C`. It is a static address in the
+overlay, so a watch on that word names the function that fills the tex obj in
+one run — and whether it is a load path that failed or a relocation step that
+was skipped.
 
 ---
 
