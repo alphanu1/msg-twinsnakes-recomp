@@ -54,7 +54,30 @@ typedef struct MgsMmio {
      * the game is producing commands is the useful signal. */
     uint64_t wgpipe_bytes;
 
+    /* The FIFO is a byte stream, so a command is only recognisable in
+     * sequence. This remembers enough of that sequence to spot the one
+     * command the host must ACT on before phase 3 parses the rest: the
+     * draw-done token.
+     *
+     * GXSetDrawDone writes BP opcode 0x61 followed by the 32-bit register
+     * 0x45000002 - blitting processor register 0x45, "send finish". On
+     * hardware the GP raises the PE finish interrupt when it retires that
+     * token, and GXWaitDrawDone sleeps until it does. With nothing raising
+     * it the game renders one frame, calls GXDrawDone, and sleeps forever -
+     * which is exactly where the boot stopped. */
+    unsigned bp_opcode_pending;   /* last FIFO byte was 0x61 */
+    uint32_t bp_partial;          /* register bytes gathered so far */
+    unsigned bp_have;             /* how many of those four are in hand */
+    uint64_t draw_done_tokens;    /* tokens seen, for the run report */
+
     uint64_t reads, writes;
+
+    /* Per-register read counts, for finding a poll that never ends. A guest
+     * waiting on hardware is indistinguishable from a guest doing work when
+     * all you have is a total - and "33 million reads" was the only signal
+     * that the boot had stalled at all. Indexed by halfword so the table is
+     * small enough to scan. */
+    uint32_t read_hist[(MMIO_END - MMIO_BASE) / 2u];
 } MgsMmio;
 
 void     mgs_mmio_init(MgsMmio* m);
@@ -64,5 +87,31 @@ void     mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size
 /* Called once per frame by the host, so polled hardware state advances with
  * real time rather than with how fast the guest spins. */
 void     mgs_mmio_tick_frame(MgsMmio* m);
+
+/* Non-zero once the guest has written a draw-done token that the host has
+ * not yet reported. Clearing is the caller's job: it clears when the PE
+ * finish interrupt is actually delivered, so a token is never lost because
+ * the guest happened to have interrupts disabled. */
+int      mgs_mmio_take_draw_done(MgsMmio* m);
+
+/* A device's interrupt line, not a latch the host owns.
+ *
+ * PI's status register mirrors which devices are ASSERTING an interrupt
+ * right now. A device drops its line when the guest acknowledges it at the
+ * device - the VI handler clears the display-interrupt INT bits, the PE
+ * finish handler writes bit 3 of the pixel engine's control register. Until
+ * that modelling existed here the host set PI's VI bit once and never
+ * cleared it, so every dispatch found VI asserted, VI outranks the pixel
+ * engine in the SDK's priority table, and the PE finish interrupt was never
+ * the highest-priority pending source. The game slept on GXDrawDone with the
+ * interrupt that would have woken it permanently queued behind retrace.
+ *
+ * mgs_mmio_assert_retrace raises the display interrupts a retrace asserts,
+ * which is what makes the SDK's handler take its retrace path rather than
+ * its position-callback path. */
+void     mgs_mmio_assert_retrace(MgsMmio* m);
+
+/* Print the registers the guest read most, most-read first. */
+void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);
 
 #endif

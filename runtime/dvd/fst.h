@@ -55,6 +55,11 @@ const char* mgs_fst_name(const MgsFst* fst, const MgsFstEntry* e);
 uint32_t mgs_fst_find(const MgsFst* fst, const char* path);
 
 /* Convenience: resolve and return a file's disc offset and length. */
+/* The reverse of the lookup: an entry index to its full path, as
+ * mgs_fst_find would take. Needed by absolute-offset reads, which know only
+ * where on the disc the data is. */
+int mgs_fst_path(const MgsFst* fst, uint32_t index, char* out, size_t size);
+
 int mgs_fst_file(const MgsFst* fst, const char* path,
                  uint32_t* offset, uint32_t* length);
 

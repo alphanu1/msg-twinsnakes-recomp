@@ -613,7 +613,87 @@ demonstrate that the translated CPU code and the runtime work along the whole
 boot path. With `--map` applied, the failure names the SDK function rather than
 an address.
 
-## Stage 8b — Compile and link natively · **PLANNED**
+## Stage 8b — Boot under our own runtime · **IN PROGRESS**
+
+**In:** the combined module + `runtime/` + `host/`. **Out:** the game running
+its own main loop with no emulator code linked.
+
+```sh
+cmake --build build/runtime -j"$(nproc)"
+./build/runtime/host/twin-snakes --module build/phase1/module/gGGSPA4_recomp.so
+```
+
+`ldd build/runtime/host/twin-snakes` lists SDL3, libc and libm. Nothing
+Dolphin-derived is present. The "Dolphin SDK" lines the game prints are the
+*game* naming the SDK it was built against — Dolphin was Nintendo's codename for
+the GameCube, and the emulator took the name from the same place years later.
+
+**Evidence, from a single headless run.** Each number is produced by the host's
+own counters, printed at exit:
+
+| | |
+|---|---|
+| SDK banners reached | OS, DVD, VI, **GX** |
+| Console reported | `Retail 2`, `Memory 24 MB` |
+| Retrace interrupts delivered | 19,645 of 20,000 raised |
+| Guest threads scheduling | 3, switching through `__OSDispatchInterrupt` |
+| GX command bytes produced | 31,572 |
+| `GXDrawDone` answered | PE-finish raised from the FIFO token |
+| Overlay loaded | 5,737,716 bytes of `shared/mgso_pal.rel` |
+| `OSLink` | `overlay .text at 0x7F0080EC` |
+
+### The seven things that had to be true
+
+Each of these was discovered by a measurement, not by reading. They are written
+up in full as HANDOFF F61-F69; the short form:
+
+1. **`0x800` is not a fault.** The SDK uses lazy FP context switching and traps
+   there on purpose. The host performs `OSSwitchFPUContext` itself.
+2. **Some SPRs are read by the generated code, not just by the guest.**
+   `HID2[PSE]` gates paired singles; `GQR0-7` set quantisation; `SRR0`/`SRR1`
+   are what `rfi` consumes. A shadow table is invisible to all three.
+3. **An interrupt is a state transition, not a call.**
+   `__OSDispatchInterrupt` ends in `OSLoadContext`'s `rfi` and never returns.
+4. **`MSR[EE]` is the interrupt flag** — the same bit the shims write and the
+   host gates on. Two variables is one too many.
+5. **PI's status mirrors device lines.** It clears when the guest acknowledges
+   at the device, not when the host feels like it. Otherwise VI masks PE-finish
+   for ever and `GXDrawDone` sleeps through a perfectly healthy idle loop.
+6. **The boot ROM's low-memory globals are load-bearing.** Zeroed, they read as
+   "unknown development board, 0 MB" and send the game down a debug path.
+7. **`--rel-base` is not a free choice.** It fixes every absolute address in the
+   generated overlay. The game loads its overlay at a hard-coded `0x7F008000`,
+   so that is where it must be recompiled — and `0x7E000000-0x7FFFFFFF` has to
+   exist as memory, which on a Dolphin-derived runtime it always did.
+
+```sh
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko -j"$(nproc)" \
+    --rel-base 0x7F008000 \
+    discs/GGSPA4/disc1/files/shared/mgso_pal.rel build/phase1/rel-7f
+python3 game/module/gen_combined_tables.py \
+    --dol-generated build/phase1/dol/generated --dol discs/GGSPA4/disc1/sys/main.dol \
+    --rel-generated build/phase1/rel-7f/generated \
+    --rel discs/GGSPA4/disc1/files/shared/mgso_pal.rel \
+    --rel-base 0x7F008000 --out build/phase1/module_tables.inc
+```
+
+### Reaching intra-chunk SDK calls
+
+DolRecomp emits a `goto`, not a dispatch call, for a function called from within
+the same chunk — so the patch table never saw those calls and three SDK shims in
+a row were unreachable. `tools/inject-patch-guards.py` post-processes the
+generated chunks, inserting after each patched function's label:
+
+```c
+label_8001D184:
+    /* patch guard: ICFlashInvalidate */
+    if (dolrecomp_dispatch_replacement(ctx, 0x8001D184u)) return;
+```
+
+Idempotent, 36 guards across 5 files, re-run whenever the generated code or
+`config/sdk-implemented.txt` changes. It needs no change to DolRecomp.
+
+## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.
 

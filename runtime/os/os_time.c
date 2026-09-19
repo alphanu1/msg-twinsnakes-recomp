@@ -24,29 +24,37 @@ void mgs_OSGetTick(CPUState* ctx)
 
 /* The three interrupt calls return the PREVIOUS state, which the game relies
  * on to restore correctly through nesting.
+ *
+ * They act on MSR[EE] itself, because that is what the SDK's own versions do
+ * - mfmsr, clear or set the bit, mtmsr - and because the host reads that same
+ * bit before delivering an interrupt. A private "enabled" flag here would be
+ * a second source of truth that nothing keeps in step with the first.
  */
+#define MSR_EE 0x8000u
+
 void mgs_OSDisableInterrupts(CPUState* ctx)
 {
     MgsRuntime* rt = mgs_runtime_from(ctx);
-    int was = rt->interrupts_enabled;
-    rt->interrupts_enabled = 0;
-    mgs_set_guest_gpr(rt, 3, (uint32_t)was);
+    uint32_t msr = mgs_cpu_msr();
+    mgs_cpu_set_msr(msr & ~MSR_EE);
+    mgs_set_guest_gpr(rt, 3, (msr & MSR_EE) ? 1u : 0u);
 }
 
 void mgs_OSEnableInterrupts(CPUState* ctx)
 {
     MgsRuntime* rt = mgs_runtime_from(ctx);
-    int was = rt->interrupts_enabled;
-    rt->interrupts_enabled = 1;
-    mgs_set_guest_gpr(rt, 3, (uint32_t)was);
+    uint32_t msr = mgs_cpu_msr();
+    mgs_cpu_set_msr(msr | MSR_EE);
+    mgs_set_guest_gpr(rt, 3, (msr & MSR_EE) ? 1u : 0u);
 }
 
 void mgs_OSRestoreInterrupts(CPUState* ctx)
 {
     MgsRuntime* rt = mgs_runtime_from(ctx);
-    int was = rt->interrupts_enabled;
-    rt->interrupts_enabled = (int)mgs_guest_gpr(rt, 3) ? 1 : 0;
-    mgs_set_guest_gpr(rt, 3, (uint32_t)was);
+    uint32_t msr = mgs_cpu_msr();
+    uint32_t want = mgs_guest_gpr(rt, 3);
+    mgs_cpu_set_msr(want ? (msr | MSR_EE) : (msr & ~MSR_EE));
+    mgs_set_guest_gpr(rt, 3, (msr & MSR_EE) ? 1u : 0u);
 }
 
 void mgs_runtime_advance_ticks(MgsRuntime* rt, uint64_t ticks)

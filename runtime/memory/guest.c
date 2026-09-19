@@ -9,7 +9,8 @@ int guest_memory_init(GuestMemory* m)
      */
     m->ram  = (uint8_t*)calloc(1, GUEST_RAM_SIZE);
     m->aram = (uint8_t*)calloc(1, GUEST_ARAM_SIZE);
-    if (!m->ram || !m->aram) {
+    m->vmem = (uint8_t*)calloc(1, GUEST_VMEM_SIZE);
+    if (!m->ram || !m->aram || !m->vmem) {
         guest_memory_free(m);
         return 0;
     }
@@ -20,4 +21,5 @@ void guest_memory_free(GuestMemory* m)
 {
     free(m->ram);  m->ram = NULL;
     free(m->aram); m->aram = NULL;
+    free(m->vmem); m->vmem = NULL;
 }

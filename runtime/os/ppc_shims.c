@@ -75,3 +75,23 @@ void mgs_PPCSetFpNonIEEEMode(CPUState* ctx)    { (void)ctx; }
  * asked to stop until an interrupt, and our frame loop is that interrupt.
  */
 void mgs_PPCHalt(CPUState* ctx) { (void)ctx; }
+
+/* --- audio, deferred to phase 4 ----------------------------------------- */
+
+/* __OSInitAudioSystem brings up the DSP: it resets the coprocessor, runs
+ * ARAM DMAs, and waits on completion flags that hardware raises
+ * asynchronously. There is no DSP here - ARAM is host memory and every
+ * transfer has finished before the guest can look - so the flags it waits for
+ * will never be raised however carefully the registers are modelled.
+ *
+ * Patched to do nothing, DELIBERATELY AND TEMPORARILY. Audio is phase 4, and
+ * nothing between here and a picture on screen needs the DSP to behave like a
+ * coprocessor. Phase 4 replaces this with a real voice mixer; until then a
+ * stub that returns is more honest than a register model that pretends.
+ *
+ * This only became possible once the patch table could intercept intra-chunk
+ * calls: __OSInitAudioSystem is called from OSInit inside the same generated
+ * chunk, so before the patch guards it was unreachable from the table.
+ */
+void mgs___OSInitAudioSystem(CPUState* ctx) { (void)ctx; }
+void mgs___OSStopAudioSystem(CPUState* ctx) { (void)ctx; }

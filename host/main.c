@@ -18,6 +18,16 @@
 #include "platform/mmio.h"
 #include <SDL3/SDL.h>
 
+void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
+uint64_t mgs_dvd_completed(void);
+uint64_t mgs_dvd_callbacks(void);
+
+static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
+{
+    mgs_dvd_service(mod, cpu, (MgsDvd*)user);
+}
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,10 +93,51 @@ static void overlay_draw(int running)
  */
 static unsigned long s_patched_calls;
 
+/* Per-address call counts for the patch table.
+ *
+ * A single total says the shims are being used; it does not say WHICH, and
+ * "8 million native calls" turned out to be almost entirely
+ * OSDisableInterrupts. Knowing that DVDOpen was called zero times is what
+ * distinguishes "the game is loading" from "the game has decided not to". */
+#define PATCH_COUNTS 64
+static struct { uint32_t addr; uint64_t calls; } s_patch_counts[PATCH_COUNTS];
+
+static void patch_count(uint32_t address)
+{
+    unsigned i;
+    for (i = 0; i < PATCH_COUNTS; ++i) {
+        if (s_patch_counts[i].addr == address) { ++s_patch_counts[i].calls; return; }
+        if (s_patch_counts[i].addr == 0u) {
+            s_patch_counts[i].addr = address;
+            s_patch_counts[i].calls = 1u;
+            return;
+        }
+    }
+}
+
+static void patch_report(void)
+{
+    unsigned i, k;
+    printf("native SDK calls by function:\n");
+    for (k = 0; k < 12u; ++k) {
+        unsigned best = PATCH_COUNTS; uint64_t bestc = 0u;
+        for (i = 0; i < PATCH_COUNTS; ++i)
+            if (s_patch_counts[i].addr && s_patch_counts[i].calls > bestc) {
+                bestc = s_patch_counts[i].calls; best = i;
+            }
+        if (best == PATCH_COUNTS) break;
+        printf("  0x%08X  %12llu\n", s_patch_counts[best].addr,
+               (unsigned long long)bestc);
+        s_patch_counts[best].calls = 0u;
+    }
+}
+
 static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 {
     MgsSdkFn fn = mgs_patch_lookup(address);
     if (!fn) return 0;
+
+    patch_count(address);
 
     fn((CPUState*)cpu_state);
 
@@ -225,6 +276,11 @@ int main(int argc, char** argv)
         if (!mgs_dol_load_from_disc(&rt.mem, &disc1, &dol)) {
             fprintf(stderr, "could not load main.dol into guest memory\n");
         } else {
+            /* The boot ROM's legacy, written AFTER the DOL is loaded - the
+             * DOL's own bss clear would otherwise wipe it - and before the
+             * entry point runs, because OSInit reads all of it. */
+            mgs_boot_info_init(&rt.mem, &disc1);
+
             printf("loaded main.dol: %u sections, %u bytes, bss 0x%08X+%u, entry 0x%08X\n",
                    dol.section_count, dol.loaded_bytes, dol.bss_address,
                    dol.bss_size, dol.entry_point);
@@ -268,7 +324,15 @@ int main(int argc, char** argv)
                     /* Point the SDK shims at the module's registers, so a
                      * shim reads exactly what the translated code passed. */
                     mgs_cpu_bind_registers(mgs_module_gpr(cpu));
+                    mgs_cpu_bind_msr(mgs_module_msr_ptr(cpu));
                     mgs_host_install_spr_handler(cpu);
+                    mgs_host_set_vmem(rt.mem.vmem);
+
+                    /* Finished DVD reads have to be reported on the guest
+                     * thread. Nothing else does it, and until this was here
+                     * every loader thread waited forever on a read that had
+                     * already completed. */
+                    mgs_module_set_pump(dvd_pump, &dvd);
 
                     /* Tell the interrupt layer where the guest's own
                      * dispatcher is. Taken from the symbol map rather than
@@ -293,7 +357,16 @@ int main(int argc, char** argv)
                     if (!headless) { overlay_draw(1); mgs_video_present(); }
                     printf("\nrunning from 0x%08X ...\n\n", mod.entry_point);
                     {
-                        MgsRunResult r = mgs_module_run(&mod, cpu, 40000000ull);
+                        /* MGS_STEPS overrides the ceiling. The default is a
+                         * few seconds of guest time - enough to reach the
+                         * first frames - and the ceiling exists to bound a
+                         * hang, not to end a healthy run. */
+                        uint64_t limit = 40000000ull;
+                        {
+                            const char* env = getenv("MGS_STEPS");
+                            if (env) limit = strtoull(env, NULL, 0);
+                        }
+                        MgsRunResult r = mgs_module_run(&mod, cpu, limit);
                         static const char* why[] = {
                             "no code for that address",
                             "guest is spinning",
@@ -314,6 +387,9 @@ int main(int argc, char** argv)
                             printf("  r25=0x%08X r26=0x%08X r27=0x%08X r31=0x%08X\n",
                                    g[25], g[26], g[27], g[31]);
                         }
+                        if (r.stop == MGS_STOP_SPINNING)
+                            printf("  msr = 0x%08X  (EE %s)\n", r.msr,
+                                   (r.msr & 0x8000u) ? "enabled" : "DISABLED");
                         if (r.exception) {
                             printf("  exception 0x%08X  cause 0x%08X  "
                                    "faulting instruction srr0 = 0x%08X  msr = 0x%08X\n",
@@ -325,6 +401,14 @@ int main(int argc, char** argv)
                         }
                         overlay_line("STEPS: %llu", (unsigned long long)r.steps);
                         overlay_line("STOP: %s", why[r.stop]);
+                        printf("GX draw-done tokens: %llu  PE finish delivered: %llu\n",
+                               (unsigned long long)mgs_interrupt_pe_seen(),
+                               (unsigned long long)mgs_interrupt_pe_sent());
+                        printf("DVD reads completed: %llu  callbacks run: %llu\n",
+                               (unsigned long long)mgs_dvd_completed(),
+                               (unsigned long long)mgs_dvd_callbacks());
+                        printf("lazy FP context switches: %llu\n",
+                               (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",
                                mgs_host_patched_calls());
                         {
@@ -338,15 +422,36 @@ int main(int argc, char** argv)
                                    (unsigned long long)mm->writes,
                                    (unsigned long long)mm->wgpipe_bytes);
                         }
+                        {   /* What actually landed in the window. A range
+                             * says bytes arrived; only the bytes say what. */
+                            unsigned k, j;
+                            const uint32_t at[] = { 0x7F000000u, 0x7F008000u };
+                            for (j = 0; j < 2u; ++j) {
+                                printf("  %08X:", at[j]);
+                                for (k = 0; k < 8u; ++k)
+                                    printf(" %08X",
+                                           guest_read32(&rt.mem, at[j] + k * 4u));
+                                printf("\n");
+                            }
+                        }
+                        printf("second window: %llu reads, %llu writes, "
+                               "0x%08X-0x%08X\n",
+                               (unsigned long long)mgs_host_vmem_reads(),
+                               (unsigned long long)mgs_host_vmem_writes(),
+                               mgs_host_vmem_lo(), mgs_host_vmem_hi());
+                        mgs_dump_threads(cpu, NULL);
+                        patch_report();
+                        mgs_mmio_report_hot(mgs_host_mmio(), 6u);
                         printf("host instructions handled: %lu  (unhandled: %lu)\n",
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
                         printf("system calls serviced: %llu\n",
                                (unsigned long long)r.syscalls);
                         printf("retrace ticks: %llu   interrupts delivered: %llu  "
-                               "(refused while masked: %llu)\n",
+                               "(refused while masked: %llu, handler failed: %llu)\n",
                                (unsigned long long)r.frames,
                                (unsigned long long)mgs_interrupt_delivered(),
-                               (unsigned long long)mgs_interrupt_refused());
+                               (unsigned long long)mgs_interrupt_refused(),
+                               (unsigned long long)mgs_interrupt_failed());
                         overlay_line("IRQ: %llu DELIVERED  %llu MASKED",
                                (unsigned long long)mgs_interrupt_delivered(),
                                (unsigned long long)mgs_interrupt_refused());

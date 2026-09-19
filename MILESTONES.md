@@ -263,11 +263,39 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       (F58). Needed a host-to-guest call primitive with a sentinel return.
 - [x] **Guest time advances** — the timebase at 40.5 MHz, driven by the run
       loop. Without it every timed wait in the SDK spun forever (F59).
-- [ ] **Get the patch table to see intra-chunk calls.** The highest-leverage
-      item: this limit has blocked three SDK functions so far and every future
-      shim inherits it. Likely a DolRecomp change — emit a dispatch call, not
-      a `goto`, for addresses named in `--map` (F60).
-- [ ] **VI** — stubs, plus the frame loop, presenting the XFB the game writes.
+- [x] **Patch table sees intra-chunk calls** — solved without touching
+      DolRecomp: `tools/inject-patch-guards.py` post-processes the generated
+      chunks, inserting a dispatch check after each patched function's label.
+      Idempotent, 36 guards across 5 files. Native SDK calls went 168 → 210 →
+      237 immediately, and every future shim inherits the fix (F60).
+- [x] **Lazy floating-point context switching** — the SDK traps to 0x800 by
+      design; the host now performs `OSSwitchFPUContext` against its own
+      register file (F61).
+- [x] **Paired singles and the quantisation registers** — `HID2[PSE]`,
+      `GQR0-7`, `SRR0`/`SRR1` mirrored into the CPU state the generated code
+      reads, not a shadow table it cannot see (F62).
+- [x] **Interrupts delivered as a state transition**, not a call:
+      `__OSDispatchInterrupt` never returns, it ends in `OSLoadContext`'s
+      `rfi` (F63). With the run loop's stale-pc bug fixed (F64) the game began
+      scheduling threads and rendering.
+- [x] **`MSR[EE]` is the one interrupt flag** — the shims act on the processor
+      bit the host gates on, not a private copy (F65).
+- [x] **Device interrupt lines modelled into PI** — VI's display interrupts and
+      the pixel engine's acknowledge, so PE-finish is reachable and
+      `GXDrawDone` completes (F66).
+- [x] **The boot ROM's low-memory globals** — disc ID, 24 MB, retail hardware,
+      bus/core clocks, PAL TV mode. Without them the game believed it was on a
+      development board (F69).
+- [x] **Synchronous DVD reads** — `DVDReadAbsAsyncPrio`, the entry point
+      `DVDReadPrio` actually uses, plus absolute-offset disc reads mapped back
+      through the FST for an extracted disc. The DVD state table was wrong by
+      one sign and that alone reset the game (F67).
+- [x] **The second addressable window** (0x7E000000, 32 MB) and the overlay
+      recompiled at its real load address, so guest and recompiled addresses
+      agree for loads as well as branches (F68).
+- [x] **VI** — retrace interrupts delivered through the guest's own handler,
+      display interrupts asserted and acknowledged. *Presenting the XFB is
+      phase 3's: nothing writes it until there is a renderer.*
 - [x] **PAD mapping** — GC layout, analog triggers with a late digital click,
       C-stick, inverted Y, SDK-clamped stick ranges. Pure layer, tested with
       no hardware present (F49).

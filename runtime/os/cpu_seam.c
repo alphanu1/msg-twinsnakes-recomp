@@ -31,18 +31,40 @@
 typedef struct CpuSeam {
     uint32_t  own[MGS_GPR_COUNT];   /* FREE mode */
     uint32_t* bound;                /* BOUND mode: into the module's state */
+    uint32_t  own_msr;              /* FREE mode */
+    uint32_t* bound_msr;            /* BOUND mode */
 } CpuSeam;
 
 static CpuSeam s_seam;
 static MgsRuntime* s_current;
 
 void mgs_cpu_bind_registers(uint32_t* gpr_array);
+void mgs_cpu_bind_msr(uint32_t* msr);
 void mgs_cpu_unbind(void);
 void mgs_runtime_set_current(MgsRuntime* rt);
 
 /* Point the seam at a loaded module's register file. */
 void mgs_cpu_bind_registers(uint32_t* gpr_array) { s_seam.bound = gpr_array; }
-void mgs_cpu_unbind(void) { s_seam.bound = NULL; }
+
+/* MSR is bound separately because it is not part of the register file, and
+ * the HOST knows where it lives - the runtime deliberately does not. Without
+ * this the interrupt shims would keep a flag of their own, and the host's
+ * "may I deliver an interrupt?" gate would be reading a different variable
+ * from the one the guest just wrote. They must be the same bit. */
+void mgs_cpu_bind_msr(uint32_t* msr) { s_seam.bound_msr = msr; }
+
+void mgs_cpu_unbind(void) { s_seam.bound = NULL; s_seam.bound_msr = NULL; }
+
+uint32_t mgs_cpu_msr(void)
+{
+    return s_seam.bound_msr ? *s_seam.bound_msr : s_seam.own_msr;
+}
+
+void mgs_cpu_set_msr(uint32_t value)
+{
+    if (s_seam.bound_msr) *s_seam.bound_msr = value;
+    else                  s_seam.own_msr = value;
+}
 
 /* The runtime the shims act on. Set once at startup rather than threaded
  * through every shim, so each shim's signature can stay the SDK's - which is

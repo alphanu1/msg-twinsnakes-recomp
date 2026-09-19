@@ -1,5 +1,6 @@
 #include "dvd.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,8 +18,19 @@ void mgs_dvd_init(MgsDvd* dvd, MgsDisc* disc, MgsJobPool* jobs, GuestMemory* mem
 static void read_job(void* user)
 {
     MgsDvdRequest* req = (MgsDvdRequest*)user;
-    req->result = mgs_disc_read(req->owner->disc, req->path,
-                                req->host_buffer, req->offset, req->length);
+    req->result = req->absolute
+        ? mgs_disc_read_abs(req->owner->disc, req->host_buffer,
+                            req->offset, req->length)
+        : mgs_disc_read(req->owner->disc, req->path,
+                        req->host_buffer, req->offset, req->length);
+
+    /* MGS_TRACE_DVD=1 names every read. A read that silently returns -1 is
+     * indistinguishable from one the game never issued, and both look like
+     * "the game is not loading anything". */
+    if (getenv("MGS_TRACE_DVD"))
+        fprintf(stderr, "[dvd] %s %s off=0x%08X len=%u -> %ld  dest=0x%08X\n",
+                req->absolute ? "abs" : "path", req->absolute ? "" : req->path,
+                req->offset, req->length, req->result, req->guest_dest);
     /* Published last, so a drain that sees done==1 also sees result. */
     __atomic_store_n(&req->done, 1, __ATOMIC_RELEASE);
 }
@@ -66,6 +78,21 @@ MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
          */
         read_job(req);
     }
+    return req;
+}
+
+MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
+                                      uint32_t guest_dest, uint32_t length,
+                                      uint32_t guest_callback,
+                                      uint32_t guest_block)
+{
+    /* The path is unused for an absolute read, but passing "" rather than
+     * NULL keeps the one allocation path: mgs_dvd_read_async refuses a null
+     * path, and duplicating the request setup to avoid that is how the two
+     * would drift apart. */
+    MgsDvdRequest* req = mgs_dvd_read_async(dvd, "", guest_dest, disc_offset,
+                                            length, guest_callback, guest_block);
+    if (req) req->absolute = 1;
     return req;
 }
 

@@ -53,11 +53,32 @@
 #define DVD_FI_CALLBACK      0x38u
 #define DVD_FI_SIZEOF        0x3Cu
 
-#define DVD_STATE_END           0
-#define DVD_STATE_BUSY         (-1)
-#define DVD_STATE_WAITING      (-2)
-#define DVD_STATE_FATAL_ERROR  (-3)
-#define DVD_STATE_CANCELED     (-10)
+/* DVDCommandBlock::state, from the SDK's dvd.h. Copied EXACTLY, because the
+ * game compares against the numbers, not the names:
+ *
+ *   DVDReadPrio's wait loop treats 0 as done, -1 as a fatal error and 10 as
+ *   cancelled, and SLEEPS on anything else. Our BUSY was -1, so the very
+ *   first synchronous read reported a fatal error before the drive had even
+ *   been asked. DVDReadPrio returned -1 without waiting, the game copied an
+ *   empty buffer over its module, OSLink read a header of zeros, the link
+ *   failed and the game reset itself.
+ *
+ * Only FATAL_ERROR is negative. Guessing a sign here is not a small error;
+ * it is the difference between "working" and "already failed".
+ */
+#define DVD_STATE_FATAL_ERROR  (-1)
+#define DVD_STATE_END            0
+#define DVD_STATE_BUSY           1
+#define DVD_STATE_WAITING        2
+#define DVD_STATE_COVER_CLOSED   3
+#define DVD_STATE_NO_DISK        4
+#define DVD_STATE_COVER_OPEN     5
+#define DVD_STATE_WRONG_DISK     6
+#define DVD_STATE_MOTOR_STOPPED  7
+#define DVD_STATE_PAUSING        8
+#define DVD_STATE_IGNORED        9
+#define DVD_STATE_CANCELED      10
+#define DVD_STATE_RETRY         11
 
 #define MGS_DVD_MAX_PENDING 64
 
@@ -66,6 +87,10 @@ typedef struct MgsDvdRequest {
     int       done;              /* set by the worker, read by the guest thread */
     long      result;            /* bytes read, or -1 */
 
+    /* A request names EITHER a file or an absolute disc offset. The SDK's
+     * synchronous read uses the second: DVDReadPrio resolves the file info
+     * itself and calls DVDReadAbsAsyncPrio, so no path ever reaches us. */
+    int       absolute;
     char      path[256];
     uint32_t  guest_dest;        /* where the guest wants it */
     uint32_t  offset;
@@ -104,6 +129,14 @@ MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
                                   uint32_t guest_dest, uint32_t offset,
                                   uint32_t length, uint32_t guest_callback,
                                   uint32_t guest_block);
+
+/* The same queue, addressed by absolute disc offset rather than by path.
+ * Same worker, same drain, same callback contract - only the lookup differs,
+ * so there is one implementation of "a read in flight" to get wrong. */
+MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
+                                      uint32_t guest_dest, uint32_t length,
+                                      uint32_t guest_callback,
+                                      uint32_t guest_block);
 
 /* Called from the GUEST thread. Copies finished reads into guest memory and
  * returns how many completed, so the caller can run their callbacks. Nothing

@@ -21,12 +21,20 @@
 #include <string.h>
 
 /* Recompiled REL code is emitted at DolRecomp's REL_AUTO_BASE. The extent is
- * the REL's .text size, from `dtk rel info`: 0x456400 bytes at 0x805000EC.
+ * the REL's .text size, from `dtk rel info`: 0x456400 bytes at 0x7F0080EC.
+ *
+ * That base is not a choice any more. DolRecomp's --rel-base fixes every
+ * absolute address in the generated overlay code, and the game loads its
+ * overlay at 0x7F008000 - a hard-coded constant in its own loader. Recompiling
+ * at a DIFFERENT base, which is what 0x80500000 was, leaves the code branching
+ * correctly (dispatch can translate a call) and reading its DATA from an
+ * address 0x014F8000 away from where the data actually is. Nothing translates
+ * a load.
  * Bounding it matters - an unbounded "anything high is the REL" test would
  * swallow addresses the REL does not own and report a false hit, and a false
  * hit returns 1, which tells the caller the call was handled.
  */
-#define MGS_REL_TEXT_BASE 0x805000ECu
+#define MGS_REL_TEXT_BASE 0x7F0080ECu
 #define MGS_REL_TEXT_SIZE 0x00456400u
 
 /* main.dol's .init starts at 0x80003100; .text ends at 0x80062050. */
@@ -130,12 +138,23 @@ static void trace_hit(unsigned address)
  * just handed to OSLink. Returns 0 if the header does not look right, so a
  * surprise leaves dispatch exactly as it was rather than corrupting it.
  */
+static int module_address_is_sane(u32 addr)
+{
+    if (addr >= 0x80000000u && addr < 0x81800000u) return 1;   /* MEM1 */
+    if (addr >= 0x7E000000u && addr < 0x80000000u) return 1;   /* the window */
+    return 0;
+}
+
 static u32 rel_text_base_from_oslink(CPUState* ctx)
 {
     u32 module = ctx->gpr[3];
     u32 count, info, entry, offset;
 
-    if (module < 0x80000000u || module >= 0x81800000u)
+    /* Two windows are valid: MEM1, and the second addressable region at
+     * 0x7E000000. Twin Snakes links its module in the SECOND one, so a check
+     * that only knew about MEM1 rejected the real module pointer and left
+     * every overlay address untranslated. */
+    if (!module_address_is_sane(module))
         return 0;
 
     count = mem_read32(ctx, module + MGS_MODULE_NUM_SECTIONS);
@@ -143,12 +162,19 @@ static u32 rel_text_base_from_oslink(CPUState* ctx)
     if (count <= MGS_REL_TEXT_SECTION || info < 0x40u)
         return 0;
 
-    entry  = info + MGS_REL_TEXT_SECTION * 8u;
+    /* sectionInfoOffset is an offset INTO THE FILE, so the table lives at
+     * module + info - not at `info`, which would read from whatever happens
+     * to sit at 0x4C in low memory. Likewise each entry's offset field is
+     * relative to the module, not absolute: a REL is relocatable and has no
+     * link address to be absolute about. */
+    entry  = module + info + MGS_REL_TEXT_SECTION * 8u;
     offset = mem_read32(ctx, entry);
     offset &= ~3u;                     /* strip the exec/flag bits */
-    if (offset < 0x80000000u || offset >= 0x81800000u)
+    if (offset == 0u)                  /* an empty section is not an error */
         return 0;
-    return offset;
+    if (!module_address_is_sane(module + offset))
+        return 0;
+    return module + offset;
 }
 
 int dolrecomp_dispatch_replacement(CPUState* ctx, u32 address)
@@ -171,8 +197,19 @@ int dolrecomp_dispatch_replacement(CPUState* ctx, u32 address)
                             "recompiled at 0x%08X (delta 0x%08X)\n",
                     base, MGS_REL_TEXT_BASE, MGS_REL_TEXT_BASE - base);
         } else {
+            u32 k;
             fprintf(stderr, "[mgs] OSLink: could not read the module header "
                             "(r3=0x%08X)\n", ctx->gpr[3]);
+            /* The header itself, so "could not read" says WHICH field was
+             * wrong rather than only that something was. */
+            static const u32 at[] = { 0x7F000000u, 0x7F008000u };
+            u32 j;
+            for (j = 0; j < 2u; ++j) {
+                fprintf(stderr, "[mgs]   %08X:", at[j]);
+                for (k = 0; k < 8u; ++k)
+                    fprintf(stderr, " %08X", mem_read32(ctx, at[j] + k * 4u));
+                fprintf(stderr, "\n");
+            }
         }
     }
 

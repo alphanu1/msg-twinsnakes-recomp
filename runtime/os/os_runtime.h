@@ -30,11 +30,15 @@ typedef struct MgsRuntime {
      */
     uint64_t ticks;
 
-    /* Cooperative scheduling means "interrupts disabled" is a flag the game
-     * sets and reads back, not a real mask: only one guest thread runs at a
-     * time, so there is nothing to mask against.
+    /* "Interrupts disabled" is NOT a flag of our own. It is MSR[EE], the
+     * processor bit the real OSDisableInterrupts clears with mtmsr, and the
+     * host reads that same bit to decide whether an interrupt may be
+     * delivered. Keeping a private copy here instead meant the guest could
+     * enable interrupts and the host would never notice - which is exactly
+     * how the scheduler came to idle forever with 1355 retraces refused.
+     *
+     * See mgs_cpu_msr / mgs_cpu_set_msr in cpu_seam.c.
      */
-    int interrupts_enabled;
 
     void (*report_sink)(void* user, const char* line);
     void* report_user;
@@ -50,12 +54,20 @@ MgsRuntime* mgs_runtime_from(CPUState* ctx);
 uint32_t    mgs_guest_gpr(const MgsRuntime* rt, unsigned index);
 void        mgs_set_guest_gpr(MgsRuntime* rt, unsigned index, uint32_t value);
 
+/* Fill the low-memory globals the boot ROM would have left. Must run BEFORE
+ * the guest's entry point: OSInit reads every one of them. */
+struct MgsDisc;
+void mgs_boot_info_init(GuestMemory* mem, const struct MgsDisc* disc);
+
 void mgs_os_report_sink(MgsRuntime* rt, const char* line);
 void mgs_sched_init(MgsRuntime* rt);
 
 /* The CPU seam. See cpu_seam.c: bound to a loaded module's register file, or
  * free-standing so the runtime can be run and tested without one. */
 void mgs_cpu_bind_registers(uint32_t* gpr_array);
+void mgs_cpu_bind_msr(uint32_t* msr);
+uint32_t mgs_cpu_msr(void);
+void mgs_cpu_set_msr(uint32_t value);
 void mgs_cpu_unbind(void);
 void mgs_runtime_set_current(MgsRuntime* rt);
 

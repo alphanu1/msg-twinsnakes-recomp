@@ -12,6 +12,8 @@
 #include "dvd.h"
 #include "../os/os_runtime.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* The runtime the shims act on. Set once at startup; the alternative -
@@ -178,3 +180,46 @@ void mgs_DVDReadAsync(CPUState* ctx)
  * code only ever calls the Prio form. The non-Prio entry point exists here for
  * readability and is what the macro's callers mean. */
 void mgs_DVDReadAsyncPrio(CPUState* ctx) { mgs_DVDReadAsync(ctx); }
+
+/* BOOL DVDReadAbsAsyncPrio(DVDCommandBlock* block, void* addr, s32 length,
+ *                          u32 offset, DVDCBCallback callback, s32 prio)
+ *
+ * The read the SDK's SYNCHRONOUS path actually uses. DVDReadPrio resolves a
+ * DVDFileInfo to an absolute disc offset and calls this, then sleeps on the
+ * DVD thread queue until the callback wakes it. Patching only the by-path
+ * async read left that whole path translated, so the game's loader queued a
+ * read into the SDK's own command queue - which nothing here services - and
+ * the main thread slept in DVDReadPrio for the rest of the run.
+ *
+ * The callback contract is the SDK's: callback(s32 result, DVDCommandBlock*),
+ * run on the guest thread when the read lands. The host's pump does that.
+ */
+void mgs_DVDReadAbsAsyncPrio(CPUState* ctx)
+{
+    uint32_t block    = mgs_guest_gpr(s_rt, 3);
+    uint32_t dest     = mgs_guest_gpr(s_rt, 4);
+    uint32_t length   = mgs_guest_gpr(s_rt, 5);
+    uint32_t offset   = mgs_guest_gpr(s_rt, 6);
+    uint32_t callback = mgs_guest_gpr(s_rt, 7);
+
+    (void)ctx;
+
+    if (!block || !dest) { mgs_set_guest_gpr(s_rt, 3, 0u); return; }
+
+    /* The game reads these back while it waits, exactly as for the by-path
+     * read - the command block is the same structure either way. */
+    guest_write32(&s_rt->mem, block + DVD_CB_ADDR, dest);
+    guest_write32(&s_rt->mem, block + DVD_CB_LENGTH, length);
+    guest_write32(&s_rt->mem, block + DVD_CB_OFFSET, offset);
+    guest_write32(&s_rt->mem, block + DVD_CB_CALLBACK, callback);
+
+    mgs_set_guest_gpr(s_rt, 3,
+        mgs_dvd_read_abs_async(s_dvd, offset, dest, length, callback, block)
+            ? 1u : 0u);
+
+    if (getenv("MGS_TRACE_DVD"))
+        fprintf(stderr, "[dvd] abs queued: block=0x%08X state=%d cb=0x%08X "
+                        "dest=0x%08X len=%u off=0x%08X\n",
+                block, (int)guest_read32(&s_rt->mem, block + DVD_CB_STATE),
+                callback, dest, length, offset);
+}

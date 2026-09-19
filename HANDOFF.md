@@ -111,9 +111,52 @@ layout" section is the target, not the current state.
 
 ---
 
+## STATE, 2026-09-19: THE GAME RUNS ITS OWN MAIN LOOP ON OUR RUNTIME
+
+Under `host/twin-snakes`, with no emulator code linked (`ldd` shows SDL3, libc
+and libm), the boot now reaches:
+
+```
+[OSReport] Retail 2
+[OSReport] Memory 24 MB
+[OSReport] Arena : 0x80290700 - 0x81700000
+[OSReport] << Dolphin SDK - OS   release build: Jul 23 2003 (0x2301) >>
+[OSReport] << Dolphin SDK - DVD  release build: Jul 23 2003 (0x2301) >>
+[OSReport] << Dolphin SDK - VI   release build: Apr 17 2003 (0x2301) >>
+[OSReport] << Dolphin SDK - GX   release build: Jul 23 2003 (0x2301) >>
+[mgs] OSLink: overlay .text at 0x7F0080EC
+```
+
+("Dolphin" there is Nintendo's codename for the GameCube and the name of its
+SDK. It is the *game* reporting what it was built against, years before the
+emulator took the same name. Nothing emulator-derived is linked.)
+
+What that means concretely: the OS is up, the scheduler is switching threads on
+real interrupts delivered through the guest's own dispatcher, the game reads its
+5.5 MB overlay off the disc through our DVD layer, and `OSLink` relocates it.
+Between OS init and there the game renders — thousands of GX commands, its own
+`GXDrawDone` answered by a PE-finish interrupt the host raises from the command
+stream.
+
+**What is NOT done:** no pixels. The host counts GX FIFO bytes and discards
+them; turning them into an image is phase 3, and the Konami logo seen under
+ModernGekko was drawn by Dolphin's GPU emulation, not by anything of ours.
+
+Nine findings from this session are recorded below as **F61-F69**. The one
+worth reading first is **F68**: a translation layer that fixes control flow
+passes every test that only checks control flow, and hides a data bug
+indefinitely.
+
+---
+
 ## NEXT, IN ORDER
 
-1. **Wire the REL into the module** (F30) — the four items above. This is what
+1. **Run the relinked overlay.** The overlay is now recompiled at its real load
+   address (F68); the first execution of it is the immediate next step.
+2. **Phase 3, the GX renderer.** This is now the thing between here and a
+   picture. The FIFO is producing real commands and nothing consumes them.
+3. **Name the remaining unnamed SDK entry points the engine calls.**
+4. **Wire the REL into the module** (F30) — the four items above. This is what
    stands between the Konami logo and the title screen, and it is phase 1's
    remaining work.
 2. **Clear the interpreter fallback** on chunk `[0x800455E0,0x800495E0)`,
@@ -2009,6 +2052,137 @@ options worth weighing next time this is picked up:
 three separate things — `ICFlashInvalidate`, `DCFlushRange`, and
 `__OSInitAudioSystem` — and every future SDK shim inherits it. Fixing it once
 is worth more than working around it a fourth time.
+
+**F61 — the FP-unavailable exception was not a fault. It was the SDK working.**
+The boot stopped at `pc = 0x800` after 708,106 steps, which reads like a
+floating-point fault and is not one. The Dolphin SDK does not save 32 FPRs on
+every thread switch: it restores a context with `MSR[FP]` **clear** and installs
+`OSSwitchFPUContext` on the FP-unavailable vector, so the first float a thread
+executes traps there, the handler swaps FPU ownership between OSContexts and
+resumes with FP enabled. A thread that never touches floating point never pays.
+
+The vector's code is *copied into low memory at runtime* by `__OSExceptionInit`,
+so no translated chunk contains it and dispatch legitimately has nothing at
+0x800. The host now performs `OSSwitchFPUContext` against its own register
+file: same ownership word at `0x800000D8`, same `OS_CONTEXT_STATE_FPSAVED` gate
+on the load, same OSContext offsets. The guest cannot tell by inspecting memory.
+
+**What was wrong for three attempts:** the step count stayed at exactly 708,106
+across an MSR-init change, an `mtmsr`/`mfmsr`/`rfi` change and an srr1-restore
+change. Identical step counts across three different fixes is a message: none
+of them were on the path. The actual evidence was one line away — printing
+`cpu->exception` and `srr1` showed `msr = 0x00000032`, FP clear, which is what
+the SDK *intends*.
+
+**F62 — the SPR shadow table was invisible to the generated code.**
+`host/spr.c` kept SPR writes in its own array. That is fine for registers only
+the guest reads back, and wrong for the ones the *translated code* consults:
+
+- `HID2[PSE]` gates every paired-single instruction. Without it the first
+  `psq_st` in `PSMTXIdentity` raised an illegal-instruction program exception —
+  exactly what real hardware does.
+- `GQR0-7` carry the scale and type a `psq_l`/`psq_st` quantises with. A stale
+  GQR does not fault; it silently returns wrongly-scaled numbers, which is worse.
+- `SRR0`/`SRR1` are the pair `rfi` consumes. `OSLoadContext` ends with
+  `mtsrr0`/`mtsrr1`/`rfi`, so a shadow copy would have every context switch
+  resume wherever the host last wrote, not where the scheduler chose.
+
+Those four are now mirrored into the CPU state in both directions.
+
+**F63 — `__OSDispatchInterrupt` does not return, so calling it could not work.**
+It ends in `OSLoadContext`, an `rfi` — the thread it resumes may not be the one
+that was interrupted. The host had been invoking it with a return sentinel and
+waiting. That is not a shortcut that mostly works; it cannot work, and it
+presented as 1000 interrupts "failing" after burning 200,000 steps each.
+
+Replaced with the state transition the hardware performs: spill the register
+file into the current thread's OSContext, set `OS_CONTEXT_STATE_EXC`, put the
+exception number and context in r3/r4, clear `MSR[EE]` and `MSR[FP]`, and set
+the pc. Then **return to the main loop**, which keeps stepping inside the
+handler like any other guest code. Resuming is the guest's business, via its
+own `rfi`.
+
+**F64 — the run loop read `pc` before raising the interrupt.**
+One line, and it cost the entire boot. `mgs_module_run` captured `pc` at the top
+of the iteration, then raised the retrace interrupt (moving the pc to the
+dispatcher), then dispatched the **stale** value — re-entering the interrupted
+code with the exception's MSR still in force. `MSR[EE]` therefore stayed clear
+for ever and exactly one interrupt was delivered in a 40-million-step run.
+
+Anything that can move the pc now runs *before* pc is read. With that fixed the
+game went from idle to alive in one step: the GX banner printed, 19,645 retraces
+were delivered, and the game issued its first real graphics commands.
+
+**F65 — "interrupts disabled" was two variables that nothing kept in step.**
+`mgs_OSDisableInterrupts` maintained `rt->interrupts_enabled`; the host's
+"may I deliver an interrupt?" gate read `MSR[EE]`. The guest could enable
+interrupts and the host would never notice — 1,355 retraces refused while the
+scheduler idled. The shims now act on `MSR[EE]` itself, which is what the SDK's
+own versions do (`mfmsr`, clear or set the bit, `mtmsr`). One bit, one meaning.
+
+**F66 — PI's interrupt status is a mirror of device lines, not a latch.**
+The host set PI's VI bit when it raised a retrace and never cleared it. A device
+drops its line when the guest acknowledges *at the device*: the VI handler
+clears the display-interrupt INT bits, the PE finish handler writes bit 3 of the
+pixel engine's control register. With VI permanently asserted, and VI outranking
+the pixel engine in the SDK's priority table, the PE finish interrupt was never
+the highest-priority pending source — so `GXDrawDone` slept for ever while the
+retrace handler kept running perfectly. That looked like a healthy idle loop and
+was not.
+
+Both linkages are now modelled. `GXDrawDone` also needed the draw-done token
+recognised in the FIFO byte stream (BP opcode `0x61`, register `0x45`, bit 1) so
+the host can answer it: a graphics processor that completes instantly is still a
+graphics processor that completes.
+
+**F67 — a wrong sign in one constant reset the whole game.**
+`DVD_STATE_BUSY` was defined as `-1`. The SDK's value is `1`; `-1` is
+`DVD_STATE_FATAL_ERROR`. `DVDReadPrio` treats 0 as done, `-1` as fatal and 10 as
+cancelled, and sleeps on anything else — so the very first synchronous read
+reported a fatal error *before the drive had been asked*, returned `-1` without
+waiting, and the game copied an empty buffer over its module. `OSLink` then read
+a header of zeros, the link failed, and the game reset itself: `GXAbortFrame`,
+arena reset, jump to address zero.
+
+Five separate wrong answers, one wrong sign. The full state table is now copied
+verbatim from the SDK header with a comment saying why guessing a sign here is
+not a small error.
+
+**Also wrong, found on the way:** the host→guest return sentinel was
+`0x0DEADBEE`, which is not 4-byte aligned. `blr` ignores the low two bits, so a
+callback ran correctly, returned correctly, and the host then waited for an
+address that cannot occur. It reported "gave up at 0x0DEADBEC" — two less than
+the sentinel, which *is* the masking, stated plainly in the output.
+
+**F68 — the game's module lives in the second addressable window, and its
+recompiled twin has to live at the same address.**
+Twin Snakes' loader copies its 5.5 MB overlay to a hard-coded `0x7F008000` and
+links it there. Two consequences, and the second is the deeper one:
+
+1. **The window has to exist.** `0x7E000000-0x7FFFFFFF` is not MEM1 and not a
+   mirror of it; Dolphin calls it "fake VMEM" and provides 32 MB there for every
+   GameCube title, which is why phase 1 — on a Dolphin-derived runtime — never
+   noticed it was needed. With nothing mapped, the copy went nowhere.
+2. **The recompiled overlay's base is not ours to pick.** `--rel-base` fixes
+   every absolute address in the generated code. We had used `0x80500000`, an
+   arbitrary choice, and taught dispatch to translate call targets between the
+   two. That makes *branches* work and leaves every **load and store** reading
+   from an address 0x014F8000 away from where the data is. Nothing translates a
+   load. The overlay is now recompiled at `0x7F008000`, so guest and recompiled
+   addresses are the same address.
+
+**The lesson worth keeping:** a translation layer that fixes control flow will
+pass every test that only checks control flow, and hide a data bug indefinitely.
+
+**F69 — the boot ROM's legacy is not optional.**
+The host never wrote the low-memory globals the IPL and apploader leave behind,
+and zero is a *valid-looking* answer to every question the SDK asks of them.
+`memorySize` 0 printed "Memory 0 MB"; `consoleType` 0 made `OSGetConsoleType`
+return its unknown-board value `0x10000002`, which reports as "Development
+HW-1"; the TV mode defaulted to NTSC on a PAL disc. The game believed it was on
+a debug board. `runtime/os/boot_info.c` now writes the disc ID, the boot magic,
+24 MB, retail hardware, the 162/486 MHz clocks and the TV standard implied by
+the game ID's region letter.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

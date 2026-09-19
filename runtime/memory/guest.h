@@ -27,9 +27,27 @@
  */
 #define GUEST_ARAM_SIZE     (16u * 1024u * 1024u)
 
+/* The second addressable window, 0x7E000000-0x7FFFFFFF.
+ *
+ * This is not MEM1 and not a mirror of it. The Gekko's block address
+ * translation lets a program map regions of its own, and the GameCube SDK's
+ * memory-protection setup makes this range addressable; Dolphin calls it
+ * "fake VMEM" and provides 32 MB there for every GameCube title, which is
+ * why phase 1 - running on a Dolphin-derived runtime - never noticed it was
+ * needed.
+ *
+ * Twin Snakes needs it. Its loader copies the 5.5 MB game module to
+ * 0x7F008000 and links it there, so with nothing mapped the copy went
+ * nowhere, OSLink read a header of zeros, the link failed and the game reset
+ * itself. That presented as a jump to address zero.
+ */
+#define GUEST_VMEM_BASE     0x7E000000u
+#define GUEST_VMEM_SIZE     (32u * 1024u * 1024u)
+
 typedef struct GuestMemory {
     uint8_t* ram;       /* GUEST_RAM_SIZE bytes */
     uint8_t* aram;      /* GUEST_ARAM_SIZE bytes */
+    uint8_t* vmem;      /* GUEST_VMEM_SIZE bytes at GUEST_VMEM_BASE */
 } GuestMemory;
 
 int  guest_memory_init(GuestMemory* m);
@@ -41,7 +59,17 @@ void guest_memory_free(GuestMemory* m);
  */
 static inline uint8_t* guest_ptr(const GuestMemory* m, uint32_t addr, uint32_t size)
 {
-    uint32_t off = addr & 0x3FFFFFFFu;          /* fold 0x8... and 0xC... */
+    uint32_t off;
+
+    /* Checked before the fold, because the fold would turn 0x7E000000 into
+     * 0x3E000000 and hand back a pointer 992 MB into a 24 MB block. */
+    if (addr - GUEST_VMEM_BASE < GUEST_VMEM_SIZE) {
+        off = addr - GUEST_VMEM_BASE;
+        if (!m->vmem || size > GUEST_VMEM_SIZE - off) return NULL;
+        return m->vmem + off;
+    }
+
+    off = addr & 0x3FFFFFFFu;                   /* fold 0x8... and 0xC... */
     if (off > GUEST_RAM_SIZE || size > GUEST_RAM_SIZE - off)
         return NULL;
     return m->ram + off;

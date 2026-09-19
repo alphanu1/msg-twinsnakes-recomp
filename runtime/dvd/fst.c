@@ -141,3 +141,54 @@ int mgs_fst_file(const MgsFst* fst, const char* path,
     if (length) *length = e.length_or_next;
     return 1;
 }
+
+/* Build an entry's full path by walking down from the root.
+ *
+ * The FST stores no path, only a name per entry, and a directory's extent is
+ * the half-open range [its index + 1, its length_or_next). So the path is
+ * recovered by descending: at each level, the child that CONTAINS the target
+ * index is the next path component. This is the forward lookup run backwards,
+ * over the same ranges, so the two cannot disagree about the tree's shape.
+ */
+int mgs_fst_path(const MgsFst* fst, uint32_t index, char* out, size_t size)
+{
+    MgsFstEntry root, e;
+    uint32_t cur, end;
+    size_t used = 0u;
+
+    if (!fst || !out || !size || index == 0u) return 0;
+    if (!mgs_fst_entry(fst, 0u, &root)) return 0;
+    if (index >= root.length_or_next) return 0;
+
+    out[0] = '\0';
+    cur = 1u;
+    end = root.length_or_next;
+
+    while (cur < end) {
+        const char* name;
+        size_t n;
+
+        if (!mgs_fst_entry(fst, cur, &e)) return 0;
+
+        if (cur != index && (!e.is_dir || index <= cur || index >= e.length_or_next)) {
+            cur = e.is_dir ? e.length_or_next : cur + 1u;   /* not this subtree */
+            continue;
+        }
+
+        name = mgs_fst_name(fst, &e);
+        if (!name) return 0;
+        n = strlen(name);
+        if (used + n + 2u > size) return 0;
+        memcpy(out + used, name, n);
+        used += n;
+        out[used] = '\0';
+
+        if (cur == index) return 1;
+
+        out[used++] = '/';
+        out[used] = '\0';
+        end = e.length_or_next;
+        cur += 1u;
+    }
+    return 0;
+}

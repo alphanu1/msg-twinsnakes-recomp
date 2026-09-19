@@ -34,8 +34,28 @@ typedef struct MgsRunResult {
     uint32_t      msr;
     uint64_t      syscalls;   /* barriers serviced, not faults */
     uint64_t      frames;     /* retrace ticks raised */
+    uint64_t      fp_switches; /* lazy FP context switches serviced */
 } MgsRunResult;
 
+/* A periodic hook the run loop calls between steps, for work that has to
+ * happen on the guest thread but is driven by the host: finished DVD reads,
+ * and whatever else phases 3 and 4 add. The run loop deliberately knows
+ * nothing about what it pumps. */
+typedef void (*MgsPump)(const MgsModule* mod, void* cpu, void* user);
+void mgs_module_set_pump(MgsPump pump, void* user);
+
+uint32_t mgs_module_call_fail_pc(void);
+void mgs_host_set_vmem(uint8_t* vmem);
+uint64_t mgs_host_vmem_reads(void);
+uint64_t mgs_host_vmem_writes(void);
+uint32_t mgs_host_vmem_lo(void);
+uint32_t mgs_host_vmem_hi(void);
+uint32_t mgs_module_msr(const void* cpu);
+uint32_t mgs_module_guest_read32(void* cpu, uint32_t addr);
+void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t));
+uint32_t* mgs_module_msr_ptr(void* cpu);
+uint32_t mgs_module_current_context(void* cpu);
+int      mgs_module_take_exception(void* cpu, uint32_t handler, uint32_t number);
 int   mgs_module_load(MgsModule* mod, const char* path);
 MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps);
 void  mgs_module_unload(MgsModule* mod);
@@ -74,3 +94,7 @@ int      mgs_interrupt_vi(const MgsModule* mod, void* cpu);
 int      mgs_interrupt_dsp(const MgsModule* mod, void* cpu);
 uint64_t mgs_interrupt_delivered(void);
 uint64_t mgs_interrupt_refused(void);
+uint64_t mgs_interrupt_failed(void);
+int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu);
+uint64_t mgs_interrupt_pe_seen(void);
+uint64_t mgs_interrupt_pe_sent(void);

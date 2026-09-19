@@ -18,6 +18,8 @@ static const MgsPatch k_patches[] = {
     {0x8001B6D0u, mgs_PPCMthid2},   /* PPCMthid2 */
     {0x8001B6ECu, mgs_PPCDisableSpeculation},   /* PPCDisableSpeculation */
     {0x8001B714u, mgs_PPCSetFpNonIEEEMode},   /* PPCSetFpNonIEEEMode */
+    {0x8001CDC4u, mgs___OSInitAudioSystem},   /* __OSInitAudioSystem */
+    {0x8001CF80u, mgs___OSStopAudioSystem},   /* __OSStopAudioSystem */
     {0x8001D058u, mgs_DCEnable},   /* DCEnable */
     {0x8001D06Cu, mgs_DCInvalidateRange},   /* DCInvalidateRange */
     {0x8001D098u, mgs_DCFlushRange},   /* DCFlushRange */
@@ -39,12 +41,13 @@ static const MgsPatch k_patches[] = {
     {0x80026CD8u, mgs_DVDOpen},   /* DVDOpen */
     {0x80026DA0u, mgs_DVDClose},   /* DVDClose */
     {0x80026FE8u, mgs_DVDReadAsyncPrio},   /* DVDReadAsyncPrio */
+    {0x80028E00u, mgs_DVDReadAbsAsyncPrio},   /* DVDReadAbsAsyncPrio */
     {0x80029360u, mgs_DVDGetCommandBlockStatus},   /* DVDGetCommandBlockStatus */
     {0x80029804u, mgs_DVDGetCurrentDiskID},   /* DVDGetCurrentDiskID */
     {0x80029DE8u, mgs_DVDCompareDiskID},   /* DVDCompareDiskID */
 };
 
-#define MGS_PATCH_COUNT 33u
+#define MGS_PATCH_COUNT 36u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {

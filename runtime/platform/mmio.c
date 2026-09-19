@@ -1,5 +1,17 @@
 #include "mmio.h"
+
+#include <stdio.h>
 #include <string.h>
+
+/* Command processor FIFO registers, by byte offset from MMIO_CP. The SDK
+ * addresses them as halfword indices, so GX_GET_CP_REG(24) is 0x30. */
+#define CP_STATUS        0x00u
+#define CP_STATUS_RD_IDLE  0x0004u
+#define CP_STATUS_CMD_IDLE 0x0008u
+#define CP_RW_DISTANCE   0x30u   /* bytes written but not yet consumed */
+#define CP_WRITE_PTR     0x34u
+#define CP_READ_PTR      0x38u
+
 
 /* Video interface, by offset from MMIO_VI. Only the ones the SDK polls are
  * modelled; the rest read back what was written.
@@ -81,6 +93,8 @@ static uint8_t* at(MgsMmio* m, uint32_t addr)
 
 uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 {
+    if (addr >= MMIO_BASE && addr < MMIO_END)
+        ++m->read_hist[(addr - MMIO_BASE) / 2u];
     uint8_t* p = at(m, addr);
     uint32_t v = 0u;
     unsigned i;
@@ -120,8 +134,169 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
         hl[1] = (uint8_t)m->vi_half_line;
     }
 
+    /* The graphics processor, modelled as infinitely fast.
+     *
+     * There is no GP here, so nothing consumes the FIFO - and the game does
+     * not merely submit and move on. It polls GXGetFifoPtrs in a yield loop
+     * until the read pointer catches the write pointer, which with a static
+     * read pointer never happens: 33 million reads of four registers and no
+     * further drawing. That is not a stall in our code; it is the game
+     * correctly waiting for hardware that is not there.
+     *
+     * Reporting the FIFO as already drained is the honest answer for a host
+     * that executes graphics commands synchronously, and it is what phase 3
+     * will genuinely be: the renderer consumes the stream during the write,
+     * so by the time the guest can look, it IS empty.
+     *
+     * The read pointer is reported AS the write pointer rather than as a
+     * constant, so the game's own arithmetic on the pair stays consistent
+     * whatever it set the FIFO base to.
+     */
+    if (addr >= MMIO_CP + CP_RW_DISTANCE && addr < MMIO_CP + CP_RW_DISTANCE + 4u)
+        return 0u;                                    /* nothing outstanding */
+
+    if (addr >= MMIO_CP + CP_READ_PTR && addr < MMIO_CP + CP_READ_PTR + 4u) {
+        uint32_t off = addr - (MMIO_CP + CP_READ_PTR);
+        uint8_t* w = at(m, MMIO_CP + CP_WRITE_PTR + off);
+        if (w) { p = w; }
+    }
+
+    if (addr >= MMIO_CP + CP_STATUS && addr < MMIO_CP + CP_STATUS + 2u) {
+        /* Read idle and command idle: the GP has nothing left to do. The
+         * overflow and underflow watermark bits stay as written - those are
+         * the guest's own thresholds, not our state to invent. */
+        for (i = 0; i < size; ++i) v = (v << 8) | p[i];
+        return v | CP_STATUS_RD_IDLE | CP_STATUS_CMD_IDLE;
+    }
+
     for (i = 0; i < size; ++i) v = (v << 8) | p[i];   /* big-endian, as the bus is */
     return v;
+}
+
+
+/* Watch the command stream for the draw-done token.
+ *
+ * This is NOT a FIFO parser - phase 3 writes that. It tracks exactly one
+ * two-part sequence, because the host has to answer it: BP opcode 0x61,
+ * then the 32-bit register write. The write-gather pipe is byte-addressed
+ * and the SDK writes the opcode as a u8 and the register as a u32, but a
+ * compiler is free to split the u32, so the bytes are gathered rather than
+ * assumed to arrive whole.
+ *
+ * Anything that is not that sequence resets the state machine. Guessing at
+ * a partially-recognised command is how a FIFO watcher starts reporting
+ * tokens the guest never sent.
+ */
+
+/* Video interface display interrupts. Four 32-bit registers; the INT bit is
+ * the top bit of the upper halfword and the enable is bit 12 of it. DI0 and
+ * DI1 are the retrace interrupts, DI2 and DI3 the position ones - the SDK's
+ * handler returns early for the latter, so which of them is asserted decides
+ * whether a frame is counted at all. */
+#define VI_DI0          0x30u
+#define VI_DI_COUNT     4u
+#define VI_DI_INT       0x8000u
+#define VI_DI_ENB       0x1000u
+
+/* Pixel engine interrupt control, GX_GET_PE_REG(5). Bits 0 and 1 enable the
+ * token and finish interrupts; bits 2 and 3 are write-one-to-clear
+ * acknowledgements for them. */
+#define PE_INT_CTRL     0x0Au
+#define PE_ACK_TOKEN    0x0004u
+#define PE_ACK_FINISH   0x0008u
+
+/* Processor interface interrupt status, and the two bits this models. */
+#define PI_INTSR_OFF    0x00u
+#define PI_VI           (1u << 8)
+#define PI_PE_TOKEN     (1u << 9)
+#define PI_PE_FINISH    (1u << 10)
+
+
+
+static uint32_t pi_cause(const MgsMmio* m)
+{
+    const uint8_t* p = &m->regs[(MMIO_PI - MMIO_BASE) + PI_INTSR_OFF];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static void pi_set_cause(MgsMmio* m, uint32_t v)
+{
+    uint8_t* p = &m->regs[(MMIO_PI - MMIO_BASE) + PI_INTSR_OFF];
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+static uint16_t vi_di(const MgsMmio* m, unsigned i)
+{
+    const uint8_t* p = &m->regs[(MMIO_VI - MMIO_BASE) + VI_DI0 + i * 4u];
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static void vi_di_set(MgsMmio* m, unsigned i, uint16_t v)
+{
+    uint8_t* p = &m->regs[(MMIO_VI - MMIO_BASE) + VI_DI0 + i * 4u];
+    p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
+}
+
+/* PI's VI bit follows the display interrupts rather than being latched: the
+ * line is asserted while ANY display interrupt is pending, and drops when the
+ * guest's handler has cleared them all. */
+static void vi_refresh_line(MgsMmio* m)
+{
+    unsigned i;
+    uint32_t cause = pi_cause(m);
+    for (i = 0; i < VI_DI_COUNT; ++i) {
+        if (vi_di(m, i) & VI_DI_INT) { pi_set_cause(m, cause | PI_VI); return; }
+    }
+    pi_set_cause(m, cause & ~PI_VI);
+}
+
+void mgs_mmio_assert_retrace(MgsMmio* m)
+{
+    unsigned i, any = 0u;
+    if (!m) return;
+    /* Only DI0 and DI1: those are the retrace interrupts. Asserting DI2 or
+     * DI3 would send the SDK's handler down its position-callback path,
+     * which returns WITHOUT counting the frame or waking anything. */
+    for (i = 0; i < 2u; ++i) {
+        uint16_t di = vi_di(m, i);
+        if (di & VI_DI_ENB) { vi_di_set(m, i, (uint16_t)(di | VI_DI_INT)); any = 1u; }
+    }
+    /* Before the guest arms a display interrupt there is no line to assert.
+     * Raising PI's bit anyway would have the dispatcher call a handler with
+     * nothing to service. */
+    if (any) pi_set_cause(m, pi_cause(m) | PI_VI);
+}
+
+static void wgpipe_scan(MgsMmio* m, uint32_t value, unsigned size)
+{
+    unsigned i;
+
+    for (i = 0; i < size; ++i) {
+        uint8_t byte = (uint8_t)(value >> (8u * (size - 1u - i)));
+
+        if (m->bp_opcode_pending) {
+            m->bp_partial = (m->bp_partial << 8) | byte;
+            if (++m->bp_have == 4u) {
+                /* BP register 0x45 is PE_DONE; bit 1 asks for the finish
+                 * interrupt. GXSetDrawSync uses register 0x47 and goes to
+                 * the TOKEN interrupt instead, which is a different wakeup
+                 * - so the register number is checked, not just the bit. */
+                if ((m->bp_partial >> 24) == 0x45u && (m->bp_partial & 0x2u))
+                    ++m->draw_done_tokens;
+                m->bp_opcode_pending = 0u;
+                m->bp_have = 0u;
+                m->bp_partial = 0u;
+            }
+            continue;
+        }
+        if (byte == 0x61u) {          /* load BP register */
+            m->bp_opcode_pending = 1u;
+            m->bp_have = 0u;
+            m->bp_partial = 0u;
+        }
+    }
 }
 
 void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
@@ -136,6 +311,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
      * until phase 3 has something to parse it with. */
     if (addr >= MMIO_WGPIPE && addr < MMIO_WGPIPE + 0x20u) {
         m->wgpipe_bytes += size;
+        wgpipe_scan(m, value, size);
         return;
     }
 
@@ -143,6 +319,18 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     if (!p) return;
     for (i = 0; i < size; ++i)
         p[i] = (uint8_t)(value >> (8u * (size - 1u - i)));
+
+    /* Acknowledging an interrupt AT THE DEVICE is what drops its line into
+     * PI. Both of these are the guest's own handlers doing exactly that. */
+    if (addr >= MMIO_VI + VI_DI0 && addr < MMIO_VI + VI_DI0 + VI_DI_COUNT * 4u)
+        vi_refresh_line(m);
+
+    if (addr == MMIO_PE + PE_INT_CTRL && size == 2u) {
+        uint32_t cause = pi_cause(m);
+        if (value & PE_ACK_FINISH) cause &= ~PI_PE_FINISH;
+        if (value & PE_ACK_TOKEN)  cause &= ~PI_PE_TOKEN;
+        pi_set_cause(m, cause);
+    }
 
     /* Transfers that hardware would complete asynchronously complete here
      * immediately: clear the start bit the guest just set, so the poll that
@@ -188,4 +376,44 @@ void mgs_mmio_tick_frame(MgsMmio* m)
     m->vi_half_line = (uint16_t)((m->vi_half_line + VI_HALF_LINES_PER_FIELD)
                                  % VI_HALF_LINES_PER_FIELD);
     if (m->vi_half_line == 0u) m->vi_half_line = 1u;
+}
+
+int mgs_mmio_take_draw_done(MgsMmio* m)
+{
+    if (!m || !m->draw_done_tokens) return 0;
+    --m->draw_done_tokens;
+    return 1;
+}
+
+/* Which registers is the guest reading? A stall shows up here as one address
+ * with a count orders of magnitude above the rest. */
+void mgs_mmio_report_hot(const MgsMmio* m, unsigned top)
+{
+    static const struct { uint32_t base, end; const char* name; } blocks[] = {
+        { MMIO_CP,  MMIO_PE,     "CP"  }, { MMIO_PE,  MMIO_VI,  "PE" },
+        { MMIO_VI,  MMIO_PI,     "VI"  }, { MMIO_PI,  MMIO_MI,  "PI" },
+        { MMIO_MI,  MMIO_DSP,    "MI"  }, { MMIO_DSP, MMIO_DI,  "DSP" },
+        { MMIO_DI,  MMIO_SI,     "DI"  }, { MMIO_SI,  MMIO_EXI, "SI" },
+        { MMIO_EXI, MMIO_AI,     "EXI" }, { MMIO_AI,  MMIO_WGPIPE, "AI" },
+    };
+    unsigned n = (MMIO_END - MMIO_BASE) / 2u, i, k, shown = 0u;
+
+    if (!m) return;
+    printf("hottest MMIO reads:\n");
+    for (k = 0; k < top; ++k) {
+        unsigned best = 0u; uint32_t bestc = 0u; uint32_t addr; const char* nm = "?";
+        for (i = 0; i < n; ++i) {
+            uint32_t c = m->read_hist[i];
+            if (c > bestc) { bestc = c; best = i; }
+        }
+        if (!bestc) break;
+        addr = MMIO_BASE + best * 2u;
+        for (i = 0; i < sizeof blocks / sizeof blocks[0]; ++i)
+            if (addr >= blocks[i].base && addr < blocks[i].end) nm = blocks[i].name;
+        printf("  0x%08X  %-4s +0x%03X  %10u reads\n",
+               addr, nm, addr - (addr & 0xFFFFF000u), bestc);
+        ((MgsMmio*)m)->read_hist[best] = 0u;   /* consumed for this report */
+        ++shown;
+    }
+    if (!shown) printf("  (none)\n");
 }

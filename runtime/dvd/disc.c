@@ -182,3 +182,52 @@ long mgs_disc_read(MgsDisc* disc, const char* path,
         return (long)n;
     }
 }
+
+/* Read by ABSOLUTE disc offset.
+ *
+ * The SDK's synchronous read does not go through a path. DVDReadPrio turns a
+ * DVDFileInfo into a disc offset and calls DVDReadAbsAsyncPrio, so the game's
+ * loader never names a file at all - which is why a path-only disc layer
+ * looked complete and still left the boot blocked in DVDReadPrio.
+ *
+ * An image can seek. An extracted FOLDER cannot: its files are separate on
+ * the host filesystem and there is no image to index into. But the FST
+ * records every file's disc offset, so the mapping BACK from an offset to a
+ * file is available, and that is what this does. It is the same table the
+ * forward lookup uses, read the other way.
+ *
+ * A read that falls outside every file - the boot header, bi2, the apploader
+ * or the FST itself - is refused rather than guessed at. Those live in sys/
+ * on an extracted disc and a caller wanting them should ask for them by name.
+ */
+long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t length)
+{
+    uint32_t i;
+
+    if (!disc->mounted || !out) return -1;
+
+    if (disc->kind == MGS_DISC_IMAGE) {
+        if (!read_at(disc->image, (long)offset, out, length)) return -1;
+        return (long)length;
+    }
+
+    for (i = 0; i < disc->fst.entry_count; ++i) {
+        MgsFstEntry e;
+        char path[1024];
+
+        if (!mgs_fst_entry(&disc->fst, i, &e) || e.is_dir) continue;
+        if (offset < e.offset_or_parent ||
+            offset >= e.offset_or_parent + e.length_or_next)
+            continue;
+
+        if (!mgs_fst_path(&disc->fst, i, path, sizeof path)) return -1;
+        if (getenv("MGS_TRACE_DVD"))
+            fprintf(stderr, "[disc] abs 0x%08X -> %s + 0x%X (file at 0x%08X, %u bytes)\n",
+                    offset, path, offset - e.offset_or_parent,
+                    e.offset_or_parent, e.length_or_next);
+        /* A read may legitimately be shorter than asked for; mgs_disc_read
+         * already clamps to the file's length. */
+        return mgs_disc_read(disc, path, out, offset - e.offset_or_parent, length);
+    }
+    return -1;
+}

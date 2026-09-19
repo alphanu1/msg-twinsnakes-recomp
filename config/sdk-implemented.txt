@@ -39,6 +39,13 @@ DVDClose
 # was an error the generator caught by refusing to claim an address it could
 # not find.
 DVDReadAsyncPrio
+# The read the SYNCHRONOUS path actually uses. DVDReadPrio resolves a
+# DVDFileInfo to an absolute disc offset itself and calls this, so patching
+# only the by-path read left the game's loader queuing into the SDK's own
+# command queue - which nothing here services - and its main thread slept in
+# DVDReadPrio for the whole run. On an extracted disc the FST maps the offset
+# back to a file; see mgs_disc_read_abs.
+DVDReadAbsAsyncPrio
 DVDGetCommandBlockStatus
 # DVDGetFileInfoStatus is a real function but is not yet in the symbol map -
 # a genuine gap, not a macro. Restore this line once alignment reaches it.
@@ -76,3 +83,11 @@ DCFlushRangeNoSync
 DCStoreRange
 L2GlobalInvalidate
 LCDisable
+
+# --- audio: deferred to phase 4 ---------------------------------------------
+# The DSP bring-up waits on completion flags that hardware raises
+# asynchronously, and there is no DSP here. Stubbed so the boot can reach VI;
+# phase 4 replaces this with a real voice mixer. Only patchable at all because
+# the patch guards now reach intra-chunk calls.
+__OSInitAudioSystem
+__OSStopAudioSystem

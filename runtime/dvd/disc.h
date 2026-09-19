@@ -46,6 +46,10 @@ void mgs_disc_unmount(MgsDisc* disc);
 long mgs_disc_read(MgsDisc* disc, const char* path,
                    void* out, uint32_t offset, uint32_t length);
 
+/* Read by absolute disc offset. The SDK's synchronous read path never names
+ * a file: DVDReadPrio resolves the file info to a disc offset itself. */
+long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t length);
+
 /* File length, or -1 if absent. DVDOpen needs this to fill its file info. */
 long mgs_disc_file_size(MgsDisc* disc, const char* path);
 
