@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include "../memory/guest.h"
+#include "bp.h"
 
 /* Opcodes, from the command processor's encoding. The draw opcodes carry the
  * attribute-table index in their low three bits. */
@@ -114,6 +115,10 @@ typedef void (*MgsGxTriangleFn)(struct MgsGx* gx, const MgsGxVertex* a,
 typedef struct MgsGx {
     GuestMemory* mem;
 
+    /* Pixel pipeline configuration, set by 0x61 commands in this same
+     * stream. Held here so the rasteriser has one place to read it from. */
+    MgsGxBp bp;
+
     /* Command processor state. */
     uint32_t vcd_lo, vcd_hi;             /* CP 0x50, 0x60 */
     uint32_t vat_a[8], vat_b[8], vat_c[8];
@@ -143,6 +148,14 @@ typedef struct MgsGx {
     MgsGxTriangleFn triangle;
     void* user;
 
+    /* Work the host must do, noticed here because this is the only place
+     * that knows where a command starts. The naive alternative - scanning the
+     * byte stream for a register opcode - matches 0x61 bytes inside vertex
+     * data too, and acting on one of those writes a framebuffer over the
+     * game's memory. Counting them was harmless; acting on them was not. */
+    uint64_t draw_done_tokens;   /* BP 0x45 with the interrupt bit */
+    uint32_t copy_pending;       /* BP 0x52, the command, or 0 */
+
     uint64_t commands, primitives, vertices, triangles, desyncs;
 } MgsGx;
 
@@ -160,5 +173,11 @@ void mgs_gx_vertex_format(const MgsGx* gx, unsigned vat, MgsGxVertexFormat* out)
  * if the format is one this cannot size, which is a refusal to desynchronise
  * rather than a guess. */
 unsigned mgs_gx_vertex_size(const MgsGxVertexFormat* f);
+
+/* Take the pending framebuffer copy, if the game has asked for one. */
+int mgs_gx_take_copy(MgsGx* gx, uint32_t* cmd);
+
+/* Take one draw-done token, if the game has sent one. */
+int mgs_gx_take_draw_done(MgsGx* gx);
 
 #endif

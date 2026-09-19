@@ -174,19 +174,6 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 }
 
 
-/* Watch the command stream for the draw-done token.
- *
- * This is NOT a FIFO parser - phase 3 writes that. It tracks exactly one
- * two-part sequence, because the host has to answer it: BP opcode 0x61,
- * then the 32-bit register write. The write-gather pipe is byte-addressed
- * and the SDK writes the opcode as a u8 and the register as a u32, but a
- * compiler is free to split the u32, so the bytes are gathered rather than
- * assumed to arrive whole.
- *
- * Anything that is not that sequence resets the state machine. Guessing at
- * a partially-recognised command is how a FIFO watcher starts reporting
- * tokens the guest never sent.
- */
 
 /* Video interface display interrupts. Four 32-bit registers; the INT bit is
  * the top bit of the upper halfword and the enable is bit 12 of it. DI0 and
@@ -210,8 +197,6 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 #define PI_VI           (1u << 8)
 #define PI_PE_TOKEN     (1u << 9)
 #define PI_PE_FINISH    (1u << 10)
-
-
 
 static uint32_t pi_cause(const MgsMmio* m)
 {
@@ -269,52 +254,6 @@ void mgs_mmio_assert_retrace(MgsMmio* m)
     if (any) pi_set_cause(m, pi_cause(m) | PI_VI);
 }
 
-static void wgpipe_scan(MgsMmio* m, uint32_t value, unsigned size)
-{
-    unsigned i;
-
-    for (i = 0; i < size; ++i) {
-        uint8_t byte = (uint8_t)(value >> (8u * (size - 1u - i)));
-
-        if (m->bp_opcode_pending) {
-            m->bp_partial = (m->bp_partial << 8) | byte;
-            if (++m->bp_have == 4u) {
-                /* BP register 0x45 is PE_DONE; bit 1 asks for the finish
-                 * interrupt. GXSetDrawSync uses register 0x47 and goes to
-                 * the TOKEN interrupt instead, which is a different wakeup
-                 * - so the register number is checked, not just the bit. */
-                {
-                    uint32_t reg = m->bp_partial >> 24;
-                    uint32_t val = m->bp_partial & 0x00FFFFFFu;
-
-                    if (reg == 0x45u && (val & 0x2u))
-                        ++m->draw_done_tokens;
-
-                    /* The pixel engine's copy registers. Addresses in the
-                     * command stream are stored in 32-byte units, which is
-                     * why they fit in 24 bits at all - using the raw value
-                     * as an address lands 32 times too low. */
-                    else if (reg == 0x4Bu) m->bp_copy_dest = val << 5;
-                    else if (reg == 0x4Eu) m->bp_copy_stride = val << 5;
-                    else if (reg == 0x4Fu) m->bp_clear_ar = val;
-                    else if (reg == 0x50u) m->bp_clear_gb = val;
-                    else if (reg == 0x52u) { m->bp_copy_cmd = val | 0x80000000u;
-                                             ++m->bp_copies; }
-                }
-                m->bp_opcode_pending = 0u;
-                m->bp_have = 0u;
-                m->bp_partial = 0u;
-            }
-            continue;
-        }
-        if (byte == 0x61u) {          /* load BP register */
-            m->bp_opcode_pending = 1u;
-            m->bp_have = 0u;
-            m->bp_partial = 0u;
-        }
-    }
-}
-
 void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
 {
     uint8_t* p;
@@ -326,8 +265,11 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
      * GX command stream, and the address does not advance. Counting is enough
      * until phase 3 has something to parse it with. */
     if (addr >= MMIO_WGPIPE && addr < MMIO_WGPIPE + 0x20u) {
+        /* Byte count only. What the bytes MEAN is the command parser's
+         * business: this layer cannot see where a command starts, and
+         * guessing from a lone opcode byte matches vertex data too - acting
+         * on one of those writes a framebuffer over the game's memory. */
         m->wgpipe_bytes += size;
-        wgpipe_scan(m, value, size);
         if (m->fifo_sink) m->fifo_sink(m->fifo_user, value, size);
         return;
     }
@@ -395,12 +337,6 @@ void mgs_mmio_tick_frame(MgsMmio* m)
     if (m->vi_half_line == 0u) m->vi_half_line = 1u;
 }
 
-int mgs_mmio_take_draw_done(MgsMmio* m)
-{
-    if (!m || !m->draw_done_tokens) return 0;
-    --m->draw_done_tokens;
-    return 1;
-}
 
 /* Which registers is the guest reading? A stall shows up here as one address
  * with a count orders of magnitude above the rest. */
@@ -435,13 +371,6 @@ void mgs_mmio_report_hot(const MgsMmio* m, unsigned top)
     if (!shown) printf("  (none)\n");
 }
 
-int mgs_mmio_take_copy(MgsMmio* m, uint32_t* cmd)
-{
-    if (!m || !(m->bp_copy_cmd & 0x80000000u)) return 0;
-    if (cmd) *cmd = m->bp_copy_cmd & 0x00FFFFFFu;
-    m->bp_copy_cmd = 0u;
-    return 1;
-}
 
 /* The video interface's top-field base, VI_TFBL at 0xCC00201C.
  *

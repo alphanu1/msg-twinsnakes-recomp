@@ -27,9 +27,12 @@
 
 #include "fifo.h"
 #include "efb.h"
+#include "texture.h"
+#include "tev.h"
 
 typedef struct MgsGxRaster {
     MgsEfb* efb;
+    MgsTexCache tex;
     float   depth[MGS_EFB_WIDTH * MGS_EFB_HEIGHT];
     unsigned width, height;
 
@@ -37,8 +40,9 @@ typedef struct MgsGxRaster {
     unsigned depth_func;
     int      depth_update;
     int      cull;                /* BP 0x41 bits 14-15 */
+    int      trace;               /* MGS_TRACE_RASTER: explain rejections */
 
-    uint64_t submitted, clipped, drawn, pixels;
+    uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
 } MgsGxRaster;
 
 void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb);

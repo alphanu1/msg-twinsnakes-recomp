@@ -23,6 +23,8 @@
 #include "platform/mmio.h"
 #include "platform/sdl_video.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* BP register 0x52, the copy command. */
@@ -72,21 +74,46 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
 {
     uint32_t cmd;
 
-    while (mgs_mmio_take_copy(mmio, &cmd)) {
-        /* The clear colour arrives as two registers of two bytes: alpha and
-         * red, then green and blue. */
-        uint32_t a = (mmio->bp_clear_ar >> 8) & 0xFFu;
-        uint32_t r =  mmio->bp_clear_ar       & 0xFFu;
-        uint32_t g = (mmio->bp_clear_gb >> 8) & 0xFFu;
-        uint32_t b =  mmio->bp_clear_gb       & 0xFFu;
+    (void)mmio;
+    (void)height;
+
+    /* Every value here comes from the PARSER's register state, not from a
+     * scan of the byte stream. The stream cannot be read without knowing
+     * where commands begin, and a destination address taken from a false
+     * match writes 600 KB of framebuffer over whatever it points at. */
+    while (mgs_gx_take_copy(&s_gx, &cmd)) {
+        uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);
+        uint32_t gb = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_GB);
+        uint32_t dest = mgs_bp_get(&s_gx.bp, BP_EFB_ADDR);
+        uint32_t stride = mgs_bp_get(&s_gx.bp, BP_COPY_STRIDE);
+
+        /* The SOURCE RECTANGLE, which is what decides how much is written.
+         * Using a fixed full-screen height instead writes 600 KB for a copy
+         * the game asked to be 64 lines tall, over whatever follows the
+         * destination. A render-to-texture pass is small and frequent, so
+         * that is not a rare case. */
+        uint32_t wh = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_WH);
+        unsigned copy_w = (wh & 0x3FFu) + 1u;
+        unsigned copy_h = ((wh >> 10) & 0x3FFu) + 1u;
+
+        uint32_t a = (ar >> 8) & 0xFFu;
+        uint32_t r =  ar       & 0xFFu;
+        uint32_t g = (gb >> 8) & 0xFFu;
+        uint32_t b =  gb       & 0xFFu;
 
         mgs_efb_set_clear(&s_efb, (a << 24) | (r << 16) | (g << 8) | b);
-        mgs_efb_set_dest(&s_efb, mmio->bp_copy_dest
-                                 ? (0x80000000u | (mmio->bp_copy_dest & 0x03FFFFFFu))
-                                 : 0u,
-                         mmio->bp_copy_stride);
-        mgs_efb_copy(&s_efb, mem, height,
-                     (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
+        /* Addresses in the command stream are in 32-byte units. */
+        mgs_efb_set_dest(&s_efb,
+                         dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
+                         stride << 5);
+        if (getenv("MGS_TRACE_GX"))
+            fprintf(stderr, "[gx] copy cmd=0x%06X dest=0x%08X stride=%u "
+                            "%ux%u xfb=%d clear=%d\n",
+                    cmd, s_efb.copy_dest, s_efb.copy_stride, copy_w, copy_h,
+                    (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
+        if (!getenv("MGS_NO_COPY"))
+            mgs_efb_copy(&s_efb, mem, copy_w, copy_h,
+                         (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
 
         /* The depth buffer is cleared with the colour buffer. Leaving it
          * would have the next frame's geometry tested against the last
@@ -96,19 +123,71 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
     }
 }
 
+/* Write the last presented frame out as a portable pixmap.
+ *
+ * A headless run can then be LOOKED at, which matters more here than it
+ * sounds: "12 million pixels written" says the rasteriser ran, not that the
+ * image is right, and the difference between those two is most of the work
+ * left. No encoder, no dependency - PPM is a header and the bytes. */
+int mgs_display_save_ppm(const char* path, const GuestMemory* mem);
+int mgs_display_save_ppm(const char* path, const GuestMemory* mem)
+{
+    static uint32_t buf[MGS_EFB_WIDTH * MGS_EFB_HEIGHT];
+    unsigned w = s_efb.copy_width, h = s_efb.copy_height, i;
+    uint32_t xfb = mgs_mmio_xfb_address(mgs_host_mmio());
+    FILE* f;
+
+    if (!w || !h || !xfb) return 0;
+    if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, buf)) return 0;
+
+    f = fopen(path, "wb");
+    if (!f) return 0;
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    for (i = 0; i < w * h; ++i) {
+        uint8_t px[3];
+        px[0] = (uint8_t)((buf[i] >> 16) & 0xFFu);
+        px[1] = (uint8_t)((buf[i] >> 8) & 0xFFu);
+        px[2] = (uint8_t)(buf[i] & 0xFFu);
+        fwrite(px, 1, 3, f);
+    }
+    fclose(f);
+    return 1;
+}
+
+/* The draw-done token, from the parser rather than from a byte scan. */
+int mgs_display_take_draw_done(void);
+int mgs_display_take_draw_done(void) { return mgs_gx_take_draw_done(&s_gx); }
+
+void mgs_display_put_draw_done(void);
+void mgs_display_put_draw_done(void) { ++s_gx.draw_done_tokens; }
+
 /* Present whatever the video interface is scanning. Returns 0 if there is
  * nothing to present, so the caller can leave the boot overlay up rather than
  * replace it with a black rectangle. */
 int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem);
 int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
 {
+    static uint32_t scratch[MGS_EFB_WIDTH * MGS_EFB_HEIGHT];
     uint32_t xfb = mgs_mmio_xfb_address(mmio);
     uint32_t* fb = mgs_video_framebuffer();
+    unsigned w = s_efb.copy_width, h = s_efb.copy_height;
+    unsigned y, x;
 
-    if (!xfb || !fb) return 0;
-    if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride,
-                        MGS_XFB_WIDTH, MGS_XFB_HEIGHT, fb))
+    if (!xfb || !fb || !w || !h) return 0;
+    if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, scratch))
         return 0;
+
+    /* The window's framebuffer is a fixed 640x480; the game's is whatever it
+     * chose - 512x448 here. Nearest scaling keeps this honest about being a
+     * stand-in for the real scaler, and keeps the aspect the game intended
+     * rather than letterboxing to a size it never asked for. */
+    for (y = 0; y < MGS_XFB_HEIGHT; ++y) {
+        unsigned sy = y * h / MGS_XFB_HEIGHT;
+        for (x = 0; x < MGS_XFB_WIDTH; ++x) {
+            unsigned sx = x * w / MGS_XFB_WIDTH;
+            fb[y * MGS_XFB_WIDTH + x] = scratch[sy * w + sx];
+        }
+    }
 
     ++s_presented;
     return 1;

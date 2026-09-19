@@ -345,9 +345,26 @@ This is the project. ~200 functions and the widest error bars in the plan.
       executed for real from the pixel engine's copy registers, BT.601
       conversion to YUV 4:2:2 at the address the game programmed, and
       scan-out from the video interface's own register (`tests/test_efb.c`).
-- [ ] **Textures** — the decoder, the cache, and the texture environment
-      stages. The largest remaining piece, and what stands between untextured
-      geometry and a recognisable frame.
+- [x] **Textures** — `runtime/gx/texture.c`. All eleven formats with their
+      tiling, including RGBA8's two-halves-per-tile layout and CMPR's
+      big-endian DXT1 with reversed selectors; palettes read from where the
+      game keeps them rather than from an emulated texture memory; an
+      address-keyed cache with least-recently-used replacement; clamp, repeat
+      and mirror wrapping with bilinear filtering and the half-texel offset.
+- [x] **Texture environment** — `runtime/gx/tev.c`. The general combiner, not
+      the SDK's named modes: sixteen stages of
+      `d + lerp(a, b, c)` with bias, scale and clamp, on colour and alpha
+      independently, chaining through the four colour registers. Plus the
+      alpha test, which is what makes cut-out art work at all.
+- [x] **THE KONAMI LOGO RENDERS.** 2026-09-19. 108 textured triangles, one
+      texture decoded and 107 cache hits, 0 parser desyncs, 12.5 million
+      pixels, 55 frames copied to the external framebuffer and presented.
+      Drawn entirely by `runtime/gx/`; `ldd` on the host lists SDL3, libc and
+      libm and nothing else.
+- [ ] **Indirect textures, lighting, fog and blending** — configured by
+      registers this reads but does not yet act on.
+- [ ] **Near-plane clipping** — a triangle straddling the camera is currently
+      dropped whole rather than split.
 - [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine
       calls `GXSetTevIndirect`, `GXSetIndTexMtx`, `GXSetIndTexOrder`,
       `GXSetIndTexCoordScale` and `GXSetNumIndStages`. The design document

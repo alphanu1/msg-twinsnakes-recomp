@@ -106,6 +106,7 @@ int main(void)
         /* Orthographic, mapping -1..1 straight through, so the arithmetic
          * that follows is checkable by hand. */
         static const float ortho[6] = { 1,0, 1,0, 1,0 };
+        /* Six floats at 0x1020-0x1025, then the type at 0x1026. */
         float vp[6];
         uint32_t before;
 
@@ -115,10 +116,12 @@ int main(void)
 
         load_xf(0x0000, identity, 12);
         load_xf(0x1020, ortho, 6);
-        {   /* the ortho flag, at 0x1027 */
+        {   /* The projection TYPE, at 0x1026 - immediately after the six
+             * floats, not after a seventh. Six floats plus a type word is
+             * the layout; seven floats is not. */
             uint32_t one = 1u;
             put8(GX_OP_LOAD_XF);
-            put32((0u << 16) | 0x1027u);
+            put32((0u << 16) | 0x1026u);
             put32(one);
         }
         /* Viewport: half-width 320, half-height -240 (y is flipped on the
@@ -186,6 +189,36 @@ int main(void)
             put32(0x00FF00FFu);
         }
         CHECK(gx.triangles == tris + 2u);
+        CHECK(gx.desyncs == 0u);
+    }
+
+    /* --- quads keep all four vertices ---------------------------------- */
+    {
+        /* Four vertices are TWO triangles, 0-1-2 and 0-2-3, and the second
+         * needs vertex 0 again. Holding only three overwrites it with the
+         * fourth and emits a degenerate triangle, which the rasteriser
+         * discards as zero-area - so half of every quad silently disappears
+         * and the surviving half looks perfectly correct. This checks both
+         * triangles are real, by area rather than by count. */
+        uint64_t tris = gx.triangles, drawn = raster.drawn;
+        unsigned i, k;
+        static const float xyz[4][3] = {
+            { -0.5f, -0.5f, 0 }, { 0.5f, -0.5f, 0 },
+            {  0.5f,  0.5f, 0 }, { -0.5f, 0.5f, 0 },
+        };
+        put8(GX_OP_DRAW_FIRST | (GX_PRIM_QUADS << 3) | 0u);
+        put16(4);
+        for (i = 0; i < 4u; ++i) {
+            for (k = 0; k < 3u; ++k) {
+                uint32_t bits; memcpy(&bits, &xyz[i][k], sizeof bits);
+                put32(bits);
+            }
+            put32(0x0000FFFFu);
+        }
+        CHECK(gx.triangles == tris + 2u);
+        /* BOTH must reach the framebuffer. One drawn and one silently
+         * dropped is exactly the bug this guards. */
+        CHECK(raster.drawn == drawn + 2u);
         CHECK(gx.desyncs == 0u);
     }
 

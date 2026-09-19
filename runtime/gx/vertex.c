@@ -198,8 +198,13 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
     memset(v, 0, sizeof *v);
     v->color[0] = v->color[1] = 0xFFFFFFFFu;
 
-    /* Matrix indices come first, in attribute order, and are always inline. */
+    /* Matrix indices come first, in attribute order, and are always inline.
+     * When a vertex does NOT carry one - the common case for static geometry
+     * - the current index is in a command-processor register instead, and
+     * defaulting to zero silently draws every such object at whatever matrix
+     * zero happens to hold. */
     if (f->kind[GX_VA_PNMTXIDX] != GX_ATTR_NONE) v->pos_matrix = r8(&r);
+    else v->pos_matrix = gx->cp_matrix_index_a & 0x3Fu;
     for (i = 0; i < 8u; ++i)
         if (f->kind[GX_VA_TEX0MTXIDX + i] != GX_ATTR_NONE) v->tex_matrix[i] = r8(&r);
 

@@ -1,16 +1,20 @@
 #include "raster.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
 {
     memset(r, 0, sizeof *r);
+    mgs_tex_cache_init(&r->tex);
     r->efb = efb;
     r->width = MGS_EFB_WIDTH;
     r->height = MGS_EFB_HEIGHT;
     r->depth_test = 1;
     r->depth_update = 1;
     r->depth_func = 3;            /* less-or-equal, the usual default */
+    r->trace = getenv("MGS_TRACE_RASTER") != NULL;
     mgs_raster_reset_depth(r);
 }
 
@@ -94,6 +98,77 @@ static void to_screen(const MgsGxRaster* r, const MgsGx* gx,
     *sz = clip[2] * inv * wz + oz;
 }
 
+
+/* ---- texture binding ---------------------------------------------------
+ *
+ * Which texture a stage samples is three registers away from the stage
+ * itself: the TEV order register says which texture map and which coordinate
+ * set the stage uses, TX_SETIMAGE0 gives the size and format, TX_SETIMAGE3
+ * the address, and TX_SETTLUT the palette. They are read together here so
+ * that a stage's texture is resolved in one place.
+ */
+static const MgsTexture* bind_texture(MgsGxRaster* r, MgsGx* gx, unsigned map)
+{
+    const MgsGxBp* bp = &gx->bp;
+    uint8_t base0, base3, basel;
+    uint32_t i0, i3, tl;
+    unsigned width, height, format, tlut_off;
+    uint32_t tlut_addr = 0, tlut_format = 0;
+
+    if (map >= 8u) return NULL;
+
+    /* Textures 0-3 and 4-7 live in two separate register blocks. */
+    base0 = (uint8_t)((map < 4u ? BP_TX_SETIMAGE0 : BP_TX_SETIMAGE0_4) + (map & 3u));
+    base3 = (uint8_t)((map < 4u ? BP_TX_SETIMAGE3 : BP_TX_SETIMAGE3_4) + (map & 3u));
+    basel = (uint8_t)((map < 4u ? BP_TX_SETTLUT   : BP_TX_SETTLUT_4)   + (map & 3u));
+
+    if (!bp->written[base0] || !bp->written[base3]) return NULL;
+
+    i0 = mgs_bp_get(bp, base0);
+    i3 = mgs_bp_get(bp, base3);
+    tl = mgs_bp_get(bp, basel);
+
+    width  = (i0 & 0x3FFu) + 1u;
+    height = ((i0 >> 10) & 0x3FFu) + 1u;
+    format = (i0 >> 20) & 0xFu;
+
+    if (format == GX_TF_C4 || format == GX_TF_C8 || format == GX_TF_C14X2) {
+        tlut_off = tl & 0x3FFu;
+        tlut_addr = bp->tlut_src[tlut_off];
+        tlut_format = (tl >> 10) & 3u;
+        if (!tlut_addr) return NULL;      /* palette never loaded: refuse */
+    }
+
+    /* The image address is in 32-byte units, like everything else here. */
+    return mgs_tex_get(&r->tex, gx->mem,
+                       0x80000000u | ((i3 & 0x00FFFFFFu) << 5),
+                       format, width, height, tlut_addr, tlut_format);
+}
+
+/* Which texture map and coordinate set a stage uses. Two stages share one
+ * register, low half then high half. */
+static void stage_texture(const MgsGxBp* bp, unsigned stage,
+                          unsigned* map, unsigned* coord, int* enabled)
+{
+    uint32_t reg = mgs_bp_get(bp, (uint8_t)(BP_TEV_ORDER + stage / 2u));
+    unsigned sh = (stage & 1u) ? 12u : 0u;
+    *map     = (reg >> (sh + 0u)) & 7u;
+    *coord   = (reg >> (sh + 3u)) & 7u;
+    *enabled = (int)((reg >> (sh + 6u)) & 1u);
+}
+
+/* Wrap modes for a texture, from its mode register. */
+static void texture_wrap(const MgsGxBp* bp, unsigned map,
+                         unsigned* wrap_s, unsigned* wrap_t, int* bilinear)
+{
+    uint8_t reg = (uint8_t)((map < 4u ? BP_TX_SETMODE0 : BP_TX_SETMODE0_4) + (map & 3u));
+    uint32_t v = mgs_bp_get(bp, reg);
+    *wrap_s = v & 3u;
+    *wrap_t = (v >> 2) & 3u;
+    /* Magnification filter: 0 is nearest, 1 is linear. */
+    *bilinear = (int)((v >> 4) & 1u);
+}
+
 static float edge(float ax, float ay, float bx, float by, float px, float py)
 {
     return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
@@ -136,6 +211,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 {
     MgsGxRaster* r = (MgsGxRaster*)gx->user;
     const MgsGxVertex* vin[3];
+    const MgsTexture* tex = NULL;
+    unsigned tex_coord = 0, wrap_s = 0, wrap_t = 0;
+    int bilinear = 0, tex_enabled = 0;
     float sx[3], sy[3], sz[3], iw[3];
     float minx, maxx, miny, maxy, area;
     int x0, x1, y0, y1, px, py;
@@ -156,13 +234,29 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
          * near-plane clipping splits the triangle; rejecting it whole is
          * coarser and is honest about being so - it drops geometry that
          * straddles the camera rather than drawing it inside out. */
-        if (w <= 0.0001f) { ++r->clipped; return; }
+        if (w <= 0.0001f) {
+            ++r->clipped;
+            if (r->trace && r->clipped < 8u)
+                fprintf(stderr, "[raster] behind eye: v=(%.3f %.3f %.3f) "
+                                "view=(%.3f %.3f %.3f) w=%.4f mtx=%u ortho=%u\n",
+                        vin[i]->x, vin[i]->y, vin[i]->z,
+                        view[0], view[1], view[2], w,
+                        vin[i]->pos_matrix, gx->xf_projection_ortho);
+            return;
+        }
 
         iw[i] = 1.0f / w;
         to_screen(r, gx, clip, w, &sx[i], &sy[i], &sz[i]);
     }
 
     area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
+    if (r->trace && r->drawn + r->clipped < 8u)
+        fprintf(stderr, "[raster] screen: (%.1f,%.1f) (%.1f,%.1f) (%.1f,%.1f) "
+                        "area=%.1f vp=(%.1f %.1f %.1f / %.1f %.1f %.1f)\n",
+                sx[0], sy[0], sx[1], sy[1], sx[2], sy[2], area,
+                f_from_bits(gx->viewport[0]), f_from_bits(gx->viewport[1]),
+                f_from_bits(gx->viewport[2]), f_from_bits(gx->viewport[3]),
+                f_from_bits(gx->viewport[4]), f_from_bits(gx->viewport[5]));
     if (area == 0.0f) { ++r->clipped; return; }
 
     /* Back-face culling, by the sign of the signed area. */
@@ -187,6 +281,21 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
     ++r->drawn;
 
+    /* The texture for stage zero. Resolving it once per triangle rather than
+     * once per pixel is the difference between a cache lookup and a hash of
+     * one; the binding cannot change within a primitive. */
+    {
+        unsigned map;
+        stage_texture(&gx->bp, 0u, &map, &tex_coord, &tex_enabled);
+        if (tex_enabled) {
+            tex = bind_texture(r, gx, map);
+            if (tex) {
+                texture_wrap(&gx->bp, map, &wrap_s, &wrap_t, &bilinear);
+                ++r->textured;
+            }
+        }
+    }
+
     for (py = y0; py < y1; ++py) {
         for (px = x0; px < x1; ++px) {
             float fx = (float)px + 0.5f, fy = (float)py + 0.5f;
@@ -207,14 +316,46 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * 1/w corrects them. Skipping this is the classic warped-texture
              * artefact, and it bends Gouraud shading the same way. */
             pw = w0 * iw[0] + w1 * iw[1] + w2 * iw[2];
-            if (pw > 0.0f) {
-                float k0 = w0 * iw[0] / pw, k1 = w1 * iw[1] / pw;
-                float k2 = 1.0f - k0 - k1;
-                r->efb->pixels[at] = lerp_color(vin[0]->color[0],
-                                                vin[1]->color[0],
-                                                vin[2]->color[0], k0, k1, k2);
-            } else {
-                r->efb->pixels[at] = vin[0]->color[0];
+            {
+                MgsTevInput in;
+                uint32_t pixel;
+                float k0, k1, k2;
+
+                if (pw > 0.0f) {
+                    k0 = w0 * iw[0] / pw; k1 = w1 * iw[1] / pw;
+                    k2 = 1.0f - k0 - k1;
+                } else {
+                    k0 = 1.0f; k1 = 0.0f; k2 = 0.0f;
+                }
+
+                in.raster = lerp_color(vin[0]->color[0], vin[1]->color[0],
+                                       vin[2]->color[0], k0, k1, k2);
+                in.has_texture = 0;
+                in.texture = 0xFFFFFFFFu;
+
+                if (tex) {
+                    float u = k0 * vin[0]->u[tex_coord] +
+                              k1 * vin[1]->u[tex_coord] +
+                              k2 * vin[2]->u[tex_coord];
+                    float v = k0 * vin[0]->v[tex_coord] +
+                              k1 * vin[1]->v[tex_coord] +
+                              k2 * vin[2]->v[tex_coord];
+                    in.texture = mgs_tex_sample(tex, u, v, wrap_s, wrap_t, bilinear);
+                    in.has_texture = 1;
+                }
+
+                pixel = mgs_tev_run(&gx->bp, &in);
+
+                /* The alpha test runs AFTER the combiner and before anything
+                 * is written, depth included. Cut-out foliage and text rely
+                 * on it entirely; without it every transparent texel becomes
+                 * an opaque square that also writes depth. */
+                if (!mgs_tev_alpha_test(&gx->bp, pixel)) {
+                    ++r->alpha_killed;
+                    continue;
+                }
+
+                r->efb->pixels[at] = pixel;
             }
 
             if (r->depth_update) r->depth[at] = z;

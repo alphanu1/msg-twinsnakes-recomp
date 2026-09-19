@@ -41,6 +41,8 @@ typedef struct MgsEfb {
     uint32_t clear_argb;      /* pixel engine copy-clear colour */
     uint32_t copy_dest;       /* guest address the last copy targeted */
     uint32_t copy_stride;     /* bytes per line, as the game programmed it */
+    unsigned copy_width;      /* the source rectangle the game last copied */
+    unsigned copy_height;
     uint64_t copies;          /* copies to the external framebuffer */
     uint64_t clears;          /* copies that also cleared */
 } MgsEfb;
@@ -57,8 +59,8 @@ void mgs_efb_set_dest(MgsEfb* efb, uint32_t guest_addr, uint32_t stride);
  * when bit 11 of BP register 0x52 is set. Only a copy to the EXTERNAL
  * framebuffer writes guest memory; a copy to a texture is the renderer's
  * business and is counted, not performed. */
-void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem, unsigned height,
-                  int to_xfb, int clear);
+void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
+                  unsigned width, unsigned height, int to_xfb, int clear);
 
 /* Read an external framebuffer out of guest memory into XRGB8888, for
  * presentation. Returns 0 if the address is not readable. */

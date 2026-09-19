@@ -56,33 +56,6 @@ typedef struct MgsMmio {
      * the game is producing commands is the useful signal. */
     uint64_t wgpipe_bytes;
 
-    /* The FIFO is a byte stream, so a command is only recognisable in
-     * sequence. This remembers enough of that sequence to spot the one
-     * command the host must ACT on before phase 3 parses the rest: the
-     * draw-done token.
-     *
-     * GXSetDrawDone writes BP opcode 0x61 followed by the 32-bit register
-     * 0x45000002 - blitting processor register 0x45, "send finish". On
-     * hardware the GP raises the PE finish interrupt when it retires that
-     * token, and GXWaitDrawDone sleeps until it does. With nothing raising
-     * it the game renders one frame, calls GXDrawDone, and sleeps forever -
-     * which is exactly where the boot stopped. */
-    unsigned bp_opcode_pending;   /* last FIFO byte was 0x61 */
-    uint32_t bp_partial;          /* register bytes gathered so far */
-    unsigned bp_have;             /* how many of those four are in hand */
-    uint64_t draw_done_tokens;    /* tokens seen, for the run report */
-
-    /* Pixel-engine state gathered from the same command stream. These are
-     * the registers that decide what reaches the screen: where the copy
-     * goes, how wide a line is, what colour the buffer is cleared to, and
-     * the command that performs it. */
-    uint32_t bp_copy_dest;        /* 0x4B, already shifted to an address */
-    uint32_t bp_copy_stride;      /* 0x4E, bytes per line */
-    uint32_t bp_clear_ar;         /* 0x4F */
-    uint32_t bp_clear_gb;         /* 0x50 */
-    uint32_t bp_copy_cmd;         /* 0x52, the last copy executed */
-    uint64_t bp_copies;           /* copy commands seen */
-
     MgsFifoSink fifo_sink;
     void*       fifo_user;
 
@@ -103,12 +76,6 @@ void     mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size
 /* Called once per frame by the host, so polled hardware state advances with
  * real time rather than with how fast the guest spins. */
 void     mgs_mmio_tick_frame(MgsMmio* m);
-
-/* Non-zero once the guest has written a draw-done token that the host has
- * not yet reported. Clearing is the caller's job: it clears when the PE
- * finish interrupt is actually delivered, so a token is never lost because
- * the guest happened to have interrupts disabled. */
-int      mgs_mmio_take_draw_done(MgsMmio* m);
 
 /* A device's interrupt line, not a latch the host owns.
  *
@@ -133,10 +100,6 @@ void     mgs_mmio_assert_retrace(MgsMmio* m);
  * unset, the stream is counted and discarded, which is what happened before
  * there was a renderer. */
 void     mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user);
-
-/* Take the pending copy command, if there is one. Returns 0 when the game
- * has not asked for a copy since the last call. */
-int      mgs_mmio_take_copy(MgsMmio* m, uint32_t* cmd);
 
 /* Where the video interface is scanning from, as a guest address, or 0 if
  * the game has not programmed it yet. */

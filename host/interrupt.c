@@ -167,7 +167,7 @@ uint64_t mgs_interrupt_pe_sent(void) { return s_pe_sent; }
 
 int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu)
 {
-    if (!mgs_mmio_take_draw_done(mgs_host_mmio()))
+    if (!mgs_display_take_draw_done())
         return 0;
     ++s_pe_seen;
     if (mgs_interrupt_raise(mod, cpu, PI_CAUSE_PE_FINISH)) {
@@ -179,6 +179,6 @@ int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu)
     }
     /* Not delivered - the guest has interrupts off, or has not armed PE yet.
      * Put the token back so it is offered again rather than dropped. */
-    mgs_host_mmio()->draw_done_tokens++;
+    mgs_display_put_draw_done();
     return 0;
 }

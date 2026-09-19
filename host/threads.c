@@ -49,9 +49,15 @@ void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t))
     printf("guest threads (current 0x%08X):\n", current);
     if (!thread) { printf("  (the active thread list is empty)\n"); return; }
 
-    /* Bounded: a corrupt link would otherwise walk forever, and a diagnostic
-     * that can hang is worse than no diagnostic. */
-    for (; thread && n < 64u; ++n) {
+    /* Bounded in two ways: a corrupt link would otherwise walk for ever, and
+     * a pointer outside MEM1 is not a thread. A diagnostic that hangs or
+     * crashes is worse than no diagnostic - and this one runs precisely when
+     * the guest has already gone wrong, so garbage is the expected input. */
+    for (; n < 64u; ++n) {
+        if (thread < 0x80000000u || thread >= 0x81800000u || (thread & 3u)) {
+            if (thread) printf("  (link 0x%08X is not a thread; list ends)\n", thread);
+            break;
+        }
         uint32_t state = mgs_module_guest_read32(cpu, thread + TH_STATE) >> 16;
         uint32_t susp  = mgs_module_guest_read32(cpu, thread + TH_SUSPEND);
         uint32_t prio  = mgs_module_guest_read32(cpu, thread + TH_PRIORITY);

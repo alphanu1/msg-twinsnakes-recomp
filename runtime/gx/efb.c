@@ -33,8 +33,8 @@ static void rgb_to_ycbcr(uint32_t argb, int* y, int* cb, int* cr)
 
 static uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }
 
-void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem, unsigned height,
-                  int to_xfb, int clear)
+void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
+                  unsigned width, unsigned height, int to_xfb, int clear)
 {
     unsigned x, line;
 
@@ -45,6 +45,14 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem, unsigned height,
      * whatever the game put there. */
     if (to_xfb && efb->copy_dest && mem) {
         if (height > MGS_EFB_HEIGHT) height = MGS_EFB_HEIGHT;
+        if (width > MGS_EFB_WIDTH) width = MGS_EFB_WIDTH;
+        if (!width || !height) return;
+        /* Remembered so presentation reads the framebuffer at the size it
+         * was written. A 512-wide buffer read as 640 wide skews every line
+         * progressively, which looks like a torn image rather than a size
+         * mistake. */
+        efb->copy_width = width;
+        efb->copy_height = height;
 
         for (line = 0; line < height; ++line) {
             const uint32_t* src = &efb->pixels[line * MGS_EFB_WIDTH];
@@ -54,7 +62,7 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem, unsigned height,
              * Y0 Cb Y1 Cr. Averaging the two chroma samples is what the
              * hardware's filter does, and taking only the first would tint
              * every vertical edge. */
-            for (x = 0; x + 1u < MGS_EFB_WIDTH; x += 2u) {
+            for (x = 0; x + 1u < width; x += 2u) {
                 int y0, cb0, cr0, y1, cb1, cr1;
                 uint8_t* p;
 

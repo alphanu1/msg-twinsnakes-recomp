@@ -361,11 +361,16 @@ int main(int argc, char** argv)
 
                     /* The display path: GX's copy out to the external
                      * framebuffer, and the video interface's scan-out of it. */
-                    mgs_display_init(&rt.mem);
+                    /* MGS_NO_DISPLAY=1 leaves the graphics side out
+                     * entirely, so a boot failure can be attributed to it or
+                     * cleared of it in one run. */
+                    if (!getenv("MGS_NO_DISPLAY")) {
+                        mgs_display_init(&rt.mem);
                     s_display_mem = &rt.mem;
                     s_display_windowed = !headless;
                     mgs_module_set_display(display_pump);
                     mgs_module_set_frame(frame_pump);
+                    }
 
                     /* Tell the interrupt layer where the guest's own
                      * dispatcher is. Taken from the symbol map rather than
@@ -454,11 +459,21 @@ int main(int argc, char** argv)
                                    (unsigned long long)g->triangles,
                                    (unsigned long long)g->desyncs);
                             printf("raster: %llu submitted, %llu clipped, "
-                                   "%llu drawn, %llu pixels\n",
+                                   "%llu drawn, %llu pixels "
+                                   "(%llu textured, %llu alpha-killed)\n",
                                    (unsigned long long)rs->submitted,
                                    (unsigned long long)rs->clipped,
                                    (unsigned long long)rs->drawn,
-                                   (unsigned long long)rs->pixels);
+                                   (unsigned long long)rs->pixels,
+                                   (unsigned long long)rs->textured,
+                                   (unsigned long long)rs->alpha_killed);
+                            printf("textures: %llu decoded, %llu hits, "
+                                   "%llu misses, %llu refused, %llu evicted\n",
+                                   (unsigned long long)rs->tex.decodes,
+                                   (unsigned long long)rs->tex.hits,
+                                   (unsigned long long)rs->tex.misses,
+                                   (unsigned long long)rs->tex.refused,
+                                   (unsigned long long)rs->tex.evictions);
                         }
                         printf("GX draw-done tokens: %llu  PE finish delivered: %llu\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),
@@ -466,6 +481,14 @@ int main(int argc, char** argv)
                         printf("DVD reads completed: %llu  callbacks run: %llu\n",
                                (unsigned long long)mgs_dvd_completed(),
                                (unsigned long long)mgs_dvd_callbacks());
+                        {
+                            /* MGS_SAVE_FRAME=<path> writes the last frame the
+                             * game presented, so a headless run can be looked
+                             * at rather than only counted. */
+                            const char* out = getenv("MGS_SAVE_FRAME");
+                            if (out && mgs_display_save_ppm(out, &rt.mem))
+                                printf("wrote %s\n", out);
+                        }
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",
@@ -527,11 +550,36 @@ int main(int argc, char** argv)
         }
     }
 
-    /* Hold the window open so the result can be read. The boot is over; this
-     * is the only chance to see how it ended. */
+    /* Hold the window open so the result can be read.
+     *
+     * If the game ever reached the screen, the LAST FRAME IT DREW stays up:
+     * that is the thing worth looking at, and replacing it with a wall of
+     * counters at the moment the run ends means every screenshot of a working
+     * renderer shows the boot overlay instead. The counters are on stdout
+     * either way. Press a key to swap between them.
+     */
     if (!headless) {
-        overlay_draw(0);
-        while (mgs_video_present()) SDL_Delay(16);
+        int showing_game = mgs_display_frames() > 0u;
+
+        if (!showing_game) overlay_draw(0);
+        else               mgs_display_present(mgs_host_mmio(), &rt.mem);
+
+        printf("\n%s\n", showing_game
+               ? "window: showing the last frame the game drew "
+                 "(press SPACE for the boot report)"
+               : "window: showing the boot report");
+
+        while (mgs_video_present()) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_SPACE) {
+                    showing_game = !showing_game;
+                    if (showing_game) mgs_display_present(mgs_host_mmio(), &rt.mem);
+                    else              overlay_draw(0);
+                }
+            }
+            SDL_Delay(16);
+        }
         mgs_video_shutdown();
     }
 

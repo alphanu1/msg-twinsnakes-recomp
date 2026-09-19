@@ -48,7 +48,7 @@ int main(void)
      * survive a broken conversion, a mid tone does not. */
     mgs_efb_set_clear(&efb, 0xFF406080u);
     mgs_efb_set_dest(&efb, XFB_ADDR, W * 2u);
-    mgs_efb_copy(&efb, &mem, H, 1, 1);          /* to XFB, and clear after */
+    mgs_efb_copy(&efb, &mem, W, H, 1, 1);          /* to XFB, and clear after */
 
     CHECK(efb.copies == 1u);
     CHECK(efb.clears == 1u);
@@ -57,7 +57,7 @@ int main(void)
     CHECK(efb.pixels[0] == 0xFF406080u);
 
     /* Copy again, now that the EFB holds the colour, and read it back. */
-    mgs_efb_copy(&efb, &mem, H, 1, 0);
+    mgs_efb_copy(&efb, &mem, W, H, 1, 0);
     CHECK(mgs_xfb_to_rgb(&mem, XFB_ADDR, W * 2u, W, H, out));
     CHECK(near(out[0], 0xFF406080u));
     CHECK(near(out[W * (H - 1u) + W - 2u], 0xFF406080u));
@@ -67,7 +67,7 @@ int main(void)
     {
         uint32_t before = guest_read32(&mem, XFB_ADDR);
         mgs_efb_set_clear(&efb, 0xFFFF0000u);
-        mgs_efb_copy(&efb, &mem, H, 0, 1);
+        mgs_efb_copy(&efb, &mem, W, H, 0, 1);
         CHECK(guest_read32(&mem, XFB_ADDR) == before);
     }
 
@@ -80,7 +80,7 @@ int main(void)
         for (i = 0; i < MGS_EFB_WIDTH * MGS_EFB_HEIGHT; ++i)
             efb.pixels[i] = 0xFF00FF00u;
         mgs_efb_set_dest(&efb, addr2, stride);
-        mgs_efb_copy(&efb, &mem, H, 1, 0);
+        mgs_efb_copy(&efb, &mem, W, H, 1, 0);
         CHECK(mgs_xfb_to_rgb(&mem, addr2, stride, W, H, out));
         CHECK(near(out[W * 2u], 0xFF00FF00u));
         /* The gap between lines is untouched, which is what a stride means. */

@@ -12,6 +12,9 @@ add_library(mgs_runtime STATIC
   gx/fifo.c
   gx/vertex.c
   gx/raster.c
+  gx/bp.c
+  gx/texture.c
+  gx/tev.c
   os/os_thread.c
   os/cpu_seam.c
   os/ppc_shims.c

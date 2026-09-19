@@ -151,11 +151,13 @@ indefinitely.
 
 ## NEXT, IN ORDER
 
-1. **Run the relinked overlay.** The overlay is now recompiled at its real load
-   address (F68); the first execution of it is the immediate next step.
-2. **Phase 3, the GX renderer.** This is now the thing between here and a
-   picture. The FIFO is producing real commands and nothing consumes them.
-3. **Name the remaining unnamed SDK entry points the engine calls.**
+1. **The game's own panic.** It reaches `"memory.c" on line 1197` inside the
+   overlay and suspends its main thread. That is now the thing between here
+   and the title screen.
+2. **Name the remaining unnamed SDK entry points the engine calls** — 185 of
+   336, and each is demonstrably used.
+3. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+   clipping. All configured by registers the parser already reads.
 4. **Wire the REL into the module** (F30) — the four items above. This is what
    stands between the Konami logo and the title screen, and it is phase 1's
    remaining work.
@@ -2209,6 +2211,62 @@ one file.
 near-plane clipping (a triangle straddling the camera is dropped whole rather
 than split). Untextured geometry in the right place proves every stage before
 it, which is why it came first.
+
+**F71 — the renderer works, and four bugs stood between "no pixels" and the
+Konami logo. All four were quiet.**
+
+Each drew *something*, or drew nothing in a way that looked like a different
+problem entirely. That is the character of renderer bugs and the reason the
+tests assert intermediate values rather than only the final image.
+
+1. **The copy stride register was 0x4E. It is 0x4D.** 0x4E is the copy's
+   vertical scale. The wrong one gave a line pitch of 6944 bytes instead of
+   1024, so every framebuffer copy wrote 3 MB instead of 458 KB, over the
+   game's own memory. It presented as the guest crashing at an unrelated
+   address ~2 million steps later, and I wrongly cleared the display path of
+   causing it because the control run had hit its timeout rather than its
+   step limit - the absence of a "stopped" line read as "no crash".
+
+2. **The projection is six floats and a type word, not seven floats.** Read
+   as seven, the type word became a denormal in the last coefficient and the
+   perspective/orthographic flag was never set. Every vertex came out behind
+   the eye: 108 triangles submitted, 108 clipped, 0 drawn.
+
+3. **Quad expansion overwrote vertex 0 with vertex 3.** A quad is two
+   triangles, 0-1-2 and 0-2-3, and the second needs vertex 0 again. A
+   three-vertex buffer loses it, and the second triangle comes out
+   degenerate - which the rasteriser discards as zero-area. Half of every
+   quad silently disappeared and the surviving half looked perfectly correct.
+
+4. **A vertex without a matrix index still has one.** It comes from a
+   command-processor register rather than from the vertex. Defaulting to zero
+   draws every such object at whatever matrix zero happens to hold.
+
+**And one in our own diagnostics, which is worth recording separately.** The
+host's guest-memory accessors in `host/module.c` folded an address and indexed
+without a bounds check. The guest panicked, the thread dump walked the thread
+list, one link was garbage, and the HOST segfaulted - inside the code that was
+reporting the guest's problem. A diagnostic that crashes is worse than no
+diagnostic, because the crash it produces is in the wrong place. Those
+accessors read guest POINTERS, and are called precisely when the guest has
+already gone wrong, so garbage is their expected input, not an exception.
+
+**Evidence, from one headless run at 4 million steps:**
+
+| | |
+|---|---|
+| GX commands parsed | 7,203 |
+| Parser desyncs | **0** |
+| Primitives / vertices / triangles | 54 / 216 / 108 |
+| Triangles drawn (clipped) | 108 (0) |
+| Pixels shaded | 12,494,848 |
+| Textured triangles | 108 |
+| Textures decoded / cache hits / refused | 1 / 107 / 0 |
+| Frames copied to the external framebuffer | 55 |
+
+**The image is not committed.** A rendered frame is the game's own artwork, and
+rule 8 admits no exception for it being ours that drew it. The counts above are
+analysis evidence and are committed; the pixels are not.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

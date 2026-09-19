@@ -233,30 +233,55 @@ static uint8_t* cpu_ram(void* cpu)
 
 /* Guest memory is big-endian; the host is not. Every access below swaps.
  * These are local rather than the runtime's accessors so that this file
- * depends on nothing but the CPUState offsets above. */
+ * depends on nothing but the CPUState offsets above.
+ *
+ * BOUNDS-CHECKED, and that is not defensiveness. These accessors read guest
+ * POINTERS - a thread's link field, a context's address - and a guest pointer
+ * can be garbage long before anything else notices: a thread list walked
+ * during a crash dump is walking whatever the crash left behind. Folding an
+ * address and indexing without a check turns the host into a second
+ * casualty, and the resulting segfault is in the diagnostic rather than in
+ * the bug, which is exactly where it is least useful. That is how this
+ * presented: the host crashed inside its own thread dump while reporting a
+ * guest panic.
+ */
+#define MGS_MEM1_SIZE (24u * 1024u * 1024u)
+
+static uint8_t* gptr(void* cpu, uint32_t addr, uint32_t size)
+{
+    uint32_t off = addr & 0x3FFFFFFFu;        /* fold 0x8... and 0xC... */
+    uint8_t* ram = cpu_ram(cpu);
+    if (!ram || off > MGS_MEM1_SIZE || size > MGS_MEM1_SIZE - off) return NULL;
+    return ram + off;
+}
+
 static uint32_t gread32(void* cpu, uint32_t addr)
 {
-    const uint8_t* p = cpu_ram(cpu) + (addr & 0x3FFFFFFFu);
+    const uint8_t* p = gptr(cpu, addr, 4u);
+    if (!p) return 0u;
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 static void gwrite32(void* cpu, uint32_t addr, uint32_t v)
 {
-    uint8_t* p = cpu_ram(cpu) + (addr & 0x3FFFFFFFu);
+    uint8_t* p = gptr(cpu, addr, 4u);
+    if (!p) return;
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
 }
 
 static uint16_t gread16(void* cpu, uint32_t addr)
 {
-    const uint8_t* p = cpu_ram(cpu) + (addr & 0x3FFFFFFFu);
+    const uint8_t* p = gptr(cpu, addr, 2u);
+    if (!p) return 0u;
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
 static void gwrite16(void* cpu, uint32_t addr, uint16_t v)
 {
-    uint8_t* p = cpu_ram(cpu) + (addr & 0x3FFFFFFFu);
+    uint8_t* p = gptr(cpu, addr, 2u);
+    if (!p) return;
     p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
 }
 

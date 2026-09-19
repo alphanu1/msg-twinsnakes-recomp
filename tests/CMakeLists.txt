@@ -48,3 +48,7 @@ add_test(NAME efb COMMAND test_efb)
 add_executable(test_gx test_gx.c)
 target_link_libraries(test_gx PRIVATE mgs_runtime)
 add_test(NAME gx COMMAND test_gx)
+
+add_executable(test_texture test_texture.c)
+target_link_libraries(test_texture PRIVATE mgs_runtime)
+add_test(NAME texture COMMAND test_texture)

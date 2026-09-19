@@ -726,8 +726,45 @@ from fifty other causes. The tests assert sizes directly for direct, indexed
 and fixed-point formats, then drive raw command bytes end to end and check a
 known pixel.
 
-Not done: textures, the texture environment stages, lighting, and near-plane
-clipping. Untextured geometry in the right place proves every stage before it.
+**The Konami logo renders**, 2026-09-19, drawn entirely by `runtime/gx/`.
+Evidence from one headless run at 4,000,000 steps:
+
+| | |
+|---|---|
+| GX commands parsed | 7,203 |
+| Parser desyncs | **0** |
+| Primitives / vertices / triangles | 54 / 216 / 108 |
+| Triangles drawn (clipped) | 108 (0) |
+| Pixels shaded | 12,494,848 |
+| Textured triangles | 108 |
+| Textures decoded / cache hits / refused | 1 / 107 / 0 |
+| Frames copied to the external framebuffer | 55 |
+
+```sh
+MGS_SAVE_FRAME=frame.ppm ./build/runtime/host/twin-snakes --headless \
+    --module build/phase1/module/gGGSPA4_recomp.so
+```
+
+`MGS_SAVE_FRAME` writes the last presented frame as a portable pixmap, so a
+headless run can be *looked at* rather than only counted - "12 million pixels
+written" says the rasteriser ran, not that the image is right, and the
+difference between those two is most of the work. **The image itself is not
+committed**: a rendered frame is the game's own artwork, and rule 8 admits no
+exception for it being ours that drew it.
+
+**Four bugs stood between no pixels and that frame, and all four were quiet** -
+each drew something, or drew nothing in a way that looked like a different
+problem. HANDOFF F71 has them in full; in short: the copy stride register is
+0x4D and not 0x4E (0x4E is the vertical scale, and the wrong one wrote 3 MB
+per frame over the game's memory); the projection is six floats and a type
+word rather than seven floats (read wrong, every vertex is behind the eye);
+quad expansion must hold all four vertices, not three (holding three makes
+every second triangle degenerate, so half of each quad vanishes and the other
+half looks right); and a vertex without a matrix index still has one, from a
+command-processor register.
+
+Not done: indirect textures, lighting, fog, blending, and near-plane clipping -
+a triangle straddling the camera is dropped whole rather than split.
 
 ## Stage 8c — Compile and link natively · **PLANNED**
 

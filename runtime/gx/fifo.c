@@ -130,6 +130,7 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
 {
     memset(gx, 0, sizeof *gx);
     gx->mem = mem;
+    mgs_bp_init(&gx->bp);
 }
 
 static uint32_t be32(const uint8_t* p)
@@ -161,12 +162,45 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
         if (a < 64u * 4u) gx->xf_matrix[a] = f;
         else if (a >= 0x0400u && a < 0x0400u + 32u * 3u) gx->xf_normal[a - 0x0400u] = f;
         else if (a >= 0x101Au && a < 0x1020u) gx->viewport[a - 0x101Au] = words[i];
-        else if (a >= 0x1020u && a < 0x1027u) gx->xf_projection[a - 0x1020u] = f;
-        else if (a == 0x1027u) gx->xf_projection_ortho = words[i] & 1u;
+        /* The projection is SIX floats followed by a type word, not seven
+         * floats. Reading the type as a float puts a denormal in the last
+         * coefficient and leaves the perspective/orthographic choice unset,
+         * which is enough to send every vertex behind the eye. */
+        else if (a >= 0x1020u && a < 0x1026u) gx->xf_projection[a - 0x1020u] = f;
+        else if (a == 0x1026u) gx->xf_projection_ortho = words[i] & 1u;
     }
 }
 
 static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size);
+
+/* The handful of blitting-processor registers that DO something rather than
+ * merely configure something. A palette load is the only one here: it names a
+ * main-memory address and a destination in texture memory, and the pair has
+ * to be remembered together because they arrive as two separate writes. */
+static void bp_side_effect(MgsGx* gx, uint8_t reg, uint32_t val)
+{
+    if (reg == BP_LOAD_TLUT0) {
+        /* The address, in 32-byte units, as everything in the command stream
+         * is. Using it unshifted lands 32 times too low. */
+        gx->bp.pending_tlut_addr = 0x80000000u | ((val & 0x00FFFFFFu) << 5);
+        return;
+    }
+    if (reg == BP_LOAD_TLUT1) {
+        unsigned offset = val & 0x3FFu;
+        gx->bp.tlut_src[offset] = gx->bp.pending_tlut_addr;
+        return;
+    }
+    if (reg == 0x45u) {
+        /* The draw-done token. Bit 1 asks for the finish interrupt; the
+         * SETDRAWSYNC form uses register 0x47 and a different wakeup. */
+        if (val & 0x2u) ++gx->draw_done_tokens;
+        return;
+    }
+    if (reg == BP_COPY_EXECUTE) {
+        gx->copy_pending = val | 0x80000000u;
+        return;
+    }
+}
 
 /* How many bytes the command that starts with `op` needs, beyond the opcode.
  * Returns 0 when the length is not yet knowable - a draw command's size
@@ -218,9 +252,17 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         return;
     }
     if (op == GX_OP_CALL_DL) { run_dl(gx, be32(body), be32(body + 4)); return; }
+    if (op == GX_OP_LOAD_BP) {
+        uint32_t packed = be32(body);
+        uint8_t  reg = (uint8_t)(packed >> 24);
+        uint32_t val = packed & 0x00FFFFFFu;
+        mgs_bp_write(&gx->bp, reg, val);
+        bp_side_effect(gx, reg, val);
+        return;
+    }
     if (op >= GX_OP_DRAW_FIRST) emit_primitive(gx, op, body, len);
-    /* BP and index loads are register traffic the rasteriser reads through
-     * its own state; they are counted, not acted on, here. */
+    /* Index loads address transform-unit memory the renderer does not use
+     * yet; counted, not acted on. */
 }
 
 /* Feed a whole buffer. Shared by the pipe and by display lists, so a command
@@ -334,6 +376,7 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 {
     MgsGxVertexFormat f;
     MgsGxVertex v[3];
+    MgsGxVertex quad[4];
     MgsGxVertex first, prev;
     unsigned count, vsize, i, at;
     MgsGxPrim prim = (MgsGxPrim)((op >> 3) & 7u);
@@ -390,19 +433,19 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 
             case GX_PRIM_QUADS:
             case GX_PRIM_QUADS2:
-                v[have % 3u] = cur;
+                /* Four vertices, THEN two triangles: 0-1-2 and 0-2-3. All
+                 * four have to be held, because the second triangle needs
+                 * vertex 0 again - reusing a three-vertex buffer overwrites
+                 * it with the fourth and emits a degenerate triangle, which
+                 * the rasteriser silently discards as zero-area. Half of
+                 * every quad then disappears, and the half that survives
+                 * looks correct. */
+                quad[i & 3u] = cur;
                 if ((i & 3u) == 3u) {
-                    /* A quad is four vertices in order; as triangles that is
-                     * 0-1-2 and 0-2-3, which is why vertex 0 is kept. */
-                    MgsGxVertex q0 = v[0], q1 = v[1], q2 = v[2];
-                    gx->triangle(gx, &q0, &q1, &q2);
-                    gx->triangle(gx, &q0, &q2, &cur);
+                    gx->triangle(gx, &quad[0], &quad[1], &quad[2]);
+                    gx->triangle(gx, &quad[0], &quad[2], &quad[3]);
                     gx->triangles += 2u;
-                    have = 0;
-                    break;
                 }
-                ++have;
-                if (have == 3u) have = 3u;   /* keep 0,1,2 for the second tri */
                 break;
 
             default:
@@ -411,4 +454,19 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
                 break;
         }
     }
+}
+
+int mgs_gx_take_copy(MgsGx* gx, uint32_t* cmd)
+{
+    if (!gx || !(gx->copy_pending & 0x80000000u)) return 0;
+    if (cmd) *cmd = gx->copy_pending & 0x00FFFFFFu;
+    gx->copy_pending = 0u;
+    return 1;
+}
+
+int mgs_gx_take_draw_done(MgsGx* gx)
+{
+    if (!gx || !gx->draw_done_tokens) return 0;
+    --gx->draw_done_tokens;
+    return 1;
 }
