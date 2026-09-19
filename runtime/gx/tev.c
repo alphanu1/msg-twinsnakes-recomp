@@ -7,6 +7,11 @@ static unsigned stage_count(const MgsGxBp* bp)
     return n > 16u ? 16u : n;
 }
 
+/* The same count, for the rasteriser: how many stages the combiner will run
+ * is what decides how many textures SHOULD have been sampled. */
+unsigned mgs_tev_stage_count(const MgsGxBp* bp);
+unsigned mgs_tev_stage_count(const MgsGxBp* bp) { return stage_count(bp); }
+
 static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 /* One colour channel of a TEV register, as the game set it. The registers are

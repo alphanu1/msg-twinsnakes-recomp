@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F128**. The two worth reading first are
+Findings from this session are **F90-F129**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -171,22 +171,26 @@ renderer.
    exit and re-offers are down to 1,912. The two interrupt faults are fixed;
    whatever holds the boot now is something else, and the search should start
    from a fresh thread dump and profile rather than from the interrupt path.
-2. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+2. **Why 99.8% of the geometry shades black (F129).** Not the texture path —
+   that is measured correct. Sample `TEV_COLOR_ENV` and `TEV_ALPHA_ENV` per
+   draw for the untextured majority, not at exit. This is the work that puts
+   a picture on the screen.
+3. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-3. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+4. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-4. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+5. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-5. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+6. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -197,21 +201,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-6. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+7. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-7. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+8. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-8. **The second window is the performance floor.** The whole engine runs at
+9. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-9. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+10. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-10. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+11. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -233,6 +237,12 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **"The texture path is broken" (F129).** 778 textured out of 514,826 looks
+  damning and is not: every triangle runs one TEV stage, none wants a texture
+  on a later stage, and all 778 binds succeed. The game draws the rest
+  untextured on purpose. The fault is in the combiner's untextured path.
+- **Judging a frame by the buffer at exit (F127, F129).** The EFB is black at
+  exit while the run's best frame is 9.6% lit. Use `MGS_SAVE_BEST`.
 - **Raising a shared interrupt line without setting the device's status bit
   (F128).** PI's DSP bit serves three sources and the SDK's dispatcher reads
   `__DSPRegs[5]` to tell them apart. A line asserted with no status bit is an
@@ -4120,6 +4130,62 @@ equal 40,000,000 at 177,806 commands. But the character has changed — nothing
 is pending at exit and re-offers are down to 1,912 across five times the
 steps, so whatever holds it now is **not** an interrupt that went missing.
 That is a different search.
+
+---
+
+**F129 — there IS a picture, and texturing is not what is missing.** F127 said
+the framebuffer was black; that was true of the frame at exit and misleading
+about the run. `MGS_SAVE_BEST` keeps the fullest frame any copy ever produces
+instead, and the best frame of a boot holds **22,034 lit pixels — 9.6% of
+512x448, in 278 distinct colours**:
+
+```
+  ............144444444444444444444444444444444444444-............
+  ............299999999999999999999999999999999999994.............
+  ............29999999999999999999999999999999999993..............
+  ............2999999999999999999999999999999999992...............
+  ............29999999999999999999999999999999995-................
+  ............-33333333333333333333333333333321-..................
+```
+
+A banner across the middle of the screen, slightly skewed, dark red ground
+with cyan detail. **That is a real, structured image** — the whole route works
+end to end: FIFO, vertex decode, transform, viewport, scissor, depth,
+combiner, EFB, copy-out. Something the game drew is being drawn correctly.
+
+**The hypothesis that looked obvious and is wrong.** 778 textured out of
+514,826 triangles reads like a broken texture path, and the natural guess was
+that the game binds textures on later TEV stages while the rasteriser only
+resolves stage 0. Measured:
+
+| | |
+|---|---|
+| triangles by TEV stage count | **1 stage: 514,826** — all of them |
+| untextured at stage 0 but textured later | **0** |
+| triangles asking for a texture | **778** |
+| of those, bind failed | **0** |
+
+Every triangle runs a single TEV stage, no triangle wants a texture on a later
+stage, and **every texture the game asks for is supplied successfully**. The
+texture path is not the fault. The game really does draw 514,048 of its
+triangles untextured.
+
+**So the gap is the untextured path through the combiner**, which is
+producing black: nine in ten written pixels are. The combiner does implement
+the colour registers (`BP_TEV_REGISTER_L`, 0xE0-0xE7) and the colour
+environment (`BP_TEV_COLOR_ENV`, 0xC0+), so this is not a missing feature at
+the register level, and the next step is to sample the actual
+`TEV_COLOR_ENV` configuration the untextured majority uses rather than guess
+again. Per-draw, not at exit — `genMode` and `TEV_ORDER0` both read
+*correctly* at exit (`0x000011`, and stage 0's texture-enable bit set), which
+says nothing at all about the 514,826 draws that came before.
+
+**Instruments added, all cheap and kept:** `MGS_SAVE_BEST` (fullest frame of a
+run), `MGS_SAVE_FROM=efb|copy|<addr>` (which buffer to dump), lit-pixel counts
+beside written-pixel counts, TEV stage histogram, and the wanted/failed split
+on texture binds. Between them they turned "the screen is black" into "one
+element renders, the other 99.8% of geometry is shaded black", which is a
+different problem.
 
 ---
 

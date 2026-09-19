@@ -27,6 +27,8 @@
 #include <stdint.h>
 #include "bp.h"
 
+unsigned mgs_tev_stage_count(const MgsGxBp* bp);
+
 typedef struct MgsTevInput {
     uint32_t texture;        /* ARGB, the sampled texel */
     uint32_t raster;         /* ARGB, the interpolated vertex colour */

@@ -46,6 +46,10 @@ typedef struct MgsGxRaster {
 
     uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
     uint64_t pixels_lit;      /* of `pixels`, how many were not black */
+    uint64_t tev_stages[16];  /* triangles by TEV stage count */
+    uint64_t tex_on_later_stage; /* stage 0 had none, a later stage did */
+    uint64_t tex_wanted;      /* stage 0 asked for a texture */
+    uint64_t tex_bind_failed; /* ...and we could not supply one */
 
     /* Returns non-zero when drawing should stop - the host has been asked to
      * quit and is waiting for this call to come back. Optional; NULL means

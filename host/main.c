@@ -735,6 +735,10 @@ int main(int argc, char** argv)
                         mgs_mmio_attach_aram(mgs_host_mmio(), &rt.mem);
                     s_display_mem = &rt.mem;
                     s_display_windowed = !headless;
+                    /* Armed before the run, because the frame worth keeping
+                     * is one of the early ones and the decision has to be
+                     * made as each copy happens. */
+                    mgs_display_set_best_path(getenv("MGS_SAVE_BEST"));
                     mgs_module_set_display(display_pump);
                     mgs_module_set_frame(frame_pump);
                     mgs_module_set_progress(progress_counter);
@@ -892,6 +896,36 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->pixels_lit,
                                    (unsigned long long)rs->textured,
                                    (unsigned long long)rs->alpha_killed);
+                            {
+                                /* The two registers that decide whether
+                                 * anything is textured at all, and whether
+                                 * they were ever written. A register that
+                                 * reads zero because nobody wrote it and one
+                                 * the game deliberately cleared look
+                                 * identical in a value alone. */
+                                const MgsGxBp* bp = &mgs_display_gx()->bp;
+                                printf("genMode 0x%06X (written %d)  "
+                                       "TEV_ORDER0 0x%06X (written %d)\n",
+                                       mgs_bp_get(bp, BP_GEN_MODE),
+                                       mgs_bp_is_set(bp, BP_GEN_MODE),
+                                       mgs_bp_get(bp, BP_TEV_ORDER),
+                                       mgs_bp_is_set(bp, BP_TEV_ORDER));
+                            }
+                            {
+                                unsigned i;
+                                printf("TEV stages per triangle:");
+                                for (i = 0; i < 16u; ++i)
+                                    if (rs->tev_stages[i])
+                                        printf("  %u:%llu", i + 1u,
+                                               (unsigned long long)rs->tev_stages[i]);
+                                printf("\n  untextured at stage 0 but textured "
+                                       "at a later stage: %llu\n",
+                                       (unsigned long long)rs->tex_on_later_stage);
+                                printf("  triangles asking for a texture: %llu"
+                                       "  of those, bind failed: %llu\n",
+                                       (unsigned long long)rs->tex_wanted,
+                                       (unsigned long long)rs->tex_bind_failed);
+                            }
                             printf("textures: %llu decoded, %llu hits, "
                                    "%llu misses, %llu refused, %llu evicted\n",
                                    (unsigned long long)rs->tex.decodes,
@@ -914,7 +948,20 @@ int main(int argc, char** argv)
                             /* MGS_SAVE_FRAME=<path> writes the last frame the
                              * game presented, so a headless run can be looked
                              * at rather than only counted. */
+                            const char* best = getenv("MGS_SAVE_BEST");
                             const char* out = getenv("MGS_SAVE_FRAME");
+                            if (best)
+                                printf("best frame: %u lit pixels of %ux%u "
+                                       "(%.1f%%), written to %s\n",
+                                       mgs_display_best_lit(),
+                                       mgs_display_best_w(),
+                                       mgs_display_best_h(),
+                                       mgs_display_best_w() * mgs_display_best_h()
+                                         ? 100.0 * mgs_display_best_lit() /
+                                           (double)(mgs_display_best_w() *
+                                                    mgs_display_best_h())
+                                         : 0.0,
+                                       best);
                             if (out && mgs_display_save_ppm(out, &rt.mem))
                                 printf("wrote %s\n", out);
                         }

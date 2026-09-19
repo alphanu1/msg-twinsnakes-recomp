@@ -557,14 +557,19 @@ This is the project. ~200 functions and the widest error bars in the plan.
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written
       but not exercised against it.
+- [x] **Something renders correctly** (F129). The fullest frame of a boot
+      holds **22,034 lit pixels, 9.6% of 512x448, in 278 distinct colours** —
+      a structured banner across the middle of the screen. The whole route
+      works end to end: FIFO, vertex decode, transform, viewport, scissor,
+      depth, combiner, EFB and copy-out.
+- [ ] **Why the other 99.8% of the geometry shades black** (F129). Not the
+      texture path: every triangle runs **one** TEV stage, none wants a
+      texture on a later stage, **778 ask for a texture and all 778 are
+      supplied**. The game genuinely draws 514,048 triangles untextured and
+      the combiner returns black for them. Sample the actual `TEV_COLOR_ENV`
+      per draw — the exit snapshot is useless here, it reads correctly.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
-      registers this reads but does not yet act on. **This is now what
-      stands between the port and a picture** (F127): with the geometry
-      flowing, 514,826 triangles rasterise and 12,156,928 pixels are written,
-      but only **1,167,715 are lit** and only **778 are textured**. Both
-      external framebuffers and the EFB itself measure 100% black. Nothing
-      upstream of shading is at fault — 2 triangles clipped out of 514,828
-      says the transform and viewport are right.
+      registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently
       dropped whole rather than split.
 - [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine

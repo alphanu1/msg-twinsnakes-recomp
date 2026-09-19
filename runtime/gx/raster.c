@@ -371,8 +371,37 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
          * belongs on the responsive side of the check too. */
         if (r->abandon && r->abandon()) return;
         stage_texture(&gx->bp, 0u, &map, &tex_coord, &tex_enabled);
+
+        /* HOW MUCH IS BEING MISSED BY LOOKING AT STAGE ZERO ONLY.
+         *
+         * The combiner runs every stage the general-mode register asks for,
+         * but exactly one texture is sampled and it is stage zero's. A stage
+         * that binds its own texture therefore sees stage zero's texel, or
+         * none at all - and "2 textures decoded in a whole boot" is what that
+         * looks like from outside. Counted rather than assumed, because the
+         * fix (sample per stage) is a different size of job depending on the
+         * answer. */
+        {
+            unsigned st, n = mgs_tev_stage_count(&gx->bp);
+            unsigned m2, c2; int on;
+            if (n > 16u) n = 16u;
+            if (n) ++r->tev_stages[n - 1u];
+            if (!tex_enabled) {
+                for (st = 1u; st < n; ++st) {
+                    stage_texture(&gx->bp, st, &m2, &c2, &on);
+                    if (on) { ++r->tex_on_later_stage; break; }
+                }
+            }
+        }
+
         if (tex_enabled) {
+            /* SPLIT FROM `textured`, which counts successful binds only.
+             * "the game did not ask for a texture" and "the game asked and we
+             * could not produce one" are different faults with different
+             * fixes, and a single counter cannot tell them apart. */
+            ++r->tex_wanted;
             tex = bind_texture(r, gx, map);
+            if (!tex) ++r->tex_bind_failed;
             if (tex) {
                 texture_wrap(&gx->bp, map, &wrap_s, &wrap_t, &bilinear);
                 ++r->textured;

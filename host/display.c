@@ -137,6 +137,39 @@ void mgs_display_init(GuestMemory* mem)
     mgs_mmio_set_fifo_sink(mgs_host_mmio(), fifo_sink, NULL);
 }
 
+/* The fullest frame seen so far, and where to write it. See MGS_SAVE_BEST. */
+static const char* s_best_path;
+static unsigned s_best_lit, s_best_w, s_best_h;
+
+/* The embedded framebuffer, straight out, with no YUV round trip. */
+static int save_efb_ppm(const char* path, unsigned w, unsigned h)
+{
+    FILE* f = fopen(path, "wb");
+    unsigned y, x;
+    if (!f) return 0;
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    for (y = 0; y < h; ++y)
+        for (x = 0; x < w; ++x) {
+            uint32_t v = s_efb.pixels[y * MGS_EFB_WIDTH + x];
+            uint8_t px[3];
+            px[0] = (uint8_t)((v >> 16) & 0xFFu);
+            px[1] = (uint8_t)((v >> 8) & 0xFFu);
+            px[2] = (uint8_t)(v & 0xFFu);
+            fwrite(px, 1, 3, f);
+        }
+    fclose(f);
+    return 1;
+}
+
+unsigned mgs_display_best_lit(void);
+unsigned mgs_display_best_lit(void) { return s_best_lit; }
+unsigned mgs_display_best_w(void);
+unsigned mgs_display_best_w(void) { return s_best_w; }
+unsigned mgs_display_best_h(void);
+unsigned mgs_display_best_h(void) { return s_best_h; }
+void mgs_display_set_best_path(const char* p);
+void mgs_display_set_best_path(const char* p) { s_best_path = p; }
+
 /* Run any copy the game has asked for since the last call. Cheap when there
  * is none, which is most of the time. */
 void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height);
@@ -181,6 +214,28 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
                             "%ux%u xfb=%d clear=%d\n",
                     cmd, s_efb.copy_dest, s_efb.copy_stride, copy_w, copy_h,
                     (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
+        /* KEEP THE BEST FRAME THE RUN EVER PRODUCES, not whatever happens
+         * to be in the buffer when the step limit hits.
+         *
+         * The EFB at exit measured 100% black while 1,167,715 lit pixels had
+         * been written during the run - so the last frame is not the most
+         * informative one, and "is anything being drawn at all" cannot be
+         * answered from it. This samples every copy to the external buffer,
+         * counts what is lit, and keeps the fullest. It runs only when
+         * MGS_SAVE_BEST names a file. */
+        if ((cmd & COPY_TO_XFB) && s_best_path) {
+            unsigned lit = 0u, yy, xx;
+            for (yy = 0; yy < copy_h && yy < MGS_EFB_HEIGHT; ++yy)
+                for (xx = 0; xx < copy_w && xx < MGS_EFB_WIDTH; ++xx)
+                    if (s_efb.pixels[yy * MGS_EFB_WIDTH + xx] & 0x00FFFFFFu)
+                        ++lit;
+            if (lit > s_best_lit) {
+                s_best_lit = lit;
+                s_best_w = copy_w; s_best_h = copy_h;
+                save_efb_ppm(s_best_path, copy_w, copy_h);
+            }
+        }
+
         if (!getenv("MGS_NO_COPY"))
             mgs_efb_copy(&s_efb, mem, copy_w, copy_h,
                          (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
