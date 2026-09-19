@@ -1064,6 +1064,43 @@ does **not** say plainly, both found the hard way:
 - **The `.bss` entry then points at the game's allocation**, elsewhere in
   MEM1, so a maximum over all sections picks that rather than the image's end.
 
+### The engine loads nothing, very busily
+
+With the panic gone the game ran its own main loop and loaded **nothing**.
+Sampling the guest said why in one run:
+
+```
+  24000 fn_1_450            <- the engine's read routine
+  12000 DVDReadAsyncPrio
+   1379 memcpy
+```
+
+`DVDReadAsyncPrio` was called **16,907,347 times** with **one** read
+completed. Two causes, and the second was hidden behind the first:
+
+- **The game opens every file with a leading `./`** — `"./stage.dat"`,
+  `"./shared/codec.dat"`. `mgs_fst_find` did not handle `.` or `..`, so every
+  open returned entry 0 and left the `DVDFileInfo` empty. The SDK's
+  `DVDConvertPathToEntrynum` accepts relative components; ours now does too.
+- **The read shim was looking up a path at all.** It searched the FST for a
+  file whose start address matched and used that entry's *name*, which is not
+  a path. The SDK does not do this: `DVDReadAsyncPrio` adds the file info's
+  start address to the caller's offset and calls `DVDReadAbsAsyncPrio`. The
+  file info already is the answer.
+
+**The engine does not treat a refused read as fatal — it retries.** So a
+lookup returning "not found" was indistinguishable, from outside, from a game
+with nothing to load.
+
+```
+[dvd] DVDOpen("./stage.dat", 0x7F4A4CF0) -> entry 78
+[dvd] DVDOpen("./shared/codec.dat", 0x7F4A4D90) -> entry 1645
+[disc] abs 0x1FB0B160 -> stage.dat + 0x0 (file at 0x1FB0B160, 198715392 bytes)
+```
+
+`tests/test_fst.c` now checks `./`, `x/./y`, `x/../y`, a leading `/`, and `..`
+at the root, against the real 1,653-entry disc FST.
+
 ### Observing the guest without replacing it
 
 `host/module.c` gained three read-only facilities: watch one call's arguments,

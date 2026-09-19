@@ -306,6 +306,12 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 - [x] **Read-only host observation of the guest** (F86) — call watching, call
       tracing with arguments, and a hook for the window between `OSLink`
       returning and the overlay's first instruction.
+- [x] **The engine loads its data** (F87, F88) — relative path components in
+      the FST lookup, which the game uses for every file it opens, and
+      `DVDReadAsyncPrio` reading by disc offset as the SDK does rather than
+      searching for a name. Before this, `DVDReadAsyncPrio` was called
+      16,907,347 times in one run with **one** read completed, because the
+      engine retries a refused read for ever rather than failing.
 - [ ] **Virtual two-disc mount** — mount both images at startup; when the game
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
       the SDK's expected timing.

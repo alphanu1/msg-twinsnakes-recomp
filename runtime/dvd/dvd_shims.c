@@ -93,6 +93,9 @@ void mgs_DVDOpen(CPUState* ctx)
 
     guest_string(mgs_guest_gpr(s_rt, 3), path, sizeof path);
     entry = mgs_fst_find(&s_dvd->disc->fst, path);
+    if (getenv("MGS_TRACE_DVD"))
+        fprintf(stderr, "[dvd] DVDOpen(\"%s\", 0x%08X) -> entry %u\n",
+                path, fi, entry);
     if (!entry) { mgs_set_guest_gpr(s_rt, 3, 0u); return; }
 
     /* Reuse DVDFastOpen rather than repeating it, so there is one place that
@@ -128,24 +131,6 @@ void mgs_DVDGetCommandBlockStatus(CPUState* ctx)
  * the address. */
 void mgs_DVDGetFileInfoStatus(CPUState* ctx) { mgs_DVDGetCommandBlockStatus(ctx); }
 
-/* Resolve the path a DVDFileInfo refers to, by matching its recorded disc
- * offset back to an FST entry. The guest gives us an offset and a length, not
- * a name, so this is how an async read knows which file to read.
- */
-static int path_for_fileinfo(uint32_t fi, char* out, size_t cap)
-{
-    uint32_t start = guest_read32(&s_rt->mem, fi + DVD_FI_START_ADDR);
-    uint32_t i;
-
-    for (i = 1u; i < s_dvd->disc->fst.entry_count; ++i) {
-        MgsFstEntry e;
-        if (!mgs_fst_entry(&s_dvd->disc->fst, i, &e) || e.is_dir) continue;
-        if (e.offset_or_parent != start) continue;
-        snprintf(out, cap, "%s", mgs_fst_name(&s_dvd->disc->fst, &e));
-        return 1;
-    }
-    return 0;
-}
 
 /* BOOL DVDReadAsyncPrio(DVDFileInfo* fileInfo, void* addr, s32 length,
  *                       s32 offset, DVDCallback callback, s32 prio)
@@ -158,12 +143,50 @@ void mgs_DVDReadAsync(CPUState* ctx)
     uint32_t length   = mgs_guest_gpr(s_rt, 5);
     uint32_t offset   = mgs_guest_gpr(s_rt, 6);
     uint32_t callback = mgs_guest_gpr(s_rt, 7);
-    char path[256];
+    uint32_t start, size;
 
-    if (!fi || !path_for_fileinfo(fi, path, sizeof path)) {
+    (void)ctx;
+
+    if (!fi || !dest) {
+        if (getenv("MGS_TRACE_DVD"))
+            fprintf(stderr, "[dvd] async REFUSED: fi=0x%08X dest=0x%08X\n",
+                    fi, dest);
         mgs_set_guest_gpr(s_rt, 3, 0u);
         return;
     }
+
+    /* READ BY DISC OFFSET, NOT BY NAME.
+     *
+     * The SDK's own DVDReadAsyncPrio does exactly this: it adds the file
+     * info's start address to the caller's offset and hands the result to
+     * DVDReadAbsAsyncPrio. It never looks a name up, because the file info
+     * already IS the answer.
+     *
+     * The previous version searched the FST for a file whose start address
+     * matched, and used its NAME - which is not a path, so anything in a
+     * subdirectory failed to resolve and the read was refused. The engine
+     * does not treat a refused read as fatal; it retries, for ever. That
+     * presented as the game running happily and loading nothing, with
+     * `DVDReadAsyncPrio` the second-hottest function in the profile and one
+     * completed read in a hundred million steps.
+     */
+    start = guest_read32(&s_rt->mem, fi + DVD_FI_START_ADDR);
+    size  = guest_read32(&s_rt->mem, fi + DVD_FI_LENGTH);
+
+    /* The SDK refuses a read that runs past the file; so does this, rather
+     * than silently returning a short one the game did not ask for. */
+    if (offset > size || length > size - offset) {
+        if (getenv("MGS_TRACE_DVD"))
+            fprintf(stderr, "[dvd] async REFUSED: past end - start=0x%08X "
+                            "size=%u offset=%u length=%u\n",
+                    start, size, offset, length);
+        mgs_set_guest_gpr(s_rt, 3, 0u);
+        return;
+    }
+    if (getenv("MGS_TRACE_DVD"))
+        fprintf(stderr, "[dvd] async fi=0x%08X start=0x%08X size=%u "
+                        "off=%u len=%u -> 0x%08X cb=0x%08X\n",
+                fi, start, size, offset, length, dest, callback);
 
     /* The game reads these back while it waits. */
     guest_write32(&s_rt->mem, fi + DVD_CB_ADDR, dest);
@@ -172,7 +195,8 @@ void mgs_DVDReadAsync(CPUState* ctx)
     guest_write32(&s_rt->mem, fi + DVD_FI_CALLBACK, callback);
 
     mgs_set_guest_gpr(s_rt, 3,
-        mgs_dvd_read_async(s_dvd, path, dest, offset, length, callback, fi)
+        mgs_dvd_read_abs_async(s_dvd, start + offset, dest, length,
+                               callback, fi)
             ? 1u : 0u);
 }
 

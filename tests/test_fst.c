@@ -111,8 +111,31 @@ int main(void)
             CHECK(mgs_fst_file(&fst, "stage.dat", &off, &len));
             CHECK(mgs_fst_file(&fst, "shared/movie.dat", &off, &len));
 
+            /* RELATIVE COMPONENTS, which this game's engine uses for every
+             * file it loads: "./stage.dat", "./shared/codec.dat". The SDK's
+             * DVDConvertPathToEntrynum accepts them, so this must too - and
+             * a refused open is not reported as an error by the engine, it
+             * simply retries for ever. This is the check that would have
+             * caught that in a second rather than a morning. */
+            CHECK(mgs_fst_find(&fst, "./stage.dat") ==
+                  mgs_fst_find(&fst, "stage.dat"));
+            CHECK(mgs_fst_find(&fst, "./shared/movie.dat") ==
+                  mgs_fst_find(&fst, "shared/movie.dat"));
+            CHECK(mgs_fst_find(&fst, "shared/./movie.dat") ==
+                  mgs_fst_find(&fst, "shared/movie.dat"));
+            /* `..` climbs out of a directory and back down. */
+            CHECK(mgs_fst_find(&fst, "shared/../stage.dat") ==
+                  mgs_fst_find(&fst, "stage.dat"));
+            /* A leading slash is still the root, and `..` at the root stays
+             * there rather than walking off the front of the table. */
+            CHECK(mgs_fst_find(&fst, "/stage.dat") ==
+                  mgs_fst_find(&fst, "stage.dat"));
+            CHECK(mgs_fst_find(&fst, "../stage.dat") ==
+                  mgs_fst_find(&fst, "stage.dat"));
+
             /* Something that is not there stays not there. */
             CHECK(mgs_fst_find(&fst, "shared/does_not_exist.dat") == 0u);
+            CHECK(mgs_fst_find(&fst, "./shared/does_not_exist.dat") == 0u);
 
             mgs_fst_free(&fst);
             free(data);

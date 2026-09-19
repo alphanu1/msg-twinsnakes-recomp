@@ -103,6 +103,37 @@ uint32_t mgs_fst_find(const MgsFst* fst, const char* path)
 
         if (seg == 0u) break;
 
+        /* RELATIVE COMPONENTS. The SDK's DVDConvertPathToEntrynum accepts
+         * them, and this game relies on it: every file it loads after the
+         * overlay is opened as "./stage.dat", "./shared/codec.dat" and so
+         * on. Without this every one of those opens returns entry 0, the
+         * file info is left empty, and the engine - which does not treat a
+         * refused read as fatal - retries for ever. It presented as a game
+         * running happily and loading nothing, with DVDReadAsyncPrio called
+         * sixteen million times and one read completed.
+         *
+         * `.` is the directory we are already in. `..` is its parent, which
+         * the FST records in a directory entry's first word. */
+        if (seg == 1u && path[0] == '.') {
+            if (!slash) return dir;            /* a path ending in "." */
+            path = slash + 1;
+            while (*path == '/') ++path;
+            continue;
+        }
+        if (seg == 2u && path[0] == '.' && path[1] == '.') {
+            if (dir != 0u) {
+                MgsFstEntry cur;
+                if (!mgs_fst_entry(fst, dir, &cur)) return 0u;
+                dir = cur.offset_or_parent;    /* a directory's parent index */
+                if (!mgs_fst_entry(fst, dir, &cur)) return 0u;
+                dir_end = cur.length_or_next;
+            }
+            if (!slash) return dir;
+            path = slash + 1;
+            while (*path == '/') ++path;
+            continue;
+        }
+
         /* Scan only this directory's range. Children of a directory at index
          * i occupy i+1 .. next-1, so nested directories are skipped over by
          * jumping to their own `next` rather than descending into them.

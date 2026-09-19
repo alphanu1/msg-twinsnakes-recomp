@@ -151,9 +151,9 @@ indefinitely.
 
 ## NEXT, IN ORDER
 
-1. **Get further into the boot.** The `memory.c:1197` panic is fixed (F84,
-   F85) and the game now runs in the overlay and issues disc reads. The next
-   thing is simply to see where it stops.
+1. **Get further into the boot.** The panic is fixed (F84, F85) and file
+   loading works (F87, F88): the engine opens and reads `stage.dat`,
+   `dummy.tpl` and the rest. The next thing is simply to see where it stops.
 2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
    336. Ordered alignment is exhausted (F72); the live routes are the call
    graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
@@ -2616,6 +2616,43 @@ The allocator itself is a leaf reached inside a chunk, so the host never sees
 it; **the stack does**. PowerPC frames are a linked list - first word the
 previous frame, second word the return address - so walking it named the
 subsystem that took each arena allocation.
+
+**F87 — the game opens every file with a leading `./`, and our FST lookup
+refused all of them.**
+
+After the overlay links, the engine loads its data: `"./stage.dat"`,
+`"./shared/codec.dat"`, `"./shared/face.dat"`, `"./shared/movie.dat"`,
+`"./shared/vox.dat"`, `"./demo.dat"`. `mgs_fst_find` did not handle `.` or
+`..`, so every one returned entry 0, the `DVDFileInfo` was left empty, and
+each read was refused.
+
+**The engine does not treat a refused read as fatal. It retries.** For ever.
+So this presented as a game that had booted perfectly, was scheduling threads,
+servicing retrace, running its own main loop - and loading nothing at all.
+`DVDReadAsyncPrio` was called **16,907,347 times** in one run with **one**
+read completed, and `fn_1_450` and `DVDReadAsyncPrio` were the two hottest
+functions in the profile by an order of magnitude.
+
+The SDK's own `DVDConvertPathToEntrynum` accepts relative components, so
+`mgs_fst_find` now does: `.` stays in the current directory, `..` takes the
+parent from the directory entry's first word, and `..` at the root stays at
+the root rather than walking off the front of the table. `tests/test_fst.c`
+checks all of those against the real 1,653-entry disc FST - the check that
+would have caught this in a second rather than a morning.
+
+**F88 — `DVDReadAsyncPrio` should never have been looking up a path.**
+The shim searched the FST for a file whose start address matched the file
+info's, and used that entry's NAME - which is not a path, so anything in a
+subdirectory failed to resolve even once the `./` problem was fixed.
+
+The SDK does not do this and does not need to: `DVDReadAsyncPrio` adds the
+file info's start address to the caller's offset and hands the result to
+`DVDReadAbsAsyncPrio`. The file info already *is* the answer. The shim now
+does the same, and also refuses a read that runs past the file's length, as
+the SDK does, rather than silently returning a short one.
+
+**The pattern in both of these:** a lookup that answers "not found" is
+indistinguishable, from the outside, from a game that has nothing to load.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
