@@ -116,6 +116,11 @@ typedef struct MgsMmio {
      * that the boot had stalled at all. Indexed by halfword so the table is
      * small enough to scan. */
     uint32_t read_hist[(MMIO_END - MMIO_BASE) / 2u];
+    /* Guest acknowledgements of the pixel engine's two interrupts, counted
+     * so a run can compare completions DELIVERED with completions the guest
+     * actually serviced. See mgs_interrupt_pe_finish. */
+    uint64_t pe_finish_acks, pe_token_acks;
+
 } MgsMmio;
 
 void     mgs_mmio_init(MgsMmio* m);

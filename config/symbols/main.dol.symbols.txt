@@ -1206,7 +1206,6 @@
 .text 0x8003C628 0x138 __CARDMountCallback callgraph
 .text 0x8003D86C 0x130 CreateCallbackFat callgraph
 .text 0x8004713C 0x108 TEXGetGXTexObjFromPaletteCI callgraph
-.text 0x8004C318 0x1CC DEMOBeforeRender callgraph
 .text 0x8005A48C 0x150 vorbis_synthesis_headerin callgraph
 .text 0x8005E874 0x1DC _vorbis_synthesis1 callgraph
 .text 0x8005F498 0x178 _ov_open1 callgraph
@@ -1353,3 +1352,44 @@
 # functions touch it; only these two are this simple.
 .text 0x80006A50 0x20 flagword_set own
 .text 0x80006A70 0x1C flagword_clear own
+
+# --- stage 5i, 2026-09-19: the engine's frame pipeline, named by watching it
+# The first names here that were established by RUNNING the game rather than
+# by reading it. The boot's stopping point (HANDOFF F122-F124) is a frame
+# pipeline, and instrumenting it identified every part: a submitting side, a
+# 4-slot ring, a completion callback and an idle poll thread. All Konami's
+# own code, so all lower-case DESCRIPTIONS - what these are called is not
+# known and is not being guessed at.
+#
+# The evidence for each is its observed behaviour across a whole boot, which
+# is stronger than a static reading: the ring really does advance 0,1,2,3,0
+# in step with 62 completions, and the flag really is the thing that decides
+# whether the main loop wakes.
+#
+# Ring base 0x8020B918: producer index at +0x16F0, consumer at +0x16F8,
+# 4 slots of 0x18, per-slot wake flag at +0x64, semaphore at +0x40.
+.text 0x8004C4E4 0x24 frame_ring_advance own
+.text 0x8004C948 0x18 gp_poll_thread own
+.text 0x8004C960 0xF4 gp_poll_once own
+.text 0x8004D094 0xCC frame_slot_retire own
+.text 0x8004D170 0x88 frame_draw_done_callback own
+
+# --- stage 5i: a correction, with the evidence that forced it --------------
+# 0x8004C318 CARRIED `DEMOBeforeRender`, origin `callgraph`. It is withdrawn.
+#
+# Two independent reasons, neither of which was available when it was named:
+#
+#   1. LOCALITY. config/symbols/main.dol.files.txt attributes CR_System.c at
+#      0x8004B6D8 and again at 0x8004C82C, from this binary's own __FILE__
+#      strings. 0x8004C318 sits between them - Konami's code, not the SDK's
+#      demo library.
+#   2. BEHAVIOUR. It blocks on a semaphore, arms a slot in a 4-slot frame
+#      ring, emits the frame's GX setup and advances the producer index.
+#      The SDK's DEMOBeforeRender does none of that; it is a short helper
+#      that sets up viewport and matrices. A function that SLEEPS is not it.
+#
+# The `mode` argument decides both halves together: mode == -1 skips the wait
+# AND clears the slot's wake flag, so an unwaited submission also signals
+# nobody. That symmetry is what ruled out "the flag was clear" as the cause
+# of the boot's missing signal (F124).
+.text 0x8004C318 0x1CC frame_submit_and_wait own

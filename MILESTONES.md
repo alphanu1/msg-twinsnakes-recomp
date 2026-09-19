@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,195 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,200 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -520,6 +520,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       and its DMA engine are in `runtime/dsp/aram.c` - 16 MB, which is what
       phase 4 needs anyway. **No sound is produced yet**: this is the
       hardware coming up, not a mixer.
+- [x] **The boot's stopping point is a livelock, and it is one event**
+      (F122-F124). `MGS_STEPS=200000000` produces byte-identical output to
+      40,000,000 - same 20,429 commands, same 24,716 triangles, same 62
+      completions - so the boot stops progressing rather than running out of
+      time. The thread burning every step is the engine's own idle
+      graphics-service thread (`poll; OSYieldThread; goto`, an
+      `OSCreateThread` entry), so the profile shows an idle system, not a
+      fault. The fault is a single missing signal: **62 completions
+      delivered, 62 acknowledged by the guest, 61 with the frame ring's flag
+      set, 60 signalled**, and the main loop's 62nd wait sleeps on a
+      semaphore nothing tops up. Three explanations were ruled out by
+      measurement rather than argument - see F124.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

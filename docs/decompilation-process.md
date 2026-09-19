@@ -956,6 +956,107 @@ Both legs were verified by being shown a stale number and failing on it - a
 check that has never failed has not been tested. Remembering to run a step is
 not a control; a step that fails loudly is.
 
+## Stage 5i — Name by watching it run · **DONE**
+
+**In:** the boot's stopping point. **Out:** 5 names, and 1 withdrawn.
+
+Every earlier stage read the binary. This one **ran** it, and named functions
+from what they were observed to do across a whole boot. That is a different
+kind of evidence and it is worth separating: a static reading says what a
+function *can* do, an instrumented run says what it *did*, 62 times, in order.
+
+### The route
+
+The boot stops with the engine's main loop asleep on a semaphore. Tracing
+that semaphore and the structure behind it identified a whole frame pipeline:
+
+```sh
+MGS_TRACE_SEM=1 MGS_TRACE_RING=1 \
+    ./build/runtime/host/twin-snakes --headless \
+    --module build/phase1/module/gGGSPA4_recomp.so
+```
+
+| address | name | what the run shows it doing |
+|---|---|---|
+| `0x8004C318` | `frame_submit_and_wait` | waits on the semaphore, arms a ring slot, emits the frame, advances the producer |
+| `0x8004C4E4` | `frame_ring_advance` | `idx = (idx + 1) % 4`, observed cycling 0,1,2,3,0 in step with completions |
+| `0x8004C948` | `gp_poll_thread` | `poll; OSYieldThread; goto` forever - an `OSCreateThread` entry with no callers |
+| `0x8004C960` | `gp_poll_once` | one poll: `OSDisableInterrupts`, `GXGetFifoPtrs`, state machine, restore |
+| `0x8004D094` | `frame_slot_retire` | retires the completed slot and advances the consumer |
+| `0x8004D170` | `frame_draw_done_callback` | registered by `GXSetDrawDoneCallback`; signals only when the slot's flag is set |
+
+Konami's own code, so every name is lower-case: a description of behaviour,
+not a claim about their identifier (the convention in
+`main.dol.symbols.txt`).
+
+### The withdrawal, and why it matters more than the additions
+
+`0x8004C318` carried **`DEMOBeforeRender`**, origin `callgraph`. It is wrong
+and has been withdrawn.
+
+1. **Locality.** `config/symbols/main.dol.files.txt` attributes `CR_System.c`
+   at `0x8004B6D8` and again at `0x8004C82C`, from this binary's own
+   `__FILE__` strings. `0x8004C318` sits between them. It is Konami's code,
+   not the SDK's demo library.
+2. **Behaviour.** It blocks on a semaphore, drives a 4-slot ring and submits
+   a frame. The SDK's `DEMOBeforeRender` is a short helper that sets viewport
+   and matrices. **A function that sleeps is not it.**
+
+The call graph proposed it because its callees are SDK graphics functions,
+which is what `DEMOBeforeRender` calls too. That is exactly the failure mode
+stage 5d was warned about: a name can be consistent with the callees and
+still be the wrong function. Locality and behaviour were both available later
+and both disagree, so the name goes rather than being defended.
+
+This is the first symbol this project has **withdrawn**. Recording the
+withdrawal, with what forced it, is the point - `README.md`'s provenance
+claim is only worth something if names can leave the map as well as enter it.
+
+### What the run measured
+
+Numbers, not prose (rule 15):
+
+| | |
+|---|---|
+| frame submissions (semaphore waits) | 62 |
+| completions delivered | 62 |
+| completions the guest **acknowledged** at `PE_INT_CTRL` | 62 |
+| completions whose ring flag was set | 61 |
+| completions that signalled the main loop | **60** |
+| ring sequence observed | 0,1,2,3,0 … in step, producer one ahead |
+
+The first completion legitimately declines: it arrives before anything is
+submitted, when producer == consumer == 0 and the flag is the zero `.bss`
+was initialised with. The remaining gap of one is the boot's whole defect
+(HANDOFF F124).
+
+### Checked by a second route
+
+The livelock was confirmed independently of any of this, by budget:
+
+```sh
+MGS_STEPS=200000000 ./build/runtime/host/twin-snakes --headless --module ...
+```
+
+200,000,000 steps produce **byte-identical** output to 40,000,000 - 20,429 GX
+commands, 24,716 triangles, 75 EFB copies, 62 completions, 55 disc reads. The
+boot stops progressing rather than running out of time, and the agreement
+also re-confirms stage 8's determinism result by a route not designed to test
+it.
+
+### Result
+
+| measure | before | after |
+|---|---|---|
+| Functions named | 982 | **987** |
+| Symbols in both maps | 1,195 | **1,200** |
+| Names withdrawn | 0 | **1** (`DEMOBeforeRender`) |
+| **phase 0 average** | 69.9% | 69.9% |
+
+The average does not move, which is correct: these are engine-internal
+functions the REL never calls, so they change no call-site coverage. They
+buy debugging, which is what the row's caveat has always said.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

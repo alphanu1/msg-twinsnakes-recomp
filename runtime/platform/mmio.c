@@ -417,8 +417,14 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
 
     if (addr == MMIO_PE + PE_INT_CTRL && size == 2u) {
         uint32_t cause = pi_cause(m);
-        if (value & PE_ACK_FINISH) cause &= ~PI_PE_FINISH;
-        if (value & PE_ACK_TOKEN)  cause &= ~PI_PE_TOKEN;
+        /* COUNTED, because this is the guest telling us its handler ran.
+         * The host's own delivery tally says only that the exception was
+         * taken; an acknowledge here says the handler reached the end. The
+         * difference between the two counts is the number of completions the
+         * guest was told about and never processed, which is a thing no
+         * host-side counter can see on its own. */
+        if (value & PE_ACK_FINISH) { cause &= ~PI_PE_FINISH; ++m->pe_finish_acks; }
+        if (value & PE_ACK_TOKEN)  { cause &= ~PI_PE_TOKEN;  ++m->pe_token_acks; }
         pi_set_cause(m, cause);
     }
 

@@ -899,9 +899,11 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused,
                                    (unsigned long long)rs->tex.evictions);
                         }
-                        printf("GX draw-done tokens: %llu  PE finish delivered: %llu\n",
+                        printf("GX draw-done: %llu offers, %llu delivered, "
+                               "%llu acknowledged by the guest's handler\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),
-                               (unsigned long long)mgs_interrupt_pe_sent());
+                               (unsigned long long)mgs_interrupt_pe_sent(),
+                               (unsigned long long)mgs_host_mmio()->pe_finish_acks);
                         printf("DVD reads completed: %llu  callbacks run: %llu"
                                "  deferred (guest had interrupts off): %llu\n",
                                (unsigned long long)mgs_dvd_completed(),
@@ -1018,6 +1020,24 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_interrupt_delivered(),
                                (unsigned long long)mgs_interrupt_refused(),
                                (unsigned long long)mgs_interrupt_failed());
+                        /* WHAT IS STILL PENDING WHEN WE STOP.
+                         *
+                         * A handler acknowledges its source by writing the
+                         * cause bit back, so a bit still set here is an
+                         * interrupt that was raised and never serviced. That
+                         * distinguishes "we did not deliver it" from "we
+                         * delivered it and the guest never ran the handler",
+                         * which are opposite faults - and the tally alone
+                         * cannot tell them apart, because a delivery counts
+                         * as soon as the exception is taken. */
+                        {
+                            MgsMmio* mm = mgs_host_mmio();
+                            uint32_t sr = mgs_mmio_read(mm, 0xCC003000u, 4);
+                            uint32_t mr = mgs_mmio_read(mm, 0xCC003004u, 4);
+                            printf("PI cause 0x%08X  mask 0x%08X  "
+                                   "still pending and armed: 0x%08X\n",
+                                   sr, mr, sr & mr);
+                        }
                         overlay_line("IRQ: %llu DELIVERED  %llu MASKED",
                                (unsigned long long)mgs_interrupt_delivered(),
                                (unsigned long long)mgs_interrupt_refused());

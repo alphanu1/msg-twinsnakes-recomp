@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 982 / 18,485 | 5.3% |
+| Functions named | 987 / 18,485 | 5.3% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 193 / 336 | 57.4% |
 | SDK call sites covered | 6,137 / 7,078 | 86.7% |
@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F121**. The two worth reading first are
+Findings from this session are **F90-F125**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,18 +166,25 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+1. **Watch which source `__OSDispatchInterrupt` picks on the 62nd completion
+   (F124).** The deadlock is now one event: 62 completions delivered, 62
+   acknowledged by the guest, 61 with the ring flag set, 60 signalled. The
+   62nd is the first to arrive with a VI interrupt already pending (`cause
+   0x140`, where 59-61 all read `0x40`), and the run ends with PE **and** DSP
+   still pending and armed. If PE is being left set behind a VI it lost to,
+   that is the fault and it is a small one.
+2. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-2. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+3. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-3. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+4. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -188,21 +195,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-4. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+5. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-5. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+6. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-6. **The second window is the performance floor.** The whole engine runs at
+7. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-7. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+8. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-8. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+9. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -224,6 +231,17 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **"The boot is just slow" (F122).** 200 million steps produce byte-identical
+  output to 40 million. It is a livelock. A change that only moves the step
+  count has changed nothing.
+- **Making the poll/yield loop cheaper (F123).** `fn_8004C948` is a thread
+  entry point whose body is `poll; OSYieldThread; goto` — the engine's idle
+  graphics-service thread. It eats every step because nothing else is
+  runnable, not because it is wrong.
+- **Modelling GPU completion latency (F115, and again in F124).** The one
+  completion that declines is the first, delivered before anything was
+  submitted; the ring self-corrects. Delay is not the fix and made the boot
+  strictly worse.
 - **Matching a function by its opening instructions (F118).** `__CARDIsReadable`
   has `__CARDIsWritable` inlined into it, so its head signature names the
   wrong function. Read to the `blr`, and treat a callee that disagrees with
@@ -3744,6 +3762,153 @@ and exits non-zero on disagreement, covering five table rows, two headline
 percentages and the symbol total. Both legs were verified by being shown a
 stale number and failing on it, because **a check that has never failed has
 not been tested**. Run it before committing; it is instant and needs no build.
+
+---
+
+**F122 — the boot is LIVELOCKED, not slow, and five times the budget proves
+it.** Every run ends `stopped after 40000000 steps: step limit`, and the
+obvious question — is it stuck, or merely slow? — had never been asked
+directly. `MGS_STEPS=200000000` answers it:
+
+| | 40M steps | 200M steps |
+|---|---|---|
+| GX commands | 20,429 | 20,429 |
+| triangles | 24,716 | 24,716 |
+| EFB copies | 75 | 75 |
+| PE finishes delivered | 62 | 62 |
+| DVD reads | 55 | 55 |
+
+**Byte-identical.** 160 million additional steps produced nothing at all. The
+boot is not running out of time; it stops making progress and then burns
+whatever budget it is given. Every future "did that help?" comparison should
+be read against this baseline, and a change that only moves the step count is
+not a change.
+
+It is also a free re-confirmation of F110's determinism, by a route that was
+not designed to test it: two runs with different budgets agreeing exactly.
+
+---
+
+**F123 — the thread burning 100% of the steps is SUPPOSED to spin.** The
+profile is dominated by `OSDisableInterrupts` (3,024,420 calls) and
+`OSRestoreInterrupts` (3,024,402), with 1,479,243 of them from `0x8004C97C`
+and 1,473,478 from `OSYieldThread+0x14`, alongside ~1.485M reads each of PI
+`+0x014` and CP `+0x030/032/038/03A` — the FIFO write pointer, the read-write
+distance and the GP read pointer.
+
+That looks exactly like a hot spin on hardware that never answers, which is
+what it was first read as. It is not. `fn_8004C948` is:
+
+```
+loop:  fn_8004C960();      /* poll the GP through GXGetFifoPtrs */
+       OSYieldThread();
+       goto loop;
+```
+
+It has **no callers**, because its address is handed to `OSCreateThread` at
+`0x8004BDB4`. It is a dedicated graphics-service thread whose whole job is to
+poll and yield, and it is *meant* to run forever.
+
+So the profile is not showing a fault, it is showing an **idle system**: this
+thread is simply the only runnable one, so it gets every step. "Where are the
+cycles going" was the wrong question — the right one is why nothing else is
+runnable, and that is F124.
+
+**What not to do:** do not try to make this loop cheaper or to throttle it.
+It is the idle task. Its cost is a symptom of the boot having nothing else to
+do, and it will disappear when the boot progresses.
+
+---
+
+**F124 — the deadlock, located precisely, and it is one missing signal.**
+With `MGS_TRACE_SEM` and a new `MGS_TRACE_RING` reporting the engine's frame
+ring at each completion, the steady state is a clean alternation, 60 times
+over:
+
+```
+[sem] wait   0x8020B958 count=1   <- passes, submits a frame
+[ring] pe #N  prod P cons C flag 1
+[sem] signal 0x8020B958 count=0   <- tops it back up
+```
+
+and then it ends:
+
+```
+[sem] wait   0x8020B958 count=1   <- passes, submits frame 61
+[ring] pe #62  cause 0x140  prod 1 cons 0 flag 1
+[sem] wait   0x8020B958 count=0   <- BLOCKS, and nothing ever signals
+```
+
+**Two waits in a row with no signal between them.** The semaphore starts at 1,
+so 1 + 60 signals lets 61 waits through; the 62nd finds zero and sleeps.
+
+The structure is now known. It is a **4-slot ring**: producer index at
+`0x8020B918+0x16F0`, consumer at `+0x16F8`, and `fn_8004C4E4` is exactly
+`idx = (idx + 1) % 4`. The submitter `fn_8004C318(mode)` arms the slot's flag
+at `+0x64`, and the callback `fn_8004D170` signals only when that flag is set.
+
+**Three explanations are now ruled out, each by measurement:**
+
+1. *"The flag is clear because the engine passed mode == -1."* No — `mode ==
+   -1` also skips the wait (`cmpwi r28,-1; beq` past it), so it can produce
+   neither a wait nor a signal. All 62 waits happened, so all 62 submissions
+   armed their flag.
+2. *"We failed to deliver the interrupt."* No — 62 delivered, and the guest's
+   own acknowledgements at the pixel engine's `PE_INT_CTRL` number **62** as
+   well. Every handler ran to the end.
+3. *"It is a race with instant GPU completion."* No — the one completion that
+   legitimately declines is **pe #1**, delivered before any frame was
+   submitted, when producer == consumer == 0 and the flag is the zero `.bss`
+   was initialised with. The ring self-corrects: the consumer does not advance
+   past an unarmed slot. This is also why F115's latency experiment made
+   things worse rather than better.
+
+So: **62 delivered, 62 acknowledged, 61 with the flag set, 60 signalled.**
+One completion's handler ran, acknowledged the pixel engine, and did not
+signal. That is the whole remaining defect, and it is one event.
+
+**The next experiment**, and it is narrow: the PI cause ends at `0x00000440`
+— PE finish **and** DSP still pending and armed — after 5,284 further
+interrupts were delivered. At pe #62 the cause reads `0x140`, VI pending
+alongside DSP, where pe #59-61 all read `0x40`. So the 62nd completion is the
+first to arrive with a **VI interrupt already pending**, and the SDK's
+dispatcher services one source per entry by priority. Watch which source
+`__OSDispatchInterrupt` picks on that entry, and whether PE is left set behind
+a VI it lost to.
+
+---
+
+**F125 — two instrument errors in one session, both of which produced
+confident wrong readings.** Recorded because the failure mode is the same
+both times: the instrument measured a moment other than the one that mattered.
+
+1. **The ring trace sampled after the raise.** `mgs_interrupt_raise` does not
+   call the handler — it performs the state transition the hardware performs
+   and returns, and the guest executes the handler on later steps of the run
+   loop. Sampling "after" therefore reports a state in which **no guest
+   instruction has run**, which is why the before and after values were
+   identical on all 62 events. Read naively, that looked like the callback
+   never advancing the ring.
+2. **The PI cause was printed after the raise had set it.** Bit 10 was
+   therefore present on every line, and I read that as proof of a stuck,
+   never-acknowledged interrupt. We had just set it one line earlier.
+
+The honest measure of an unserviced interrupt is what is still pending when
+the run **ends**, which is now reported separately, and the guest's own
+acknowledge count, which is now counted at `PE_INT_CTRL`. Both are in the
+run's normal output rather than behind a trace flag, because both are cheap
+and both answer a question that comes up every time.
+
+**The general rule this cost twice:** when an instrument straddles a state
+transition, say in the code which side of it each value comes from. Both bugs
+were invisible in the output and obvious in the source.
+
+**A smaller thing found while reading the run loop**, not yet a fault: the PE
+completion check is chained `else if` onto the retrace check, so it is skipped
+whenever `steps % 16000 == 0` (lcm of 2,000 and 64). It is harmless today —
+the token is put back and retried 64 steps later — but it is the same shape as
+the bug that made the DSP branch unreachable, and the comment warning about
+that sits directly beneath it.
 
 ---
 

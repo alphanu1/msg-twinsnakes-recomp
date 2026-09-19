@@ -297,7 +297,80 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
  * and every thread slept forever while the retrace handler kept running.
  * That looked like a healthy idle loop and was not.
  */
+/* The engine's frame ring, watched from the one place that always sees a
+ * completion: the moment we deliver it.
+ *
+ * The draw-done callback at 0x8004D170 signals the main loop's semaphore ONLY
+ * when the flag at +0x64 of a slot is set, and it picks that slot with the
+ * index at +0x16F8 - while the submitting side at 0x8004C318 arms the slot at
+ * a DIFFERENT index, +0x16F0. Two indices into one ring is a producer and a
+ * consumer, and whether they agree is the whole question: 62 submissions
+ * produced 62 completions but only 60 signals, and a consumer that is running
+ * ahead of the producer reads a slot nobody armed, whose flag is the zero
+ * .bss was initialised with.
+ *
+ * A pc hook cannot answer this. The callback is reached from inside the SDK's
+ * interrupt dispatch, DOL-internal, and the run loop only observes pc at
+ * dispatch boundaries - so absence from a pc trace would prove nothing. This
+ * runs in our own delivery path instead, which is the one place that cannot
+ * miss.
+ *
+ * The addresses are the engine's and were established in F112/F115. They are
+ * a diagnostic, not an interface: nothing here changes guest state.
+ */
+#define ENGINE_FRAME_BASE   0x8020B918u
+#define ENGINE_RING_PRODUCER  (ENGINE_FRAME_BASE + 0x16F0u)
+#define ENGINE_RING_CONSUMER  (ENGINE_FRAME_BASE + 0x16F8u)
+#define ENGINE_SLOT_STRIDE  0x18u
+#define ENGINE_SLOT_FLAG    0x64u
+
 static uint64_t s_pe_seen, s_pe_sent;
+
+/* SAMPLED BEFORE THE HANDLER RUNS - AND THE HANDLER DOES NOT RUN HERE.
+ *
+ * mgs_interrupt_raise does not call the handler. It performs the state
+ * transition the hardware performs on an external interrupt and returns; the
+ * guest executes the handler on subsequent steps of the run loop. Two
+ * versions of this trace got that wrong in opposite directions:
+ *
+ *   - the first sampled the ring AFTER the raise and reported it as the
+ *     state the callback acted on. It is not - no guest instruction has run.
+ *   - the second printed the PI cause after the raise and read the PE bit
+ *     being set as evidence of a stuck interrupt. We had just set it.
+ *
+ * So everything here is sampled BEFORE the raise, and the cause is printed
+ * for context only. What is still pending when the run ENDS is the honest
+ * measure of an unserviced interrupt, and that is reported separately.
+ */
+static void trace_frame_ring(void* cpu)
+{
+    uint32_t prod, cons, flag;
+
+    prod = mgs_module_guest_read32(cpu, ENGINE_RING_PRODUCER);
+    cons = mgs_module_guest_read32(cpu, ENGINE_RING_CONSUMER);
+    flag = mgs_module_guest_read32(
+        cpu, ENGINE_FRAME_BASE + cons * ENGINE_SLOT_STRIDE + ENGINE_SLOT_FLAG);
+
+    fprintf(stderr,
+            "[ring] pe #%llu  at interrupt %llu  cause 0x%08X  "
+            "prod %u cons %u flag %u%s\n",
+            (unsigned long long)(s_pe_sent + 1ull),
+            (unsigned long long)s_delivered,
+            mgs_mmio_read(mgs_host_mmio(), MMIO_PI + PI_INTSR, 4),
+            prod, cons, flag,
+            flag ? "" : "   <-- flag clear, this one will NOT signal");
+}
+
+static uint64_t s_pe_seen, s_pe_sent;
+
+/* SAMPLED BEFORE THE HANDLER RUNS, NOT AFTER.
+ *
+ * mgs_interrupt_raise enters the guest and runs __OSDispatchInterrupt to
+ * completion, so by the time it returns the callback has already read the
+ * flag AND advanced the consumer index. A trace placed after it reports the
+ * state the callback left behind, which is not the state it acted on - the
+ * first version of this did exactly that and made one decline look like the
+ * only one. Both samples are taken, and the pair is what is printed. */
 uint64_t mgs_interrupt_pe_seen(void) { return s_pe_seen; }
 uint64_t mgs_interrupt_pe_sent(void) { return s_pe_sent; }
 
@@ -306,6 +379,7 @@ int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu)
     if (!mgs_display_take_draw_done())
         return 0;
     ++s_pe_seen;
+    if (getenv("MGS_TRACE_RING")) trace_frame_ring(cpu);
     if (mgs_interrupt_raise(mod, cpu, PI_CAUSE_PE_FINISH)) {
         ++s_pe_sent;
         if (getenv("MGS_TRACE_PE"))
