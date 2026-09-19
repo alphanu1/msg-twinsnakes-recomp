@@ -128,7 +128,27 @@ static uint64_t progress_counter(unsigned which)
 
 static void frame_pump(void)
 {
+    static uint64_t shown = ~0ull;
+    uint64_t copies;
+
     if (!s_display_windowed) return;
+
+    /* Input has to stay responsive on every tick; the picture only needs
+     * redrawing when the game has actually finished one. The copy counter is
+     * the honest signal for that - it is what the game does to put a frame in
+     * the external framebuffer. */
+    mgs_video_pump();
+
+    /* Two signals, not one. The copy counter catches GX drawing a frame;
+     * the scan-out address catches anything that writes the external
+     * framebuffer directly and just flips to it, which is how a video
+     * decoder can present without GX copying anything. Keying on the copy
+     * alone would freeze such a picture. */
+    copies = mgs_display_efb()->copies
+           ^ ((uint64_t)mgs_mmio_xfb_address(mgs_host_mmio()) << 32);
+    if (copies == shown) return;
+    shown = copies;
+
     if (mgs_display_present(mgs_host_mmio(), s_display_mem))
         mgs_video_present();
 }

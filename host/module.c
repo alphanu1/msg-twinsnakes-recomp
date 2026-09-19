@@ -10,6 +10,7 @@
  * rather than linked so the same module can also be run by a host that has no
  * patch table.
  */
+#include "platform/sdl_video.h"
 #include "module.h"
 #include "platform/mmio.h"
 #include "os/os_runtime.h"
@@ -995,6 +996,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * permanently disabled from then on and exactly one is ever
          * delivered. That is precisely how this presented. */
         if ((r.steps % 2000ull) == 0ull) {
+            mgs_mmio_set_pad(mgs_host_mmio(), mgs_video_pad());
             mgs_mmio_tick_frame(mgs_host_mmio());
             mgs_interrupt_vi(mod, cpu);
             if (s_frame) s_frame();

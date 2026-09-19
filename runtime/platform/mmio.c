@@ -48,7 +48,10 @@
 
 /* Serial interface: SICOMCSR bit 0 is likewise a transfer-start the hardware
  * clears. */
+#define SI_POLL            0x30u
 #define SI_COMCSR          0x34u
+#define SI_STATUS          0x38u
+#define SI_IOBUF           0x80u   /* the 128-byte transfer buffer */
 
 /* DSP, by offset from MMIO_DSP. */
 #define DSP_MAILBOX_HI     0x00u
@@ -100,6 +103,43 @@ void mgs_mmio_init(MgsMmio* m)
     /* See the FIFO-register trace in mgs_mmio_write. */
     m->trace_fiforeg = getenv("MGS_TRACE_FIFOREG") != NULL;
     m->trace_pi      = getenv("MGS_TRACE_PI") != NULL;
+    {   /* MGS_TRACE_SI=<n> logs n serial accesses; bare =1 keeps 200. */
+        const char* e = getenv("MGS_TRACE_SI");
+        const char* b = getenv("MGS_PAD_BUTTONS");
+
+        m->trace_si = e != NULL;
+        m->trace_vi = getenv("MGS_TRACE_VI") != NULL;
+        m->si_trace_cap = 200u;
+        if (e && *e) {
+            unsigned long n = strtoul(e, NULL, 0);
+            if (n > 1ul) m->si_trace_cap = (unsigned)n;
+        }
+
+        /* MGS_PAD_BUTTONS=<hex> holds a button down, to tell a guest that is
+         * WAITING for input from one that is stalled. 0x1000 is Start. */
+        m->pad_forced  = b ? (uint16_t)strtoul(b, NULL, 0) : 0u;
+        m->pad_buttons = m->pad_forced;
+
+        /* MGS_PAD_SCRIPT="frame:hex,frame:hex,..." holds each button word
+         * from that frame onward, so a run can drive itself through a menu
+         * without a human at the keyboard. Reaching the video needs Down
+         * then A, which a single held word cannot express. */
+        {
+            const char* q = getenv("MGS_PAD_SCRIPT");
+            m->pad_script_n = 0u;
+            while (q && *q && m->pad_script_n < 16u) {
+                char* end;
+                unsigned long fr = strtoul(q, &end, 0);
+                if (end == q || *end != ':') break;
+                q = end + 1;
+                m->pad_script_frame[m->pad_script_n] = (uint32_t)fr;
+                m->pad_script_btn[m->pad_script_n] =
+                    (uint16_t)strtoul(q, &end, 16);
+                ++m->pad_script_n;
+                q = (*end == ',') ? end + 1 : end;
+            }
+        }
+    }
 
 }
 
@@ -108,6 +148,8 @@ static uint8_t* at(MgsMmio* m, uint32_t addr)
     if (addr < MMIO_BASE || addr >= MMIO_END) return NULL;
     return m->regs + (addr - MMIO_BASE);
 }
+
+static void si_consume_read(MgsMmio* m, uint32_t addr);
 
 uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 {
@@ -119,6 +161,20 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 
     ++m->reads;
     if (!p) return 0u;
+
+    /* THE SERIAL INTERFACE IS A STUB AND THE CONTROLLER NEVER APPEARS.
+     * Log the access pattern before modelling it: what the translated PAD
+     * code reads, in what order, is the specification. Writes are logged in
+     * mgs_mmio_write. Capped so a polling loop cannot fill the disc. */
+    /* Reading a channel's input buffer consumes that poll; see
+     * si_consume_read. */
+    si_consume_read(m, addr);
+
+    if (m->trace_si && addr >= MMIO_SI && addr < MMIO_EXI &&
+        m->si_traced < m->si_trace_cap) {
+        ++m->si_traced;
+        fprintf(stderr, "[si] read  0x%08X size %u\n", addr, size);
+    }
 
     /* DSPCR's completion flags are NO LONGER FORCED SET ON READ.
      *
@@ -227,6 +283,7 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 
 /* Processor interface interrupt status, and the two bits this models. */
 #define PI_INTSR_OFF    0x00u
+#define PI_SI           (1u << 3)   /* serial: the controller ports */
 #define PI_DSP          (1u << 6)   /* shared: audio interface, ARAM, DSP */
 #define PI_VI           (1u << 8)
 #define PI_PE_TOKEN     (1u << 9)
@@ -293,6 +350,214 @@ static void vi_refresh_line(MgsMmio* m)
  * reads. The distinction is moot in this boot anyway: the guest has all three
  * mask bits set.
  */
+/* THE SERIAL INTERFACE: ONE CONTROLLER IN PORT 1, NOTHING IN THE OTHERS.
+ *
+ * Until now this was a stub that cleared the transfer-start bit and did
+ * nothing else, and the trace shows exactly what that cost: the SDK starts
+ * ONE transfer in a whole boot - SICOMCSR = 0xC0010301, channel 0, one byte
+ * out and three back, which is SIGetType asking for a device id - and then
+ * never reads the answer. It never reads it because clearing TSTART is not
+ * how a transfer finishes. Hardware also sets TCINT and raises the serial
+ * interrupt, and the SDK's completion handler is what reads the buffer. With
+ * no completion the handler never runs, PAD concludes the port is empty, and
+ * the boot stops at "No Memory Card" with nothing able to press a button.
+ *
+ * Bit positions here are the public register documentation, not a guess at
+ * silicon: SICOMCSR bit 0 TSTART, bits 1-2 channel, bits 8-14 input length,
+ * bits 16-22 output length, bit 30 TCINTMSK, bit 31 TCINT; SISR gives each
+ * channel a byte, most significant first, with NOREP at bit 27 of channel 0.
+ * A length field of zero means 128, not zero.
+ */
+#define SI_TSTART       0x00000001u
+#define SI_TCINT        0x80000000u
+#define SI_TCINTMSK     0x40000000u
+#define SI_RDSTINT      0x10000000u
+#define SI_RDSTINTMSK   0x08000000u
+#define SI_NOREP(ch)    (1u << (27u - 8u * (unsigned)(ch)))
+#define SI_RDST(ch)     (1u << (29u - 8u * (unsigned)(ch)))
+#define SI_POLL_EN(ch)  (1u << (7u - (unsigned)(ch)))
+#define SI_CHAN_STRIDE  0x0Cu
+#define SI_CHAN_INBUFH  0x04u
+#define SI_CHAN_INBUFL  0x08u
+
+static uint32_t si_reg(const MgsMmio* m, uint32_t off)
+{
+    const uint8_t* p = &m->regs[(MMIO_SI - MMIO_BASE) + off];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static void si_set_reg(MgsMmio* m, uint32_t off, uint32_t v)
+{
+    uint8_t* p = &m->regs[(MMIO_SI - MMIO_BASE) + off];
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+/* The serial line, level-triggered like the rest (F126). */
+static void si_refresh_line(MgsMmio* m)
+{
+    uint32_t csr = si_reg(m, SI_COMCSR);
+    uint32_t cause = pi_cause(m);
+    int asserted = ((csr & SI_TCINT)   && (csr & SI_TCINTMSK)) ||
+                   ((csr & SI_RDSTINT) && (csr & SI_RDSTINTMSK));
+
+    if (asserted) pi_set_cause(m, cause | PI_SI);
+    else          pi_set_cause(m, cause & ~PI_SI);
+}
+
+/* Fill the transfer buffer with this channel's reply. Returns 0 when nothing
+ * is attached, which is every port but the first. */
+static int si_reply(MgsMmio* m, unsigned chan, uint8_t cmd, unsigned inlen)
+{
+    uint8_t* io = &m->regs[(MMIO_SI + SI_IOBUF) - MMIO_BASE];
+    uint8_t buf[16];
+    unsigned n = 0u, i;
+
+    if (chan != 0u) return 0;          /* one controller, in port 1 */
+
+    switch (cmd) {
+        case 0x00u:                    /* type and status */
+            /* 0x09 is a standard GameCube controller. */
+            buf[0] = 0x09u; buf[1] = 0x00u; buf[2] = 0x00u; n = 3u;
+            break;
+
+        case 0x40u:                    /* poll: buttons and sticks */
+        case 0x41u:                    /* origin */
+        case 0x42u:                    /* recalibrate */
+            /* Neutral: no buttons, sticks centred, triggers released. Real
+             * input is not wired to this yet - what this commit establishes
+             * is that a controller EXISTS, which is what PAD stopped on. */
+            buf[0] = (uint8_t)(m->pad_buttons >> 8);
+            buf[1] = (uint8_t)(m->pad_buttons);
+            buf[2] = 0x80u; buf[3] = 0x80u;      /* main stick x, y */
+            buf[4] = 0x80u; buf[5] = 0x80u;      /* c stick x, y */
+            buf[6] = 0x00u; buf[7] = 0x00u;      /* analog l, r */
+            buf[8] = 0x00u; buf[9] = 0x00u;      /* analog a, b */
+            n = (cmd == 0x40u) ? 8u : 10u;
+            break;
+
+        default:
+            return 0;
+    }
+
+    if (n > inlen) n = inlen;
+    for (i = 0; i < n; ++i) io[i] = buf[i];
+    return 1;
+}
+
+/* READING A CHANNEL'S INPUT BUFFER CONSUMES THE POLL.
+ *
+ * RDST means "there is data here you have not taken yet", and hardware clears
+ * it when the high word is read. Leaving it set tells the SDK the data is
+ * perpetually fresh, so a loop that waits for the NEXT poll never waits.
+ * When the last channel is consumed the aggregate interrupt flag goes too.
+ */
+static void si_consume_read(MgsMmio* m, uint32_t addr)
+{
+    uint32_t off, st;
+    unsigned ch, k;
+    int more = 0;
+
+    if (addr < MMIO_SI || addr >= MMIO_SI + 4u * SI_CHAN_STRIDE) return;
+    off = addr - MMIO_SI;
+    ch  = off / SI_CHAN_STRIDE;
+    if (off % SI_CHAN_STRIDE != SI_CHAN_INBUFH) return;
+
+    st = si_reg(m, SI_STATUS);
+    if (!(st & SI_RDST(ch))) return;
+
+    st &= ~SI_RDST(ch);
+    si_set_reg(m, SI_STATUS, st);
+    for (k = 0; k < 4u; ++k) if (st & SI_RDST(k)) more = 1;
+    if (!more) {
+        si_set_reg(m, SI_COMCSR, si_reg(m, SI_COMCSR) & ~SI_RDSTINT);
+        si_refresh_line(m);
+    }
+}
+
+static void si_transfer(MgsMmio* m)
+{
+    uint32_t csr = si_reg(m, SI_COMCSR);
+    unsigned chan  = (csr >> 1) & 3u;
+    unsigned inlen = (csr >> 8) & 0x7Fu;
+    uint8_t  cmd   = m->regs[(MMIO_SI + SI_IOBUF) - MMIO_BASE];
+    uint32_t st    = si_reg(m, SI_STATUS);
+
+    if (!inlen) inlen = 128u;
+
+    if (si_reply(m, chan, cmd, inlen)) st &= ~SI_NOREP(chan);
+    else                               st |=  SI_NOREP(chan);
+    si_set_reg(m, SI_STATUS, st);
+
+    /* The transfer is over: TSTART clears and TCINT raises, exactly as the
+     * set-a-bit-and-wait devices above. Completing instantly is honest here
+     * too - there is no bus on the other side. */
+    csr = (csr & ~SI_TSTART) | SI_TCINT;
+    si_set_reg(m, SI_COMCSR, csr);
+    ++m->si_transfers;
+    si_refresh_line(m);
+}
+
+/* VBLANK POLLING - THE OTHER HALF OF THE SERIAL INTERFACE.
+ *
+ * Completing explicit transfers alone made this worse, not better, and the
+ * measurement said so plainly: GX fell from 2,476,033 commands to 13,060 and
+ * the guest sat in OSRestoreInterrupts. That is F128's shape exactly, so the
+ * fix is to make the other half honest rather than to revert.
+ *
+ * What PAD actually does once it believes a controller exists is set
+ * SIPOLL = 0x01280280 - the low byte 0x80 is EN0 - and then wait for the
+ * hardware to poll that port every field on its own and raise RDSTINT. We
+ * enumerated the ports and then never polled, so PAD waited forever for data
+ * that was never going to arrive.
+ *
+ * Driving this from the frame tick rather than from reads is the same choice
+ * the video interface makes above: a guest waiting on input must see it
+ * arrive at the rate the host actually runs.
+ */
+static void si_poll_frame(MgsMmio* m)
+{
+    uint32_t poll = si_reg(m, SI_POLL);
+    uint32_t st = si_reg(m, SI_STATUS);
+    unsigned ch;
+    int any = 0;
+
+    for (ch = 0; ch < 4u; ++ch) {
+        uint32_t base;
+        uint8_t buf[16];
+
+        if (!(poll & SI_POLL_EN(ch))) continue;      /* not being polled */
+        if (!si_reply(m, ch, 0x40u, 8u)) {           /* nothing attached */
+            st |= SI_NOREP(ch);
+            continue;
+        }
+
+        /* si_reply left the answer in the shared transfer buffer; a polled
+         * transfer delivers it to the channel's own input registers. */
+        memcpy(buf, &m->regs[(MMIO_SI + SI_IOBUF) - MMIO_BASE], 8u);
+        base = MMIO_SI + ch * SI_CHAN_STRIDE;
+        si_set_reg(m, (base + SI_CHAN_INBUFH) - MMIO_SI,
+                   ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
+                   ((uint32_t)buf[2] << 8)  | (uint32_t)buf[3]);
+        si_set_reg(m, (base + SI_CHAN_INBUFL) - MMIO_SI,
+                   ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
+                   ((uint32_t)buf[6] << 8)  | (uint32_t)buf[7]);
+
+        st = (st & ~SI_NOREP(ch)) | SI_RDST(ch);
+        any = 1;
+    }
+
+    si_set_reg(m, SI_STATUS, st);
+
+    if (any) {
+        uint32_t csr = si_reg(m, SI_COMCSR) | SI_RDSTINT;
+        si_set_reg(m, SI_COMCSR, csr);
+        ++m->si_polls;
+        si_refresh_line(m);
+    }
+}
+
 static void dsp_refresh_line(MgsMmio* m)
 {
     const uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
@@ -508,13 +773,69 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         }
 
         /* Serial transfer start: the same shape again. */
-        if (addr == MMIO_SI + SI_COMCSR && (value & 1u))
-            m->regs[off + size - 1u] &= (uint8_t)~1u;
+        /* VI GEOMETRY CHANGES. The external framebuffer is scanned out with
+         * VI's registers, not with whatever GX last copied, so a movie that
+         * uses a different width shows up here as a write to HSW (0x48:
+         * high byte = width/16 pixels, low byte = stride/16 bytes) or to the
+         * field base addresses. */
+        if (m->trace_vi && addr >= MMIO_VI && addr < MMIO_VI + 0x80u) {
+            uint32_t off_vi = addr - MMIO_VI;
+            if (off_vi == 0x48u || off_vi == 0x1Cu || off_vi == 0x24u) {
+                if (value != m->vi_last[off_vi == 0x48u ? 0u
+                                      : off_vi == 0x1Cu ? 1u : 2u]) {
+                    m->vi_last[off_vi == 0x48u ? 0u
+                             : off_vi == 0x1Cu ? 1u : 2u] = value;
+                    fprintf(stderr, "[vi] +0x%02X = 0x%08X%s\n",
+                            off_vi, value,
+                            off_vi == 0x48u ? "  (width/stride)" : "");
+                }
+            }
+        }
+
+        if (m->trace_si && addr >= MMIO_SI && addr < MMIO_EXI &&
+            m->si_traced < m->si_trace_cap) {
+            ++m->si_traced;
+            fprintf(stderr, "[si] write 0x%08X size %u = 0x%08X\n",
+                    addr, size, value);
+        }
+
+        /* SICOMCSR: TCINT and RDSTINT are write-one-to-clear, so the
+         * value the guest just stored has to be undone for those bits
+         * before anything else looks at the register. */
+        if (addr == MMIO_SI + SI_COMCSR) {
+            uint32_t v = si_reg(m, SI_COMCSR);
+            if (value & SI_TCINT)   v &= ~SI_TCINT;
+            if (value & SI_RDSTINT) v &= ~SI_RDSTINT;
+            si_set_reg(m, SI_COMCSR, v);
+            if (v & SI_TSTART) si_transfer(m);
+            else               si_refresh_line(m);
+        }
     }
+}
+
+/* What the controller in port 1 is holding down. Set from the host's input
+ * layer once a frame; read by si_reply when the port is polled. */
+void mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons)
+{
+    if (m) m->pad_buttons = (uint16_t)(m->pad_forced | buttons);
 }
 
 void mgs_mmio_tick_frame(MgsMmio* m)
 {
+    /* The scripted pad, if one was given: the last entry whose frame has
+     * arrived wins, so entries are held rather than pulsed. */
+    if (m->pad_script_n) {
+        unsigned i;
+        uint16_t held = 0u;
+        for (i = 0; i < m->pad_script_n; ++i)
+            if (m->pad_frame >= m->pad_script_frame[i])
+                held = m->pad_script_btn[i];
+        m->pad_forced = held;
+        ++m->pad_frame;
+    }
+
+    si_poll_frame(m);
+
     /* Advance a whole field per frame. Driving this from the frame loop
      * rather than from reads is deliberate: a guest that polls the beam
      * position must see time pass at the rate the host is actually running,
@@ -582,6 +903,13 @@ void mgs_mmio_report_hot(const MgsMmio* m, unsigned top)
  * bits - which for anything above 16 MB it never does. Reading the register
  * as a plain address gives a location 32 times too low, in the middle of the
  * game's own data. */
+/* The video interface's register block, for callers that need to read the
+ * scan-out geometry rather than infer it from the last copy. */
+const uint8_t* mgs_mmio_vi_regs(const MgsMmio* m)
+{
+    return m ? &m->regs[MMIO_VI - MMIO_BASE] : NULL;
+}
+
 uint32_t mgs_mmio_xfb_address(const MgsMmio* m)
 {
     const uint8_t* p;

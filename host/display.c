@@ -344,6 +344,29 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
     unsigned w = s_efb.copy_width, h = s_efb.copy_height;
     unsigned y, x;
 
+    /* WHOSE GEOMETRY IS THIS?
+     *
+     * w/h/stride come from the last EFB COPY, which is right only while GX is
+     * what puts pixels in the external framebuffer. The video decoder writes
+     * decoded frames there directly, without a copy, so during a movie these
+     * are stale values from whatever GX last copied - and reading a frame
+     * with the wrong stride is exactly what produces regular column striping
+     * and a row that repeats. The video interface's own registers are what
+     * hardware scans out with, so log both and compare. */
+    if (getenv("MGS_TRACE_XFB")) {
+        static uint32_t last_xfb; static unsigned lw, lh, ls;
+        if (xfb != last_xfb || w != lw || h != lh ||
+            s_efb.copy_stride != ls) {
+            const uint8_t* vi = mgs_mmio_vi_regs(mmio);
+            last_xfb = xfb; lw = w; lh = h; ls = s_efb.copy_stride;
+            fprintf(stderr, "[xfb] addr 0x%08X  copy %ux%u stride %u  "
+                    "VI_HSW 0x%04X VI_VTR 0x%04X\n",
+                    xfb, w, h, s_efb.copy_stride,
+                    vi ? (unsigned)((vi[0x48] << 8) | vi[0x49]) : 0u,
+                    vi ? (unsigned)((vi[0x00] << 8) | vi[0x01]) : 0u);
+        }
+    }
+
     if (!xfb || !fb || !w || !h) return 0;
     if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, scratch))
         return 0;

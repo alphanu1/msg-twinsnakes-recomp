@@ -45,6 +45,7 @@ typedef struct MgsGxRaster {
     int      no_scissor;          /* MGS_NO_SCISSOR: ignore the scissor box */
     int      no_depth;            /* MGS_NO_DEPTH: force every pixel through */
     int      blend_enable, blend_sub;   /* BP 0x41 CMODE0, per draw */
+    int      blend_noop;                /* ONE/ZERO: same as a plain write */
     int      color_update, alpha_update;
     unsigned blend_src, blend_dst;
     uint64_t blended, write_masked;

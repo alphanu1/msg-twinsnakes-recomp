@@ -333,8 +333,8 @@ static int depth_passes(const MgsGxRaster* r, float z, float was)
  * Values are 0-255 and the caller divides by 255 after multiplying, so a
  * factor of ONE really is one rather than 255/256.
  */
-static int blend_factor(unsigned id, int src, int dst, int src_a, int dst_a,
-                        int for_src)
+static inline int blend_factor(unsigned id, int src, int dst,
+                                   int src_a, int dst_a, int for_src)
 {
     switch (id) {
         case 0: return 0;                              /* ZERO */
@@ -435,6 +435,16 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         r->blend_src    = (unsigned)((cm >> 8) & 7u);
         r->blend_sub    = (int)((cm >> 11) & 1u);
         note_value(r->cmode_key, r->cmode_hit, &r->cmode_n, cm);
+
+        /* BLENDING THAT CHANGES NOTHING IS NOT WORTH DOING PER PIXEL.
+         *
+         * src ONE, dst ZERO computes src * 1 + dst * 0, which is the plain
+         * write the fast path already does - and the game uses exactly that
+         * on 5,568 draws. Deciding it once per draw keeps the inner loop the
+         * shape it was before blending existed, which matters when 562 of
+         * 574 million pixels take this path. */
+        r->blend_noop = (!r->blend_sub && r->blend_src == 1u &&
+                         r->blend_dst == 0u);
     }
 
     /* WHERE 2D GEOMETRY REACHES, textured and untextured separately.
@@ -811,11 +821,16 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                 /* Blend and mask, in the hardware's order: the combiner's
                  * result is the source, the framebuffer is the destination,
                  * and the update bits decide which channels survive. */
-                {
+                if (!(r->blend_enable && !r->blend_noop) &&
+                    r->color_update && r->alpha_update) {
+                    /* The common case by a wide margin: no blending in
+                     * effect and both channels writable. */
+                    r->efb->pixels[at] = pixel;
+                } else {
                     uint32_t dstp = r->efb->pixels[at];
                     uint32_t out = pixel;
 
-                    if (r->blend_enable) {
+                    if (r->blend_enable && !r->blend_noop) {
                         int sa = (int)((pixel >> 24) & 0xFFu);
                         int da = (int)((dstp  >> 24) & 0xFFu);
                         unsigned ch;

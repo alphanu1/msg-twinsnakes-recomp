@@ -95,7 +95,57 @@ void mgs_video_text(int x, int y, uint32_t argb, const char* text)
     }
 }
 
-int mgs_video_present(void)
+/* KEYBOARD TO GAMECUBE CONTROLLER.
+ *
+ * The serial interface reports a controller in port 1 and polls it every
+ * field (F153); this is what puts something in the reply. The button word is
+ * the one the poll response carries, so the mapping is to GameCube bits, not
+ * to anything of ours.
+ *
+ * Keyboard first because it needs no hardware to test with. A real gamepad
+ * goes through SDL_Gamepad and ORs into the same word.
+ */
+static const struct { SDL_Keycode key; uint16_t button; } s_pad_keys[] = {
+    { SDLK_RETURN, 0x1000u },   /* Start  */
+    { SDLK_X,      0x0100u },   /* A      */
+    { SDLK_Z,      0x0200u },   /* B      */
+    { SDLK_S,      0x0400u },   /* X      */
+    { SDLK_A,      0x0800u },   /* Y      */
+    { SDLK_Q,      0x0040u },   /* L      */
+    { SDLK_W,      0x0020u },   /* R      */
+    { SDLK_E,      0x0010u },   /* Z      */
+    { SDLK_LEFT,   0x0001u },
+    { SDLK_RIGHT,  0x0002u },
+    { SDLK_DOWN,   0x0004u },
+    { SDLK_UP,     0x0008u },
+};
+
+uint16_t mgs_video_pad(void)
+{
+    const SDL_Keycode* unused = NULL;
+    const bool* keys = SDL_GetKeyboardState(NULL);
+    uint16_t held = 0u;
+    size_t i;
+
+    (void)unused;
+    if (!keys) return 0u;
+
+    for (i = 0; i < sizeof s_pad_keys / sizeof s_pad_keys[0]; ++i) {
+        SDL_Scancode sc = SDL_GetScancodeFromKey(s_pad_keys[i].key, NULL);
+        if (sc != SDL_SCANCODE_UNKNOWN && keys[sc]) held |= s_pad_keys[i].button;
+    }
+    return held;
+}
+
+/* Events only: no conversion, no upload, no present.
+ *
+ * The host pumps this every time it ticks a frame, which is far more often
+ * than the game produces one. Presenting on that tick meant an SDL present
+ * per 2000 guest instructions - about 20,000 in a boot against some 60 real
+ * frames - and with vsync each of those waits for the display. That is how a
+ * port ends up slow while using almost no processor.
+ */
+int mgs_video_pump(void)
 {
     SDL_Event ev;
 
@@ -105,6 +155,13 @@ int mgs_video_present(void)
         if (ev.type == SDL_EVENT_QUIT) return 0;
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) return 0;
     }
+    return 1;
+}
+
+int mgs_video_present(void)
+{
+    if (!mgs_video_pump()) return 0;
+
 
     SDL_UpdateTexture(s_texture, NULL, s_fb, MGS_XFB_WIDTH * (int)sizeof(uint32_t));
     SDL_RenderClear(s_renderer);

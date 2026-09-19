@@ -626,10 +626,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       reads in a whole boot, so PAD found no controller and stopped polling,
       and nothing can press Retry or Continue. The port is doing exactly what
       a console with no card and no controller would do.
-- [ ] **Report a controller (PAD over SDL3), then a memory card.** Both Low
-      difficulty in the design document's SDK table. Until one exists, that
-      warning screen is the end of the boot — and everything downstream,
-      including the opening video, is never reached rather than broken.
+- [x] **A CONTROLLER IS REPORTED AND THE BOOT GETS PAST THE WARNING SCREEN**
+      (F153). 2026-09-19. The serial interface was a stub that cleared the
+      transfer-start bit and never finished a transfer, so the SDK asked for a
+      device id once and never read the reply. Transfers now complete, empty
+      ports report NOREP, enabled ports are polled every field, and RDST is
+      cleared when the input buffer is read — that last part is what makes it
+      work rather than stall. Keyboard maps to the button word in
+      `sdl_video.c`; `MGS_PAD_SCRIPT` drives a run through a menu unattended.
+      **The intro video plays.**
+- [ ] **A memory card.** Low difficulty in the design document's SDK table.
+      The warning screen can now be dismissed without one.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

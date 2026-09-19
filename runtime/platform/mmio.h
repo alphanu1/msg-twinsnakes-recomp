@@ -121,6 +121,19 @@ typedef struct MgsMmio {
      * actually serviced. See mgs_interrupt_pe_finish. */
     uint64_t pe_finish_acks, pe_token_acks;
     int trace_pi;            /* MGS_TRACE_PI: log PE interrupt acknowledgements */
+    int trace_si;            /* MGS_TRACE_SI: log serial-interface accesses */
+    int trace_vi;            /* MGS_TRACE_VI: log scan-out geometry changes */
+    uint32_t vi_last[3];
+    unsigned si_traced;      /* cap on that log */
+    unsigned si_trace_cap;
+    uint64_t si_transfers;   /* serial transfers completed */
+    uint64_t si_polls;       /* vblank polls delivered */
+    uint16_t pad_buttons;    /* what port 1 is holding down now */
+    uint16_t pad_forced;     /* MGS_PAD_BUTTONS: a floor under it */
+    uint32_t pad_script_frame[16];   /* MGS_PAD_SCRIPT */
+    uint16_t pad_script_btn[16];
+    unsigned pad_script_n;
+    uint32_t pad_frame;
 
 } MgsMmio;
 
@@ -131,6 +144,7 @@ void     mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size
 /* Called once per frame by the host, so polled hardware state advances with
  * real time rather than with how fast the guest spins. */
 void     mgs_mmio_tick_frame(MgsMmio* m);
+void     mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons);
 
 /* A device's interrupt line, not a latch the host owns.
  *
@@ -159,6 +173,7 @@ void     mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user);
 /* Where the video interface is scanning from, as a guest address, or 0 if
  * the game has not programmed it yet. */
 uint32_t mgs_mmio_xfb_address(const MgsMmio* m);
+const uint8_t* mgs_mmio_vi_regs(const MgsMmio* m);
 
 /* ---- the two FIFO descriptions ----------------------------------------
  *

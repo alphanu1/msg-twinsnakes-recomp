@@ -308,6 +308,22 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **Half a device (F128, F153).** Twice now, implementing part of a
+  peripheral has been worse than leaving it stubbed: the DSP line mirror cost
+  12x the boot, and completing serial transfers without also clearing RDST
+  cost 11x the graphics. Both times the fix was to make the other half
+  honest, not to revert.
+- **Reading `ps -o pcpu` as the current CPU rate (F154).** It is the average
+  since the process started. It said 98.8% while the live figure was ~10%,
+  which inverts the diagnosis: 10% with bad throughput means *waiting*, and
+  the wait was 20,000 vsynced presents per boot.
+- **"A successful read in a loop means the guest is waiting for input"
+  (F153).** It is equally the signature of a flag that never clears. Holding
+  a button produced byte-identical counters; `MGS_PAD_SCRIPT` and
+  `MGS_PAD_BUTTONS` exist to tell those two apart.
+- **"Fewer GX commands means less progress" (F153).** The stalled run emitted
+  *more* initialisation output than the baseline while drawing 190x less. The
+  baseline spends most of its budget re-rendering one screen.
 - **A "diagnostic" that changes pixels (F150).** Suppressing black writes to
   see if the text reappeared took the boot from 2,476,033 GX commands to
   7,235. Altering the EFB alters what copies write into guest memory, and the
@@ -5412,6 +5428,124 @@ blending, the colour/alpha update masks, and the alpha test.
 triangles sample a texture.** All 17,320 binds succeed. For a screen whose
 content is text, that is very low, and it is the next thing to measure — not
 another raster register.
+
+
+### F153 — a controller exists: the serial interface was a stub that never finished a transfer
+
+The boot stopped at "No Memory Card" with **3** serial-interface reads in it
+(F149). The trace says exactly why. In a whole boot the SDK started **one**
+transfer — `SICOMCSR = 0xC0010301`, channel 0, one byte out and three back,
+which is `SIGetType` asking for a device id — and then never read the answer.
+
+It never read it because clearing TSTART is not how a transfer finishes.
+Hardware also sets TCINT and raises the serial interrupt, and the SDK's
+completion handler is what reads the buffer. With no completion the handler
+never ran, PAD concluded the port was empty, and nothing could press a button.
+
+Implemented in three parts, because the first two alone made the boot *worse*:
+
+| | GX commands | SI reads | interrupts re-offered |
+|---|---|---|---|
+| stub (baseline) | 2,476,033 | 3 | 3,775 |
+| + transfers complete | 13,060 | 40,070 | 14,421 |
+| + vblank polling | 13,060 | 80,024 | 14,414 |
+| + **RDST cleared on read** | **2,338,178** | 84,840 | 4,482 |
+
+1. **Transfers complete.** Decode channel and lengths from SICOMCSR, put the
+   reply in the transfer buffer, set NOREP in SISR for empty ports, clear
+   TSTART, raise TCINT, refresh the line level-triggered (F126). Port 1
+   answers `0x09`, a standard controller; ports 2-4 answer nothing.
+2. **Vblank polling.** PAD then sets `SIPOLL = 0x01280280` — the low byte
+   `0x80` is EN0 — and waits for hardware to poll that port every field and
+   raise RDSTINT. Driven from the frame tick, like the video interface.
+3. **RDST is cleared when the input buffer is read.** This is the one that
+   mattered. RDST means "data you have not taken yet", and hardware clears it
+   on reading the high word. Left set, the SDK sees perpetually fresh data
+   and a loop that waits for the NEXT poll never waits — an 11x loss of
+   graphics and 3.2x the interrupt re-offers.
+
+**Steps 1-2 without 3 are F128's shape again**: half a device is worse than
+none. The record now has two instances, and the response both times was to
+make the other half honest rather than revert.
+
+**Wrong turns worth keeping:**
+
+- **"The guest is waiting for a button press."** The steady-state trace is
+  `SISR, SISR, INBUFH, INBUFL` repeating, which is `SIGetResponse` reading
+  data successfully, so it looked like a game waiting at a prompt. It was
+  not: holding Start (`MGS_PAD_BUTTONS=0x1000`) produced *byte-identical*
+  counters — 13,060 commands, 80,024 reads. A successful read in a loop is
+  not evidence of waiting for input; it is equally the signature of a flag
+  that never clears. `MGS_PAD_BUTTONS` exists now precisely to tell those two
+  apart.
+- **"Fewer GX commands means less progress."** Also not safe on its own: the
+  controller run emitted *more* initialisation output than the baseline (31
+  OSReport lines against 19, with two heap dumps) while drawing 190x less.
+  The baseline spends most of its 40M steps re-rendering one warning screen.
+
+**The NOREP bit position is confirmed by behaviour, not assumed.** After the
+fix the SDK enumerates all four ports (`0xC0010301/303/305/307`) and then
+enables polling on channel 0 only. With the bit wrong it would have enabled
+all four.
+
+Input is still synthetic — the poll reply is neutral unless `MGS_PAD_BUTTONS`
+holds something. Wiring SDL3 to it is the next step, and is now a small change
+rather than a device model.
+
+### F154 — the port was slow because it presented 300 times too often
+
+The port ran "very very slow" while the processor sat near 10%. Low
+utilisation with bad throughput is a waiting problem, not a compute one, and
+the wait was ours.
+
+`frame_pump()` is called from the run loop every **2000 guest instructions**.
+It did a full presentation every time: XFB to RGB for 512x448, a rescale to
+640x480, an SDL texture upload and `SDL_RenderPresent`. That is about
+**20,000 presentations in a 40M-step boot, against some 60 frames the game
+actually produces** - and with vsync each one waits for the display.
+
+Input still has to be pumped on every tick or the window stops responding, so
+the two were separated: `mgs_video_pump()` polls events and nothing else,
+while the expensive path runs only when the game has produced a frame.
+
+**Keyed on two signals, not one.** The first version keyed on the EFB copy
+counter alone. That is right only while GX is what fills the external
+framebuffer; anything that writes it directly and flips to it - which is how a
+video decoder can present without GX copying - would have frozen the picture
+outright. The key is now the copy count combined with the scan-out address.
+
+**A measurement that was worthless, and why.** `ps -o pcpu` was read as "98.8%
+CPU, so it is compute bound". That field is the **average since process
+start**, not the current rate, and the live figure was about 10% - the
+opposite conclusion. The user's observation corrected it. For a running
+process the instantaneous rate is the only number that means anything.
+
+### F155 — the video corruption is NOT a scan-out geometry problem
+
+The movie plays correct for a few seconds and then degrades into regular
+vertical striping with a magenta/green cast. The first hypothesis was that
+`mgs_display_present` takes its width, height and stride from the **last EFB
+copy** rather than from the video interface, so a 640-wide movie would be read
+as 512 wide with a 1024-byte stride - which skews every line and would produce
+exactly that striping. The stale-geometry criticism of the code is true and
+still worth fixing on its own merits.
+
+**It is not the cause.** Every write to VI's registers was traced: `VI_HSW`
+(+0x48) is written **once**, as `0x2040` - width 512, stride 1024 - and never
+changes across 4,195 VI register writes in a run that reaches the movie. The
+game never reconfigures scan-out for the video, so the geometry cannot drift
+from it.
+
+**What the symptom does say.** A static format error - wrong component order,
+wrong tiling - is wrong from the first frame. This one is *correct first and
+degrades*, which points at a buffer that is not being tracked, or at decode
+falling progressively behind presentation, rather than at a misread layout.
+
+**One instrument not to trust as it stands:** the VI trace logs the raw value
+of each write, and TFBL showed only `0x06` and `0x15` - clearly 16-bit writes
+to the low half, since the resolved address at exit was `0x8015A880`. It
+therefore CANNOT be used to argue that only two framebuffers exist. Log the
+composed address before drawing that conclusion.
 
 ---
 

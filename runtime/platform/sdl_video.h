@@ -27,6 +27,15 @@ uint32_t* mgs_video_framebuffer(void);
 /* Push the framebuffer to the window. Returns 0 if the user closed it. */
 int  mgs_video_present(void);
 
+/* Pump input without presenting; returns 0 when the user quit. */
+int  mgs_video_pump(void);
+
+/* What the keyboard is holding down, as a GameCube button word, sampled when
+ * called. The host feeds this to the serial interface once a frame; held
+ * state rather than accumulated edges, because the guest samples the port
+ * every field and wants to know what is down now. */
+uint16_t mgs_video_pad(void);
+
 /* Minimal drawing, enough for a boot overlay. A real font is not the point;
  * legible hex and short labels are.
  */
