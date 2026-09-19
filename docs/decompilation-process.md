@@ -771,6 +771,191 @@ own (rule 15).
 | GX surface named | 168 / 177 | **171 / 177** |
 | **phase 0 average** | 56.6% | **57.6%** |
 
+## Stage 5h — Name from the shadow, not from the shape · **DONE**
+
+**In:** the 1,161 unnamed call sites left after stage 5f. **Out:** 21 symbols
+(18 functions, 3 objects), covering 220 call sites.
+
+### First, where the work actually is
+
+"1,161 call sites unnamed" invites the wrong work, because it does not say
+whether anything exists to match them against. Sorting them by region does:
+
+```sh
+python3 tools/unnamed-by-region.py
+```
+
+| region | call sites | public reference? |
+|---|---|---|
+| Konami sound / Tremor | 602 | no |
+| CR_System (Konami) | 270 | no |
+| CodeWarrior runtime / boot | 184 | partly |
+| SDK: GX | 55 | yes |
+| SDK: OS | 26 | yes |
+| SDK: audio / DSP / AR / CARD | 24 | yes |
+
+**872 of 1,161 are in Konami's own code**, where no reference binary exists to
+align against and no upstream source exists to match. Every name there must be
+earned one function at a time and can only ever be a description. The work
+that could move was the other quarter, and that is what this stage took.
+
+The region table in that tool is coarse and two of its boundaries are
+evidenced rather than assumed: `0x80046EF0` is where
+`config/symbols/main.dol.files.txt` places `texPalette.c`, and an earlier
+version of the table that ran "SDK: GX" to `0x8004A000` duly reported
+`fn_8004701C` as a matchable SDK function when it is Konami's. The tool now
+says where its own boundaries came from, and defers to `main.dol.files.txt`.
+
+### Then, the route: start from the data, not the function
+
+The productive move in this stage was not matching function bodies. It was
+identifying **a register shadow, a struct offset or a constant pool**, and
+letting that name several functions at once — with each one checkable field
+by field rather than as a whole-body resemblance.
+
+**`__GXData+0x1DC` is PE_CONTROL.** Not inferred from neighbours: `GXInit`
+writes the register index into the word's top byte, in the clear.
+
+```sh
+awk '/0x8003F3E8/,/0x8003F424/' build/phase0/out/asm/auto_01_800055E0_text.s
+# li r0, 0x43  ...  rlwimi r5, r0, 24, 0, 7  /  stw r5, 0x1dc(r8)
+```
+
+BP 0x43 is PE_CONTROL, whose value bits 0-2 are the pixel format, 3-5 the
+z format and 6 the early-z test. That one fact named `GXPixModeSync`
+(re-sends the whole word, no argument) and confirmed the neighbouring
+`GXSetPixelFmt` and `GXSetZCompLoc` — which were carrying `mkdd-align`, an
+*ordering* argument, and now have a behavioural one too.
+
+**`__GXData+0x204` is genMode**, pinned the same way by the already-named
+`GXSetCullMode` writing bits 16-17 of it. `GXGetCullMode` follows: adjacent,
+the same 0x44 bytes, and applying the identical 1 <-> 2 remap in reverse
+because the hardware's cull field has FRONT and BACK swapped relative to the
+API enum.
+
+**`CARDStat`'s offsets** named the memory-card module. `CARDGetStatus` matches
+`CARDStat.c` instruction for instruction — bound `CARD_MAX_FILE` (0x7F),
+directory stride 0x40 (`sizeof CARDDir`), and two `memcpy`s of **4 bytes to
+`+0x28`** and **2 bytes to `+0x2C`**, which are `gameName` and `company` at
+exactly those offsets in the public header. Its three callees came with it,
+and the three synchronous entry points followed from the SDK's
+Async-plus-`__CARDSync` shape.
+
+**The constant pool at `.sdata2 0x8027E530`-`0x5C`** named three more matrix
+functions. Read out of the emitted data rather than assumed:
+
+```sh
+sed -n '820,878p' build/phase0/out/asm/auto_09_8027E060_sdata2.s
+# 1.0, 0.0, 0.5, 2.0, -1.0, 0.017453292, 1.0, 2.0, 0.0, -1.0, 0.5, 3.0
+```
+
+`0.017453292` is pi/180. Nothing but a matrix library keeps that, so every
+function loading from that pool is one of a handful of declarations in
+`mtx.h` before a single body is read. Each is then pinned by *which* of those
+constants it uses and where.
+
+### Two functions that were briefly named wrong
+
+**`fn_8003D4B0`'s head belongs to a different function than its tail.** The
+head is `__CARDIsWritable` verbatim - `CARD_RESULT_NOPERM`, `permission &
+0x20`, two `memcmp`s against `__CARDDiskNone` - and reading only the head
+gives that answer. It contradicted `CARDGetStatus`, which calls
+`__CARDIsReadable` there. The tail settles it: `rlwinm. r0, r0, 0, 29, 29` is
+`permission & 0x4` returning READY, which is `__CARDIsReadable` - with
+`__CARDIsWritable` **inlined into it** in this build. One entry point, both
+tests, 0xF4 bytes.
+
+The general rule: **a signature match against a function's head is not a
+match**, and a callee that disagrees with the match is evidence, not noise.
+
+**`fn_80006668` is not `sqrtf`, and our own note said the wrong thing about
+why.** It is the most-called unnamed function in `main.dol` - **146 call
+sites** - and its body is the SDK's `sqrtf` exactly: `frsqrte`, three
+Newton-Raphson rounds against 0.0, 0.5 and 3.0 at `0x800620A0`/`C0`/`C8`,
+then `frsp`. But it first replaces its argument with `|x|` by clearing the
+sign bit through memory, and both the early-out and the iterations then use
+the replaced value - so it returns a real root for negative input where
+`sqrtf` returns the input unchanged. Named `sqrt_abs`, lower-cased because
+that is a description of behaviour and not a claim about Konami's identifier.
+
+`mgso_pal.rel.symbols.txt` already carried the genuine `sqrtf`, and offered it
+in its header as the example of a name proven beyond doubt - describing it as
+"returning zero for non-positive input". That is false; the `ble` path does
+not touch `f1`, so `sqrtf(-3.0f)` returns `-3.0f`. Zero is only what `x == 0`
+happens to produce. The error is corrected **in the file**, with the reason,
+because it is the single detail that distinguishes the two functions and a
+reader trusting it would have mis-weighted the `fabs` as incidental.
+
+### How each name was checked, by a second route
+
+Every symbol here has two independent legs, which is why they carry a new
+origin `own+sdk2004` rather than `own` or `sdk2004` alone:
+
+| leg | evidence |
+|---|---|
+| behaviour | read out of **this** binary - the register index, the field offsets, the constants, the bit positions |
+| declaration | name **and signature** in `extern/dolsdk2004/include`, a public clean-room source |
+
+```sh
+grep -rn "GXPixModeSync\|GXGetCullMode\|GXInitTexObjWrapMode" \
+    extern/dolsdk2004/include/
+grep -rn "CARDGetStatus\|CARDRename\|__CARDSyncCallback" \
+    extern/dolsdk2004/include/ extern/dolsdk2004/src/card/
+grep -rn "PSMTXQuat\|C_MTXOrtho\|PSVECDistance" \
+    extern/dolsdk2004/include/dolphin/mtx.h
+```
+
+Agreement between the two is corroboration: a declaration alone would not
+distinguish `__CARDIsReadable` from `__CARDIsWritable`, and behaviour alone
+would not supply the spelling. Two further corroborations fell out without
+being sought - `memcmp` at `0x800116A0`, named by `mkdd-align` in an earlier
+stage, is exactly what `__CARDIsReadable` calls twice with lengths 4 and 2;
+and `__CARDBlock`'s 0x220 is exactly 2 x `sizeof(CARDControl)` (0x110, with
+`diskID` at `+0x10C`, which two of these functions load).
+
+The five `own`-origin names (`sqrt_abs`, `flagword_set`, `flagword_clear`)
+have only the behavioural leg by construction - they are Konami's code - and
+are lower-cased to say so. `main.dol.symbols.txt` now states that case
+convention explicitly, as `mgso_pal.rel.symbols.txt` already did.
+
+### Result
+
+| measure | before | after |
+|---|---|---|
+| Functions named | 964 | **982** |
+| SDK entry points the engine calls, named | 182 / 336 | **193 / 336** |
+| SDK call sites covered | 5,917 / 7,078 (83.6%) | **6,137 / 7,078 (86.7%)** |
+| GX surface named | 81 / 81 | 81 / 81 |
+| **phase 0 average** | 68.6% | **69.9%** |
+
+```sh
+python3 tools/progress.py          # regenerate HANDOFF.md's table
+python3 tools/progress.py --check  # and verify HANDOFF.md still agrees
+```
+
+**A drift caught while measuring, in both records.** `HANDOFF.md` said 961
+functions named; the committed symbol map actually yielded 964, because commit
+`0f89358` added three symbols without regenerating the table. `MILESTONES.md`
+was further out: it claimed **1,082 symbols against a real 1,174**, a drift of
+92, because nothing had ever recomputed that line at all.
+
+This is the exact silent failure rule 14 exists to prevent, and the scale of
+the second one is the point - the number stayed plausible while it went 92
+wrong, which is precisely why it survived. So `tools/progress.py --check`
+now compares **both** documents against the evidence and exits non-zero on
+disagreement:
+
+```sh
+python3 tools/progress.py --check
+# The recorded progress figures are stale (project rule 14):
+#   Functions named: HANDOFF says 961, evidence says 982
+#   symbols: MILESTONES says 1,082, the maps hold 1,195
+```
+
+Both legs were verified by being shown a stale number and failing on it - a
+check that has never failed has not been tested. Remembering to run a step is
+not a control; a step that fails loudly is.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.
@@ -1581,6 +1766,7 @@ are exactly:
 | `message` | named from its own diagnostic message (stage 5g) |
 | `ghidra` | recovered by our own analysis |
 | `own` | named by our own reasoning about behaviour |
+| `own+sdk2004` | both legs, independently: the behaviour read out of **this** binary (a register index, a struct offset, a constant pool, a bit position), and the name **and signature** confirmed in `dolsdk2004`. Neither leg alone suffices — a declaration cannot distinguish `__CARDIsReadable` from `__CARDIsWritable`, and behaviour cannot supply the spelling (stage 5h) |
 
 **There is no origin for leaked source, and there will not be one.** If a symbol
 cannot be given one of the origins above, it does not go in the map.

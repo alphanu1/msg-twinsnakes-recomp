@@ -21,18 +21,18 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 68.5%
+## PHASE 0 PROGRESS — 69.9%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 961 / 18,485 | 5.2% |
+| Functions named | 982 / 18,485 | 5.3% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 180 / 336 | 53.6% |
-| SDK call sites covered | 5,911 / 7,078 | 83.5% |
+| SDK entry points the engine calls, named | 193 / 336 | 57.4% |
+| SDK call sites covered | 6,137 / 7,078 | 86.7% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
-| **Average of the five** | | **68.5%** |
+| **Average of the five** | | **69.9%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F115**. The two worth reading first are
+Findings from this session are **F90-F121**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -177,11 +177,17 @@ renderer.
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-3. **Name the remaining 165 SDK entry points the engine calls.** 171 of 336
-   are named and they cover 76.1% of call sites. Ordered alignment is
+3. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+   are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
-   `__LINE__` pairs, and — newly productive again — inline-assembly matching,
-   which had two defects silently subtracting 22 matches (F90).
+   `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
+   best — **starting from a register shadow or a struct offset rather than
+   from the function** (F118, F119). `__GXData+0x1DC` being PE_CONTROL, or
+   `CARDStat+0x28` being `gameName`, identifies several functions at once and
+   the identification is checkable field by field.
+
+   Aim it using the region split in **F116**, not the raw count: only about a
+   quarter of the remaining call sites are in code with any public reference.
 4. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
@@ -214,6 +220,14 @@ renderer.
   function boundaries and SDK symbols.
 - **Committing anything disc-derived** — DOL, RELs, generated C, extracted
   assets. This is the rule that keeps the project distributable.
+- **Reading "N call sites unnamed" as "N names available" (F116).** Three
+  quarters of what is left is in Konami's own sound, Tremor and CR_System
+  code, where no reference binary and no upstream source exist. Sort the
+  remainder by region before aiming at it.
+- **Matching a function by its opening instructions (F118).** `__CARDIsReadable`
+  has `__CARDIsWritable` inlined into it, so its head signature names the
+  wrong function. Read to the `blr`, and treat a callee that disagrees with
+  the match as evidence rather than noise.
 
 ---
 
@@ -3578,6 +3592,158 @@ the last frames, and the next step is to watch the callback itself: whether
 it runs 62 times and declines twice, or runs only 60. That distinguishes "the
 interrupt was not delivered" from "the guest was not ready", and they need
 opposite fixes.
+
+---
+
+**F116 — where the remaining unnamed call sites actually are, and why the
+headline number oversells them.** 1,161 call sites were unnamed. Sorting them
+by the region they land in changes what that number means:
+
+| region | call sites | public source? |
+|---|---|---|
+| Konami sound / Tremor (0x8004E700-0x80062000) | 602 | no |
+| CR_System, Konami (0x8004A000-0x8004E700) | 270 | no |
+| CodeWarrior runtime / boot | 184 | partly |
+| SDK: GX | 55 | yes |
+| SDK: OS | 26 | yes |
+| SDK: audio/DSP/AR | 24 | yes |
+
+**872 of the 1,161 are in Konami's own code**, where there is no reference
+binary to align against and no upstream source to match — every name there has
+to be earned one function at a time by reading the instruction stream, and can
+only ever be a description. The identifiable remainder is small and was worth
+taking first. Do not read "1,161 call sites left" as "1,161 names available".
+
+The per-region split is worth regenerating whenever this question comes up
+again; it is a dozen lines of Python over the REL disassembly and the symbol
+map, and it stops the work being aimed at the wrong 75%.
+
+---
+
+**F117 — main.dol's only square root is not `sqrtf`, and our own note about
+the REL's `sqrtf` was wrong.** `fn_80006668` is the single most-called unnamed
+function in main.dol: **146 call sites**, more than any other. Its body is the
+SDK's `sqrtf` exactly — `frsqrte`, three Newton-Raphson rounds against 0.0,
+0.5 and 3.0 (verified by reading the constants out of the DOL at 0x800620A0,
+0x800620C0, 0x800620C8), then `frsp`.
+
+It is still not `sqrtf`. Before the comparison it replaces its argument with
+`|x|`, by storing the float, clearing the sign bit with `clrlwi r0, r0, 1`,
+and loading it back — and the replaced value is what both the early-out and
+the iterations then use. So it returns a real root for negative input where
+`sqrtf` returns the input unchanged. Named `sqrt_abs`, lower-case because that
+is a description and not a claim about what Konami called it.
+
+**The check that nearly went wrong.** `mgso_pal.rel.symbols.txt` already had a
+`sqrtf`, and its header offered that function as the example of a name proven
+"beyond doubt" — describing it as "returning zero for non-positive input".
+That is false. The `ble` path does not touch `f1`, so `sqrtf(-3.0f)` returns
+`-3.0f`; zero is only what `x == 0` happens to produce. Had the note been
+trusted, the DOL function would have looked like a *different* thing from the
+REL one for the wrong reason, and the actual difference — the `fabs` — might
+have been read as incidental. The note is corrected, and the correction is
+recorded in the file itself rather than silently applied.
+
+The engine calls **both**: the genuine `sqrtf` in the REL at `.text 0x017834`
+and `sqrt_abs` in the DOL, 146 times. That is a deliberate distinction in the
+game's own code, not a duplicate.
+
+---
+
+**F118 — the memory-card module, and a function that is two functions.**
+`CARDGetStatus` was reached from the unnamed list and matches `CARDStat.c`
+instruction for instruction: the bound is `CARD_MAX_FILE` (0x7F), the
+directory stride is 0x40 (`sizeof CARDDir`), and the two `memcpy`s are 4 bytes
+to `CARDStat+0x28` and 2 to `+0x2C` — `gameName` and `company`, at exactly
+those offsets in the public header. Its callees came with it, and the three
+synchronous CARD entry points followed from the Async-plus-`__CARDSync`
+shape. Sixteen symbols in total, including `__CARDBlock` (0x220 = 2 x
+`sizeof(CARDControl)`) and `__CARDDiskNone`.
+
+**The one that was briefly named wrong.** `fn_8003D4B0`'s head is
+`__CARDIsWritable` verbatim — `CARD_RESULT_NOPERM`, then `permission & 0x20`
+with two `memcmp`s against `__CARDDiskNone` — and reading only the head gives
+that answer, which contradicted `CARDGetStatus` calling it where the SDK calls
+`__CARDIsReadable`. The tail resolves it: `permission & 0x4` returning READY
+is `__CARDIsReadable`, which in this build has `__CARDIsWritable` **inlined
+into it**. One entry point, both tests, 0xF4 bytes.
+
+The general lesson is worth more than the symbol: **a function's first twenty
+instructions can belong to a different function than its last twenty**, and a
+signature match against a head is not a match. The contradiction was the
+useful signal — the call from `CARDGetStatus` disagreed with the head, and
+that disagreement was right.
+
+---
+
+**F119 — three GX entry points, named from the register shadow they touch
+rather than from their shape.** `__GXData+0x1DC` is PE_CONTROL: GXInit writes
+`li r0, 0x43` into its top byte at 0x8003F3EC, which *establishes* the
+register rather than assuming it from surrounding code. `+0x204` is genMode,
+pinned the same way by the already-named `GXSetCullMode` writing bits 16-17.
+
+- `GXPixModeSync` (0x8004208C, **31 call sites**) — no argument, re-sends
+  PE_CONTROL unchanged. That is the entire purpose of the function.
+- `GXGetCullMode` (0x800426BC) — sits immediately after `GXSetCullMode` and is
+  the same 0x44 bytes, applying the identical 1 <-> 2 remap in reverse,
+  because the hardware's cull field has FRONT and BACK swapped relative to
+  the API enum.
+- `GXInitTexObjWrapMode` (0x80043DE0) — two 2-bit fields at bits 0-1 and 2-3
+  of the texture object's mode word, which is `wrap_s` and `wrap_t`.
+
+All three were then confirmed by name **and signature** against the
+dolsdk2004 headers. That is two independent legs, so they carry a new origin
+`own+sdk2004` rather than either `own` or `sdk2004` alone — the behaviour is
+evidence from our copy, the declaration is evidence from a public clean-room
+source, and claiming only one of them would understate what was checked.
+
+A side effect worth keeping: deriving PE_CONTROL and ZMODE independently also
+re-confirmed `GXSetZMode`, `GXSetZCompLoc` and `GXSetPixelFmt`, which were
+carrying `mkdd-align` — an ordering argument — and now have a behavioural one
+as well.
+
+---
+
+**F120 — the constant pool identifies the library, then each function's
+constants identify the function.** Three more matrix-library entry points
+(`PSMTXQuat`, `C_MTXOrtho`, `PSVECDistance`) came from a route worth reusing:
+instead of matching function bodies, read the **shared constant pool** they
+load from. `.sdata2 0x8027E530`-`0x5C` holds 1.0, 0.0, 0.5, 2.0, -1.0 and
+**0.017453292** — pi/180. Nothing but a matrix library keeps that value, so
+every function loading from that pool belongs to one, which narrows the
+candidate set to a handful of declarations in `mtx.h` before any body is read.
+
+Each function is then pinned by which of those constants it uses and where:
+`C_MTXOrtho` writes all sixteen floats with -1.0 at m[2][2] and 1.0 at
+m[3][3]; `PSMTXQuat` derives 2.0 as 1.0+1.0 and 0.0 as 1.0-1.0 from a single
+load, which is this library's paired-single idiom; `PSVECDistance` takes
+**one** Newton-Raphson round against 0.5 and 3.0, where `sqrt_abs` (F117)
+takes three. That one-round-versus-three is what separates two functions that
+otherwise share a shape.
+
+The constants were read out of `build/phase0/out/asm/auto_09_8027E060_sdata2.s`
+rather than assumed from the formula — the direction matters, because
+assuming 0.5 and 3.0 and then finding them is not evidence.
+
+---
+
+**F121 — both progress records had drifted, and the bigger one had drifted
+silently for longer.** `HANDOFF.md`'s table said 961 functions named while the
+committed symbol map yielded 964: commit `0f89358` added three symbols and
+skipped the regeneration. `MILESTONES.md` was worse — it claimed **1,082
+symbols against a real 1,174**, out by 92, because nothing had recomputed that
+line in a long time.
+
+The 92 is the instructive one. It stayed *plausible* the whole way, which is
+why nobody caught it; a number that is wrong by a factor would have been
+noticed in a week. Rule 14 says a stale progress figure is worse than none,
+and this is the mechanism — it does not announce itself.
+
+`tools/progress.py --check` now compares both documents against the evidence
+and exits non-zero on disagreement, covering five table rows, two headline
+percentages and the symbol total. Both legs were verified by being shown a
+stale number and failing on it, because **a check that has never failed has
+not been tested**. Run it before committing; it is instant and needs no build.
 
 ---
 

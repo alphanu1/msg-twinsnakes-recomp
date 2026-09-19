@@ -20,8 +20,17 @@
 #
 #   PascalCase / SDK spelling  — the function's ACTUAL name, where the binary
 #       identifies it beyond doubt. `sqrtf` is sqrtf: frsqrte followed by
-#       Newton-Raphson refinement, returning zero for non-positive input, is
-#       that function and no other.
+#       three Newton-Raphson rounds, leaving its ARGUMENT UNTOUCHED for
+#       non-positive input, is that function and no other.
+#
+#       An earlier revision of this note said "returning zero for non-positive
+#       input", which is wrong and was never checked against the branch. The
+#       `ble` path does not touch f1, so sqrtf(-3.0f) returns -3.0f, not 0.0f.
+#       Zero is merely what the case x == 0 happens to produce. The error
+#       mattered: it is the one detail that distinguishes this function from
+#       main.dol's `sqrt_abs` at 0x80006668, which is byte-for-byte the same
+#       except that it substitutes |x| first - so a reader working from the
+#       wrong note would have called them the same function.
 #
 #   lower_snake_case           — OUR DESCRIPTION of what the function does.
 #       Konami's own identifier for it is unknown and is not being guessed at.

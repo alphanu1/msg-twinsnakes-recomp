@@ -17,12 +17,12 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,082 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,195 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
 mechanical rewrite of machine code into C; decompilation in the matching-source
-sense is out of scope by design and sits at ~0%. Phase 0 progress is 68.5%. The toolchain is
+sense is out of scope by design and sits at ~0%. Phase 0 progress is 69.9%. The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -180,10 +180,26 @@ more.
       wrong: it compared counts against another game's symbol table and read
       101.1%. It now measures against `config/gx-surface-used.txt`, and the
       headline average went down as a result.
-- [ ] Name the remaining SDK entry points
-      the engine calls — 50 of them are leaves the call graph cannot reach
-      (F81), so instruction-sequence matching and string references are the
-      routes with room left. The 198 Tremor/`sd_*` functions are attributed
+- [x] **Naming from a register shadow, a struct offset or a constant pool**
+      (stage 5h, F118-F120) — 21 symbols covering 220 call sites, including
+      the memory-card module and three more of the matrix library. Starting
+      from the *data* rather than the function names several at once and
+      makes each checkable field by field: `__GXData+0x1DC` is PE_CONTROL
+      because `GXInit` writes `0x43` into its top byte, and `.sdata2
+      0x8027E530` holds pi/180, which only a matrix library keeps.
+- [x] **The remaining work is sorted by whether a reference exists for it**
+      (F116) — `tools/unnamed-by-region.py`. Three quarters of the unnamed
+      call sites are in Konami's own code, where there is no reference binary
+      and no upstream source. The raw count oversells what is available.
+- [x] **`tools/progress.py --check` fails on a stale progress table** —
+      `HANDOFF.md` had drifted to 961 against a real 964 because one commit
+      added symbols without regenerating. Rule 14 is now enforced rather than
+      remembered, and the check was verified by being shown a stale number.
+- [ ] Name the remaining 143 SDK entry points
+      the engine calls — 193 of 336 are named, covering 86.7% of call sites.
+      50 of the rest are leaves the call graph cannot reach (F81), so
+      instruction-sequence matching, string references and the stage-5h data
+      route are what is left. The 198 Tremor/`sd_*` functions are attributed
       but not named: Konami edited Tremor, so upstream line numbers do not
       align and ordinal alignment would give names no valid origin (F96).
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the

@@ -30,6 +30,18 @@
 #   message     named from its own diagnostic message
 #   ghidra      recovered by our own analysis in Ghidra
 #   own         named by our own reasoning about behaviour
+#   own+sdk2004 found by reading THIS binary's behaviour, then confirmed by
+#               name and signature against doldecomp/dolsdk2004. The two legs
+#               are independent - the behaviour is evidence from our own copy,
+#               the declaration is evidence from a public clean-room source -
+#               so agreement between them is corroboration, not one route
+#
+# NAME CASE CARRIES A CLAIM, exactly as it does in mgso_pal.rel.symbols.txt.
+# A PascalCase or SDK-spelled name asserts the function's ACTUAL name. A
+# lower_snake_case name is OUR DESCRIPTION of what the code does, offered
+# where the real identifier is unknown and is not being guessed at. Mixing
+# the two unmarked would be dishonest about which is evidence and which is
+# a label, so the case distinction carries it.
 #
 # A NAME MAY LEGITIMATELY APPEAR TWICE. `OnReset`, `AlarmHandler` and
 # `Callback` are `static` in the SDK's sources, so several translation units
@@ -1244,3 +1256,100 @@
 .text 0x80022B54 0x70 OSWaitSemaphore own
 .text 0x80022BC4 0x60 OSSignalSemaphore own
 .text 0x80022C24 0x8 OSGetSemaphoreCount own
+
+# --- stage 5h, 2026-09-19: the memory-card module ---------------------------
+# Entered through CARDGetStatus, whose body matches CARDStat.c instruction for
+# instruction: the fileNo bound is CARD_MAX_FILE (0x7F), the directory stride
+# is 0x40 (sizeof CARDDir), and the two memcpys are 4 bytes into CARDStat+0x28
+# and 2 bytes into +0x2C - gameName and company, at exactly those offsets in
+# the public header. Its three callees fell out of that and each stands on its
+# own evidence, listed below. __CARDBlock's 0x220 is 2 x sizeof(CARDControl),
+# and diskID at +0x10C is loaded by two of these functions.
+.text 0x80039148 0xB8 __CARDGetControlBlock own+sdk2004
+.text 0x8003AE04 0x8 __CARDGetDirBlock own+sdk2004
+.text 0x8003D2E8 0x94 __CARDAccess own+sdk2004
+.text 0x8003D4B0 0xF4 __CARDIsReadable own+sdk2004
+.text 0x8003E7E8 0x114 CARDGetStatus own+sdk2004
+.bss 0x80208E00 0x220 __CARDBlock own+sdk2004
+.bss 0x80209020 0x20 __CARDDiskNone own+sdk2004
+.sdata 0x8027DAC2 0x1 __CARDPermMask own+sdk2004
+
+# __CARDIsReadable HAS __CARDIsWritable INLINED INTO IT, which is why one
+# 0xF4 function contains both tests. Reading only its head gives the wrong
+# answer: the head is __CARDIsWritable verbatim - NOPERM, then permission
+# & 0x20 with two memcmps against __CARDDiskNone - and it is the tail,
+# `permission & 0x4` returning READY, that identifies the entry point. The
+# call from CARDGetStatus is to __CARDIsReadable, and that agrees.
+
+# The synchronous CARD calls are the SDK's Async-plus-__CARDSync wrapper,
+# which is a shape rather than a signature: call the Async form passing
+# __CARDSyncCallback, return early if it fails, otherwise block in
+# __CARDSync. CARDRenameAsync is pinned by taking TWO filenames, rejecting
+# a leading 0xFF or NUL in either, and returning CARD_RESULT_NAMETOOLONG
+# (-12) past 32 characters - no other CARD entry point takes two names.
+.text 0x800381EC 0x34 __CARDSyncCallback own+sdk2004
+.text 0x80039438 0x98 __CARDSync own+sdk2004
+.text 0x8003EAB8 0x1FC CARDRenameAsync own+sdk2004
+.text 0x8003ECB4 0x48 CARDRename own+sdk2004
+
+# --- stage 5h: three GX entry points, from the register shadows they touch --
+# __GXData+0x204 is the genMode shadow and +0x1DC is PE_CONTROL (BP 0x43 -
+# GXInit writes that index into its top byte at 0x8003F3EC, which is what
+# fixes which register it is rather than assuming it).
+#
+# GXGetCullMode is the inverse of the already-named GXSetCullMode: both map
+# 1 <-> 2, because the hardware's cull field has FRONT and BACK swapped
+# relative to the API enum. It is adjacent to GXSetCullMode and the same
+# 0x44 bytes. GXInitTexObjWrapMode sets two 2-bit fields at bits 0-1 and
+# 2-3 of the texture object's mode word - wrap_s and wrap_t. GXPixModeSync
+# takes no argument and re-sends PE_CONTROL unchanged, which is the whole
+# of what that function is for.
+.text 0x8004208C 0x24 GXPixModeSync own+sdk2004
+.text 0x800426BC 0x44 GXGetCullMode own+sdk2004
+.text 0x80043DE0 0x1C GXInitTexObjWrapMode own+sdk2004
+
+# --- stage 5h: main.dol's only square root, and it is NOT sqrtf ------------
+# 146 calls from the engine, the most of any unnamed function in this file.
+# Body is the SDK's sqrtf exactly - frsqrte, three Newton-Raphson rounds
+# against the constants 0.0, 0.5 and 3.0 at 0x800620A0/C0/C8, then frsp -
+# with one addition: it first replaces its argument with |x| by clearing
+# the sign bit through memory, and the iterations and the early-out both
+# then run on |x|. So it returns a real root for negative input where
+# sqrtf returns the input unchanged. That is a different function and is
+# named for what it does, not for what it resembles. The genuine sqrtf is
+# in the REL at .text 0x017834; the engine calls both, deliberately.
+.text 0x80006668 0x84 sqrt_abs own
+
+# --- stage 5h: three more of the matrix library -----------------------------
+# All three sit in the block whose constant pool is .sdata2 0x8027E530-0x5C,
+# and reading that pool out of the emitted data is what confirms them: 1.0,
+# 0.0, 0.5, 2.0, -1.0, then 0.017453292 - pi/180, which only a matrix library
+# keeps. Each function's constants are then exactly the ones its formula
+# needs, which is a per-function check rather than a regional argument.
+#
+# C_MTXOrtho writes all sixteen floats of a Mtx44: 2/(r-l) and -(r+l)/(r-l),
+# 2/(t-b) and -(t+b)/(t-b), -1/(f-n) and -f/(f-n), 1.0 - matching mtx.h's
+# (m, t, b, l, r, n, f) argument order exactly.
+#
+# PSMTXQuat reads four floats as two paired singles and writes a 3x4, with
+# 0.0 stored to all three translation components. It derives 2.0 as 1.0+1.0
+# and 0.0 as 1.0-1.0 from a single loaded constant, which is the paired-single
+# idiom throughout this library.
+#
+# PSVECDistance loads each vector twice at +0x0 and +0x4 so the three
+# components land in two paired registers, sums the squares with ps_sum0,
+# and takes one Newton-Raphson round against 0.5 and 3.0. One round, not
+# three - that is PSVECMag's refinement and it distinguishes these from the
+# scalar sqrt at 0x80006668.
+.text 0x80024BD8 0xA4 PSMTXQuat own+sdk2004
+.text 0x80024FBC 0x98 C_MTXOrtho own+sdk2004
+.text 0x800257AC 0x54 PSVECDistance own+sdk2004
+
+# --- stage 5h: a set/clear pair on one flag word ---------------------------
+# `bits |= 1 << n` and `bits &= ~(1 << n)` over the word at the head of the
+# 0x30-byte block at .bss 0x801E7DF8. Konami's own code, so these are
+# DESCRIPTIONS and lower-cased accordingly - what the block is for is not
+# established, and naming it would be a guess rather than a reading. Six
+# functions touch it; only these two are this simple.
+.text 0x80006A50 0x20 flagword_set own
+.text 0x80006A70 0x1C flagword_clear own
