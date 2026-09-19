@@ -50,7 +50,7 @@ int main(void)
         CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_BUSY);
 
         mgs_jobs_wait(jobs);
-        n = mgs_dvd_drain(&dvd, done, MGS_DVD_MAX_PENDING);
+        n = mgs_dvd_drain(&dvd, done, MGS_DVD_MAX_PENDING, ~0ull);
         CHECK(n == 1u);
         CHECK(done[0]->result == 64L);
         CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_END);
@@ -77,7 +77,7 @@ int main(void)
         CHECK(mgs_dvd_pending_count(&dvd) == N);
 
         mgs_jobs_wait(jobs);
-        while ((n = mgs_dvd_drain(&dvd, done, MGS_DVD_MAX_PENDING)) > 0u) {
+        while ((n = mgs_dvd_drain(&dvd, done, MGS_DVD_MAX_PENDING, ~0ull)) > 0u) {
             for (i = 0; i < n; ++i) {
                 CHECK(done[i]->result == 256L);
                 mgs_dvd_release(done[i]);
@@ -103,7 +103,7 @@ int main(void)
         unsigned n;
         CHECK(req != NULL);
         mgs_jobs_wait(jobs);
-        n = mgs_dvd_drain(&dvd, done, 1u);
+        n = mgs_dvd_drain(&dvd, done, 1u, ~0ull);
         CHECK(n == 1u);
         CHECK(done[0]->result == -1L);
         CHECK((int32_t)guest_read32(&mem, BLOCK + DVD_CB_STATE) == DVD_STATE_FATAL_ERROR);

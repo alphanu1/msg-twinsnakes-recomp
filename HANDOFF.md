@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F109**. The two worth reading first are
+Findings from this session are **F90-F110**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3309,6 +3309,51 @@ first and it changes which mail matters.
 
 **No regression:** 0 desyncs, the logo unchanged at 55 frames and 7,235
 commands, 13/13 tests.
+
+---
+
+**F110 — THE PORT WAS NOT DETERMINISTIC, and that invalidated every A/B
+comparison made with it.** Two identical invocations, same binary, same step
+count:
+
+| | run 1 | run 2 |
+|---|---|---|
+| DVD reads completed | 30 | **55** |
+| GX commands | 7,235 | **16,475** |
+| triangles | 108 | **12,412** |
+
+Found by accident. A scissor comparison came back saying the feature made the
+game load *more* - which a rasteriser cannot do, since nothing it writes
+feeds back into guest execution. The result was noise, and so was the
+comparison.
+
+**The cause:** `runtime/dvd/dvd.c` submits reads to a host worker pool, and
+`drain` reported a read finished as soon as the worker set its flag. How much
+had loaded by a given guest step therefore depended on host thread
+scheduling. The design document requires the opposite in as many words -
+timing comes from steps and not the wall clock, *so that a run can be
+replayed* - which is what the whole Dolphin comparison rests on.
+
+**The fix:** a read now carries a `ready_tick` in the GUEST's clock, set when
+it is submitted, and `drain` will not report it before then. If the host
+worker somehow has not finished by the time the guest's clock says it should
+have, the drain waits - completing early would put the nondeterminism
+straight back.
+
+The modelled cost is a constant plus a per-byte one and is **not** the real
+drive's timing. It is not trying to be: what it buys is that the same run
+produces the same result. Modelling the real rate belongs with the Dolphin
+comparison, where there will be something to check it against.
+
+**One mistake worth keeping.** The first version had `drain` adopt whatever
+time it was passed, and the *synchronous* read path passes a synthetic future
+time to say "treat this one as ready". That dragged the clock forward for
+every read submitted afterwards and made them complete early - two of three
+runs matched instead of three of three. The clock is now set explicitly by
+the pump and `drain` only compares against what it is given.
+
+**Four identical runs**, byte-for-byte on every counter down to the deferred
+count of 3,271.
 
 ---
 

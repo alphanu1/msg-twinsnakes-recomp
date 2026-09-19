@@ -80,6 +80,12 @@
 #define DVD_STATE_CANCELED      10
 #define DVD_STATE_RETRY         11
 
+/* The modelled cost of a read, in guest ticks. The timebase is 40.5 MHz, so
+ * 40,500 ticks is a millisecond. A stand-in for the drive, chosen to be
+ * deterministic rather than accurate - see mgs_dvd_read_async. */
+#define MGS_DVD_LATENCY_TICKS   40500u
+#define MGS_DVD_TICKS_PER_BYTE  8u
+
 #define MGS_DVD_MAX_PENDING 64
 
 typedef struct MgsDvdRequest {
@@ -91,6 +97,16 @@ typedef struct MgsDvdRequest {
      * synchronous read uses the second: DVDReadPrio resolves the file info
      * itself and calls DVDReadAbsAsyncPrio, so no path ever reaches us. */
     int       absolute;
+
+    /* The GUEST tick at which this read becomes visible.
+     *
+     * Completion must not depend on when a host worker happens to finish:
+     * two identical runs then disagree about how much has loaded by a given
+     * step, which is exactly what was measured - 30 reads against 55, and
+     * 108 triangles against 12,412, from the same binary and the same step
+     * count. The design document requires timing to come from steps rather
+     * than the wall clock precisely so a run can be replayed. */
+    uint64_t  ready_tick;
     char      path[256];
     uint32_t  guest_dest;        /* where the guest wants it */
     uint32_t  offset;
@@ -108,6 +124,10 @@ typedef struct MgsDvd {
     MgsJobPool*   jobs;
     GuestMemory*  mem;
     MgsDvdRequest pending[MGS_DVD_MAX_PENDING];
+
+    /* The guest's tick count as of the last drain, so a read submitted
+     * between drains knows when it started. */
+    uint64_t      now;
 } MgsDvd;
 
 void mgs_dvd_init(MgsDvd* dvd, MgsDisc* disc, MgsJobPool* jobs, GuestMemory* mem);
@@ -142,7 +162,18 @@ MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
  * returns how many completed, so the caller can run their callbacks. Nothing
  * else may write guest memory on behalf of a read.
  */
-unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max);
+/* Collect finished reads.
+ *
+ * `now` is the GUEST's tick count, and a request is not finished until the
+ * guest's own clock says so - see mgs_dvd_read_async. Passing a clock that
+ * does not advance means nothing ever completes. */
+unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max,
+                       uint64_t now);
+
+/* Tell the disc what time it is, from the guest's clock. Separate from
+ * `drain` because a synchronous read asks `drain` to treat one request as
+ * ready without claiming that time has actually passed. */
+void     mgs_dvd_set_clock(MgsDvd* dvd, uint64_t now);
 
 /* Synchronous read, for the paths where the SDK offers one. Still goes
  * through the same code so there is one implementation to be wrong.

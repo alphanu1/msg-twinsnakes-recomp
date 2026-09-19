@@ -25,6 +25,7 @@
  * up by the next retrace interrupt, which reschedules anyway.
  */
 #include "module.h"
+#include "os/os_runtime.h"
 #include "dvd/dvd.h"
 
 #include <stdio.h>
@@ -59,7 +60,13 @@ void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd)
         return;
     }
 
-    n = mgs_dvd_drain(dvd, done, MGS_DVD_MAX_PENDING);
+    /* The guest's own clock, which is what decides whether a read has
+     * finished. See MgsDvdRequest::ready_tick. */
+    {
+        uint64_t now = mgs_runtime_ticks(mgs_runtime_from(NULL));
+        mgs_dvd_set_clock(dvd, now);
+        n = mgs_dvd_drain(dvd, done, MGS_DVD_MAX_PENDING, now);
+    }
     if (!n) return;
 
     for (i = 0; i < n; ++i) {

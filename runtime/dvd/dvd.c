@@ -65,6 +65,17 @@ MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
     req->host_buffer = (uint8_t*)malloc(length ? length : 1u);
     if (!req->host_buffer) { req->in_use = 0; return NULL; }
 
+    /* WHEN THE GUEST WILL SEE IT, decided now and in the guest's own clock.
+     *
+     * A fixed cost plus a per-byte one. This is NOT the drive's real timing -
+     * a GameCube disc is far slower - and it is not trying to be: what it
+     * buys is that the same run produces the same result, which host thread
+     * scheduling cannot. Modelling the real rate is a separate question and
+     * belongs with the Dolphin comparison, where there is something to
+     * compare against. */
+    req->ready_tick = dvd->now + MGS_DVD_LATENCY_TICKS
+                    + (uint64_t)length * MGS_DVD_TICKS_PER_BYTE;
+
     /* The game polls this while it waits. Set before queuing, so it can never
      * observe a request that is neither BUSY nor finished.
      */
@@ -96,14 +107,24 @@ MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
     return req;
 }
 
-unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max)
+unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max,
+                       uint64_t now)
 {
     unsigned i, n = 0;
 
     for (i = 0; i < MGS_DVD_MAX_PENDING && n < max; ++i) {
         MgsDvdRequest* req = &dvd->pending[i];
         if (!req->in_use) continue;
-        if (!__atomic_load_n(&req->done, __ATOMIC_ACQUIRE)) continue;
+
+        /* THE GUEST'S CLOCK DECIDES, not the worker's. */
+        if (now < req->ready_tick) continue;
+
+        /* Its time has come, so wait for the bytes if they are somehow not
+         * here yet. Host I/O is orders of magnitude faster than the modelled
+         * latency, so this should never spin - but "should never" is not
+         * "cannot", and completing early would put the nondeterminism back. */
+        while (!__atomic_load_n(&req->done, __ATOMIC_ACQUIRE))
+            ;
 
         /* The copy into guest memory happens HERE, on the guest thread, for
          * the same reason the callback does: guest memory has exactly one
@@ -148,7 +169,17 @@ long mgs_dvd_read_sync(MgsDvd* dvd, const char* path, uint32_t guest_dest,
 
     if (!req) return -1;
     mgs_jobs_wait(dvd->jobs);
-    while (mgs_dvd_drain(dvd, done, 1u) == 0u) { /* the job may have run inline */ }
+    /* A SYNCHRONOUS read is finished when the caller asks, by definition -
+     * the guest is blocked on it and no amount of guest time will pass while
+     * it waits. So the modelled latency does not apply here; passing the
+     * request's own ready tick says "it is time" without weakening the rule
+     * for the asynchronous path, which is where the nondeterminism was. */
+    while (mgs_dvd_drain(dvd, done, 1u, req->ready_tick) == 0u) { }
+    /* NOTE the clock is untouched above: `drain` compares against the time
+     * it is given and does not adopt it. Adopting a synthetic future time
+     * here dragged the clock forward for every read submitted afterwards,
+     * which made them ready early and put back some of the nondeterminism
+     * this was meant to remove. */
     result = done[0]->result;
     mgs_dvd_release(done[0]);
     return result;
@@ -161,3 +192,5 @@ unsigned mgs_dvd_pending_count(const MgsDvd* dvd)
         if (dvd->pending[i].in_use) ++n;
     return n;
 }
+
+void mgs_dvd_set_clock(MgsDvd* dvd, uint64_t now) { dvd->now = now; }
