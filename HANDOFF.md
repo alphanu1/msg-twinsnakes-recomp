@@ -3060,9 +3060,22 @@ nothing at all. Dolphin computes SEVERAL candidate rectangles here precisely
 because these coordinates wrap, so the naive reading is not the right one.
 
 `MGS_NO_SCISSOR` exists to tell "the game clipped this" from "we computed the
-box wrongly", because those look identical from the outside. **The scissor
-implementation (F100) should be treated as provisional until that A/B has
-been run against this pass.**
+box wrongly", because those look identical from the outside.
+
+**RESOLVED, once the runs were deterministic enough to compare (F110).** With
+the same guest execution either way - 20,429 GX commands, 24,716 triangles
+submitted - the scissor clips **two triangles** and 2.7% of the pixels:
+
+| | off | on |
+|---|---|---|
+| clipped | 0 | 2 |
+| drawn | 24,716 | 24,714 |
+| pixels | 12,494,848 | 12,156,928 |
+
+So the 1,024-pixel box offset is handled correctly and the implementation
+stands. The first attempt at this comparison was run before F110 and said the
+scissor made the game *load more*, which is impossible and was the clue that
+the runs themselves were not comparable.
 
 ---
 
