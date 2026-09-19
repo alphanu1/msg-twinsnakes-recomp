@@ -419,6 +419,53 @@ and 39** times by the engine; `PSMTXMultVec` 17 times.
 were named by ordered run alignment, by an unrelated route, and the
 instruction-sequence match arrives at the same name at the same address.
 
+### Fourth pass: operand shape, and the prologue a C wrapper emits
+
+Two more gaps, found by identifying `PSMTX44Identity` by hand and then asking
+why the matcher had not.
+
+**The mnemonics do not always separate two functions.** `PSMTX44Identity` and
+`PSMTX44Scale` emit the same ten instructions in the same order - four stores
+on a 4x4 matrix's diagonal with paired-single zeroes between - and the matcher
+correctly refused both. What separates them is *which* operand is which:
+Identity stores one constant on all four diagonal positions, Scale stores
+three arguments and then a constant. `reg_shape()` replaces every operand by
+the order it was first seen, which makes the SDK's symbolic names (`c1`, `m`,
+`xS`) comparable with our register numbers:
+
+```
+PSMTX44Identity   0.1  2.1  2.1  0.1  2.1  2.1  0.1  2.1  2.1  0.1
+PSMTX44Scale      0.1  2.1  2.1  3.1  2.1  2.1  4.1  2.1  2.1  5.1
+```
+
+It is used only to break a tie the mnemonics leave, never to make a match on
+its own.
+
+**A C function wrapping an `asm` block has a prologue.** The declarations that
+feed the block - `register f32 c1 = 1.0f;` - become loads the compiler emits
+*before* it, and those are not in the SDK's signature because they are not in
+the block. So our function is the SDK's sequence with a few instructions in
+front. Up to four leading instructions may be skipped, **only if they are all
+loads, and only if the operand shape matches on the suffix**. That last
+condition is what makes it safe: skipping instructions until something matches
+would find a match for almost anything.
+
+Two smaller alignments were needed before either worked: our disassembly
+writes the quantisation register as `qr0` where the SDK writes a bare `0`, and
+the trailing `blr` had to be dropped from the shape as it already was from the
+opcode sequence.
+
+| | |
+|---|---|
+| exact full-sequence matches | 34 -> **38** |
+| separated by operand shape | 4 |
+| ambiguous (refused) | 7 |
+
+**No new names.** All four shape-separated functions were already in the map,
+and the pass agreed with every one of the 29 names it could check. Its value
+is that it reproduced, from the binary alone, a name that had been derived by
+hand - and that the next `PSMTX44Identity` will not need deriving by hand.
+
 ### A name in the map was wrong, and this is what found it
 
 `0x8001D124` was recorded as `DCZeroRange`, origin `mkdd-align`. Its body is:

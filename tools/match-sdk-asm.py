@@ -93,6 +93,57 @@ def opcodes(text, numeric_offsets=True):
         out.append(tag)
     return out
 
+def reg_shape(text):
+    """The pattern of WHICH operand is the same as which, ignoring names.
+
+    Mnemonics alone are not always a signature. PSMTX44Identity and
+    PSMTX44Scale emit the same ten instructions in the same order: four
+    stores on a 4x4 matrix's diagonal with paired-single zeroes between.
+    They differ in what they store - Identity puts one constant on all four
+    diagonal positions, Scale puts its three arguments on the first three and
+    a constant on the last - and that difference is visible without knowing
+    any register's name, purely as "the first operand here is the same as the
+    first operand there".
+
+    So each operand is replaced by the order in which it was first seen. The
+    SDK writes symbolic names (`c1`, `m`, `xS`) and our disassembly writes
+    numbers, and this makes the two comparable.
+    """
+    seen, shape = {}, []
+    for line in text.splitlines():
+        line = re.sub(r'(//|/\*).*', '', line).strip()
+        if not line or line.endswith(':') or line.startswith('#'):
+            continue
+        if line in ('nofralloc', 'entry', 'noreturn'):
+            continue
+        # The return is stripped from the opcode signature on both sides, so
+        # it has to be stripped here too or the shapes differ by a trailing
+        # entry that means nothing.
+        if line == 'blr':
+            continue
+        m = re.match(r'[a-z][a-z0-9_.]*\s+(.*)', line)
+        if not m:
+            shape.append('-')
+            continue
+        row = []
+        for operand in m.group(1).split(','):
+            operand = operand.strip()
+            # the register inside `0x10(rN)` counts, the offset does not
+            mm = re.search(r'\(([^)]*)\)', operand)
+            if mm:
+                operand = mm.group(1).strip()
+            # `psq_l f2, 0(r3), 0, qr0` on our side is `psq_l f2, 0(m), 0, 0`
+            # on the SDK's: the quantisation register is written as a bare
+            # number there. Without this they never compare equal.
+            operand = re.sub(r'^qr(\d+)$', r'\1', operand)
+            if re.fullmatch(r'-?(0x[0-9A-Fa-f]+|\d+)', operand):
+                continue                      # a literal is not an operand here
+            if operand not in seen:
+                seen[operand] = len(seen)
+            row.append(str(seen[operand]))
+        shape.append('.'.join(row))
+    return tuple(shape)
+
 def load_sdk(paths):
     sigs = {}
     for p in paths:
@@ -114,21 +165,25 @@ def load_sdk(paths):
             if ops and ops[-1] == 'blr':
                 ops = ops[:-1]
             if len(ops) >= 4:                 # too short to be distinctive
-                sigs.setdefault(tuple(ops), []).append(name)
+                shape = tuple()
+                for b in blocks:
+                    shape += reg_shape(b)
+                sigs.setdefault(tuple(ops), []).append((name, shape))
     return sigs
 
 def load_ours(path):
-    """Disassembly -> {address: (name, [opcodes])}."""
-    out, cur, ops = {}, None, []
+    """Disassembly -> {address: [opcodes]}, plus {address: [asm lines]}."""
+    out, shapes, cur, ops, body = {}, {}, None, [], []
     for line in open(path):
         m = re.match(r'^\.fn (\S+?), ', line)
         if m:
-            cur, ops = m.group(1), []
+            cur, ops, body = m.group(1), [], []
             continue
         if line.startswith('.endfn'):
             if cur:
                 out[cur] = ops
-            cur, ops = None, []
+                shapes[cur] = body[:]
+            cur, ops, body = None, [], []
             continue
         if cur is None:
             continue
@@ -137,7 +192,8 @@ def load_ours(path):
             # Same extraction as the SDK side, and without numeric offsets,
             # so the two signatures are built the same way from both.
             ops += opcodes(m.group(1), numeric_offsets=False)
-    return out
+            body.append(m.group(1))
+    return out, shapes
 
 def main():
     ap = argparse.ArgumentParser()
@@ -150,20 +206,61 @@ def main():
     a = ap.parse_args()
 
     sigs = load_sdk(a.sdk)
-    ours = load_ours(a.asm)
+    ours, our_shapes = load_ours(a.asm)
     print(f"SDK inline-asm signatures  {len(sigs):>5}")
     print(f"our functions              {len(ours):>5}")
 
-    hits, ambiguous = {}, 0
+    hits, ambiguous, by_shape = {}, 0, []
     for fn, ops in ours.items():
         body = tuple(ops[:-1]) if ops and ops[-1] == 'blr' else tuple(ops)
-        names = sigs.get(body)
-        if not names:
-            continue
-        if len(set(names)) > 1:
-            ambiguous += 1
-            continue
-        hits[fn] = names[0]
+        cands = sigs.get(body)
+        skipped = 0
+
+        # A C FUNCTION WRAPPING AN `asm` BLOCK HAS A PROLOGUE, and it is not
+        # in the SDK's signature because it is not in the asm block. The
+        # declarations that feed the block - `register f32 c1 = 1.0f;` -
+        # become loads the compiler emits first, so our function is the SDK's
+        # sequence with a few instructions in front of it.
+        #
+        # Only LOADS may be skipped, never more than four, and the operand
+        # shape still has to match on the suffix. That last condition is what
+        # makes this safe: without it, skipping instructions until something
+        # matches would find a match for almost anything.
+        if not cands:
+            for skipped in range(1, 5):
+                if skipped >= len(body):
+                    break
+                cands = sigs.get(body[skipped:])
+                if cands and all(op.split('@')[0] in
+                                 ('lfs', 'lfd', 'li', 'lis', 'psq_l')
+                                 for op in body[:skipped]):
+                    break
+                cands = None
+            if not cands:
+                continue
+        names = {n for n, _ in cands}
+        if len(names) > 1:
+            # THE MNEMONICS DO NOT SEPARATE THESE, so ask which operands are
+            # the same as which. PSMTX44Identity and PSMTX44Scale emit an
+            # identical instruction sequence and differ only in that one
+            # stores a single constant on all four diagonal positions and the
+            # other stores three separate arguments. Refusing both loses a
+            # name that the disassembly plainly distinguishes.
+            shape = reg_shape('\n'.join(our_shapes.get(fn, [])[skipped:]))
+            names = {n for n, sh in cands if sh == shape}
+            if len(names) != 1:
+                ambiguous += 1
+                continue
+            by_shape.append(fn)
+        elif skipped:
+            # One candidate, but the sequence only matched after ignoring a
+            # prologue. The shape has to agree before that is called a match.
+            shape = reg_shape('\n'.join(our_shapes.get(fn, [])[skipped:]))
+            if not any(sh == shape for _, sh in cands):
+                ambiguous += 1
+                continue
+            by_shape.append(fn)
+        hits[fn] = sorted(names)[0]
 
     # A body that several of OUR functions share is not a signature. The SDK
     # has distinct functions with identical instruction sequences - a 4-float
@@ -175,6 +272,8 @@ def main():
 
     print(f"exact full-sequence matches{len(hits):>5}")
     print(f"ambiguous signature (skip) {ambiguous:>5}")
+    print(f"separated by operand shape {len(by_shape):>5}"
+          + (f"  {sorted(by_shape)}" if by_shape else ""))
     print(f"non-unique body (refused)  {len(collided):>5}"
           + (f"  {sorted(collided)}" if collided else ""))
     for fn, n in sorted(hits.items()):
