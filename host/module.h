@@ -72,6 +72,14 @@ void mgs_module_set_vmem(uint8_t* vmem);
 
 /* Ctrl-C ends the run cleanly, so its report is still printed. */
 extern volatile sig_atomic_t mgs_module_interrupted;
+
+/* The last pc the run loop saw. Read from the signal handler so a process
+ * wedged inside one dispatch call can still say where it was. */
+extern volatile uint32_t mgs_module_last_pc;
+
+/* Which part of the host is running. A string literal, set at the few places
+ * that can take a long time; read from the signal handler. */
+extern volatile const char* mgs_module_phase;
 void mgs_module_on_linked(void (*fn)(void* cpu, uint32_t module));
 void mgs_module_trace_calls(uint32_t address,
                             void (*fn)(void* cpu, const uint32_t* gpr));

@@ -460,6 +460,20 @@ This is the project. ~200 functions and the widest error bars in the plan.
       call graph cannot find it. `fn_1_F394C` is a 12-level task scheduler;
       `mgs_dump_tasks` in `host/heaps.c` dumps the table, the per-level gate
       and the per-node flag bits.
+- [x] **The scissor box** (F100). It was parsed into `bp.h` and never read,
+      so every triangle was clipped only to the framebuffer. The hardware
+      will not write outside the box, so ignoring it draws pixels the game
+      did not ask for - and a render-to-texture pass, which puts a small box
+      in a corner of the embedded framebuffer, scrawls over everything else
+      in there. Both the box and its origin register are honoured, and
+      `bp.written[]` now distinguishes an offset SET to zero from one never
+      set. Checked by disabling it and confirming the test fails at exactly
+      the first pixel past the box's edge.
+- [x] **The engine draws a sphere** (F98) — `gcn_emit_sphere_strips`, 32
+      strips of 66 vertices with position and normal, the normal's z from
+      `sqrtf(1 - x*x - y*y)`. Around 2,048 triangles, almost certainly a
+      sphere map built by render-to-texture. This is the first engine
+      geometry the port has reached, as opposed to the boot logo.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
       registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently

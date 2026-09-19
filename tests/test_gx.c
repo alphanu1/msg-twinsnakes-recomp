@@ -236,6 +236,135 @@ int main(void)
         CHECK(gx.vcd_lo == 0x00000200u);
     }
 
+    /* --- the scissor box ------------------------------------------------ */
+    {
+        /* The hardware will not write outside the scissor, so a renderer that
+         * ignores it draws pixels the game did not ask for. That matters most
+         * for a render-to-texture pass, which puts a small box in a corner of
+         * the embedded framebuffer; scrawling over the rest of it corrupts
+         * whatever else is in there.
+         *
+         * Coordinates carry a 342 bias, and BP 0x59 shifts the origin in
+         * units of two pixels with the same bias - so 171 there means "no
+         * shift". Both halves matter: honouring the box without the origin
+         * clips against a rectangle of the right shape in the wrong place. */
+        static const float identity2[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
+        static const float ortho2[6] = { 1,0, 1,0, 1,0 };
+        uint64_t before_px, before_drawn;
+        float vp2[6];
+        unsigned x, y;
+
+        /* RE-ESTABLISH THE VERTEX AND TRANSFORM STATE rather than inheriting
+         * it. An earlier case here rewrites vcd_lo to prove the parser
+         * survives a split write, and a block that silently depends on
+         * whatever the previous block left behind fails for reasons that
+         * have nothing to do with what it is testing. */
+        gx.vcd_lo = (1u << 9) | (1u << 13);
+        gx.vcd_hi = 0;
+        gx.vat_a[0] = (1u << 0) | (4u << 1) | (1u << 13) | (5u << 14);
+        load_xf(0x0000, identity2, 12);
+        load_xf(0x1020, ortho2, 6);
+        {
+            uint32_t one = 1u;
+            put8(GX_OP_LOAD_XF);
+            put32((0u << 16) | 0x1026u);
+            put32(one);
+        }
+        vp2[0] = 320.0f; vp2[1] = -240.0f; vp2[2] = 1.0f;
+        vp2[3] = 320.0f + 342.0f; vp2[4] = 240.0f + 342.0f; vp2[5] = 0.0f;
+        load_xf(0x101A, vp2, 6);
+
+        memset(efb.pixels, 0, sizeof efb.pixels);
+        mgs_raster_reset_depth(&raster);
+
+        /* A box covering only the left half of the screen. */
+        mgs_bp_write(&gx.bp, BP_SCISSOR_OFFSET, (171u << 10) | 171u);
+        mgs_bp_write(&gx.bp, BP_SCISSOR_TL, ((0u + 342u) << 12) | (0u + 342u));
+        mgs_bp_write(&gx.bp, BP_SCISSOR_BR,
+                     ((319u + 342u) << 12) | (479u + 342u));
+
+        before_px = raster.pixels;
+        before_drawn = raster.drawn;
+
+        put8(GX_OP_DRAW_FIRST | (GX_PRIM_TRIANGLES << 3) | 0u);
+        put16(3);
+        {
+            /* Spans the full width, so without a scissor it would put pixels
+             * on both halves. */
+            static const float xyz[3][3] = {
+                { -0.9f, -0.5f, 0.0f },
+                {  0.9f, -0.5f, 0.0f },
+                {  0.0f,  0.5f, 0.0f },
+            };
+            unsigned i, k;
+            for (i = 0; i < 3u; ++i) {
+                for (k = 0; k < 3u; ++k) {
+                    uint32_t bits; memcpy(&bits, &xyz[i][k], sizeof bits);
+                    put32(bits);
+                }
+                put32(0x00FF00FFu);          /* green */
+            }
+        }
+
+        CHECK(raster.drawn == before_drawn + 1u);
+        CHECK(raster.pixels > before_px);
+
+        /* NOTHING may have been written to the right of the box. Checked over
+         * the whole half rather than at one point, because a scissor that is
+         * merely shifted still leaves most of it clear. */
+        for (y = 0; y < MGS_EFB_HEIGHT; ++y)
+            for (x = 320u; x < MGS_EFB_WIDTH; ++x)
+                if (efb.pixels[y * MGS_EFB_WIDTH + x] != 0u) {
+                    printf("FAIL: scissor leaked at (%u,%u)\n", x, y);
+                    ++failures;
+                    y = MGS_EFB_HEIGHT; break;
+                }
+
+        /* ...and something WAS drawn inside it, so this is not passing by
+         * drawing nothing at all - which is the way a wrong bias fails. */
+        {
+            int inside = 0;
+            for (y = 0; y < MGS_EFB_HEIGHT && !inside; ++y)
+                for (x = 0; x < 320u; ++x)
+                    if (efb.pixels[y * MGS_EFB_WIDTH + x] != 0u) { inside = 1; break; }
+            CHECK(inside);
+        }
+
+        /* An UNWRITTEN offset register must not be read as a zero offset:
+         * that shifts the box 342 pixels and clips away nearly everything.
+         * Re-running with the offset never set must still draw. */
+        {
+            MgsGxBp saved = gx.bp;
+            uint64_t d2;
+            gx.bp.written[BP_SCISSOR_OFFSET] = 0u;
+            gx.bp.reg[BP_SCISSOR_OFFSET] = 0u;
+
+            memset(efb.pixels, 0, sizeof efb.pixels);
+            mgs_raster_reset_depth(&raster);
+            d2 = raster.drawn;
+
+            put8(GX_OP_DRAW_FIRST | (GX_PRIM_TRIANGLES << 3) | 0u);
+            put16(3);
+            {
+                static const float xyz[3][3] = {
+                    { -0.9f, -0.5f, 0.0f },
+                    {  0.9f, -0.5f, 0.0f },
+                    {  0.0f,  0.5f, 0.0f },
+                };
+                unsigned i, k;
+                for (i = 0; i < 3u; ++i) {
+                    for (k = 0; k < 3u; ++k) {
+                        uint32_t bits; memcpy(&bits, &xyz[i][k], sizeof bits);
+                        put32(bits);
+                    }
+                    put32(0x0000FFFFu);
+                }
+            }
+            CHECK(raster.drawn == d2 + 1u);
+            gx.bp = saved;
+        }
+    }
+
     guest_memory_free(&mem);
     printf(failures ? "gx: FAILED\n" : "gx: ok\n");
     return failures ? 1 : 0;

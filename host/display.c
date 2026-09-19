@@ -56,12 +56,19 @@ static void fifo_sink(void* user, uint32_t value, unsigned size)
     mgs_gx_write(&s_gx, value, size);
 }
 
+/* The run loop's interrupt flag, read from inside the rasteriser. */
+static int raster_abandon(void) { return mgs_module_interrupted != 0; }
+
 void mgs_display_init(GuestMemory* mem);
 void mgs_display_init(GuestMemory* mem)
 {
     mgs_efb_init(&s_efb);
     mgs_gx_init(&s_gx, mem);
     mgs_raster_init(&s_raster, &s_efb);
+    /* So a run that is mid-draw can still be stopped and still report what it
+     * drew. mgs_raster_triangle explains why the run loop's own check is not
+     * enough. */
+    s_raster.abandon = raster_abandon;
     s_gx.triangle = mgs_raster_triangle;
     s_gx.user = &s_raster;
     mgs_mmio_set_fifo_sink(mgs_host_mmio(), fifo_sink, NULL);

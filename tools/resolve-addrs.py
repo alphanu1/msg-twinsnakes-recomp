@@ -10,9 +10,10 @@ was known when it was produced.
 Two address spaces:
 
   0x8000_0000..  main.dol, loaded at its link address.
-  0x7E00_0000..  the overlay, mgso_pal.rel, loaded into the second window.
-                 REL symbols are recorded as section-relative, so resolving
-                 them needs the load address the run reported.
+  0x7F00_80EC..  the overlay, mgso_pal.rel, in the second address window.
+                 Its symbols are recorded as offsets into .text, because the
+                 load address is the game's choice and has already changed
+                 once; --rel-base overrides where .text was actually put.
 
 Usage:  resolve-addrs.py [--rel-base 0x7E...] [file ...]
 Reads stdin when given no files. Any 0x-prefixed address in the text is
@@ -42,7 +43,14 @@ def load(path, bias=0):
         return out
     with fh:
         for line in fh:
-            m = re.match(r'^\s*(\S+)\s+0x([0-9A-Fa-f]+)\s+(\S+)\s+(\S+)', line)
+            # Comments first. The five-column pattern below is loose enough
+            # to match prose - a comment mentioning an address and a couple
+            # of words parses as a symbol and poisons the table - so they are
+            # discarded before anything tries to read them as data.
+            if line.lstrip().startswith('#') or not line.strip():
+                continue
+            m = re.match(r'^\s*(\.\w+)\s+0x([0-9A-Fa-f]+)\s+'
+                         r'(0x[0-9A-Fa-f]+|\?)\s+(\S+)\s+(\S+)\s*$', line)
             if not m:
                 continue
             size = m.group(3)
@@ -71,7 +79,7 @@ def resolve(table, keys, addr):
 
 def main():
     args = sys.argv[1:]
-    rel_base = 0x7E000000
+    rel_base = 0x7F0080EC
     if '--rel-base' in args:
         i = args.index('--rel-base')
         rel_base = int(args[i + 1], 0)
@@ -86,7 +94,7 @@ def main():
     def name_for(addr):
         if addr >= 0x80000000:
             return resolve(dol, dol_k, addr)
-        if addr >= rel_base:
+        if addr >= 0x7E000000:
             return resolve(rel, rel_k, addr)
         return None
 

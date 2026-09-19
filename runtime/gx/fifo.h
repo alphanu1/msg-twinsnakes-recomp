@@ -180,4 +180,11 @@ int mgs_gx_take_copy(MgsGx* gx, uint32_t* cmd);
 /* Take one draw-done token, if the game has sent one. */
 int mgs_gx_take_draw_done(MgsGx* gx);
 
+
+/* A marker saying which part of the renderer is running, for a host that has
+ * to report where it was when it could not be stopped. Defined in fifo.c and
+ * read by whatever is doing the reporting; a pointer store to a string
+ * literal, so it is safe to read from a signal handler. */
+extern volatile const char* mgs_gx_phase;
+
 #endif

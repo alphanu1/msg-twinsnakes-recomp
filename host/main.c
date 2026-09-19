@@ -18,6 +18,7 @@
 #include "platform/mmio.h"
 #include "gx/efb.h"
 #include "gx/raster.h"
+#include "gx/fifo.h"
 #include <SDL3/SDL.h>
 
 void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
@@ -138,6 +139,7 @@ static void frame_pump(void)
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <execinfo.h>
 #include <stdarg.h>
 
 static void overlay_line(const char* fmt, ...);
@@ -239,9 +241,32 @@ static void patch_report(void)
     }
 }
 
+/* MGS_NO_MEM_SHIM runs the TRANSLATED memcpy/memset/__fill_mem instead of
+ * the native ones, so the two can be compared without rebuilding.
+ *
+ * Worth having as a switch rather than a build flag: these three account for
+ * 86% of the boot, so making them native changes how far the game gets in a
+ * given number of steps by a large factor, and any difference in behaviour
+ * after that needs to be attributable to the shim or cleared of it. Being
+ * able to run the same binary both ways is what makes that a measurement
+ * rather than an argument. */
+static int mem_shim_disabled(void)
+{
+    static int cached = -1;
+    if (cached < 0) cached = getenv("MGS_NO_MEM_SHIM") != NULL;
+    return cached;
+}
+
 static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 {
-    MgsSdkFn fn = mgs_patch_lookup(address);
+    MgsSdkFn fn;
+
+    if (mem_shim_disabled() &&
+        (address == 0x800050B4u || address == 0x800050E4u ||
+         address == 0x8000519Cu))
+        return 0;
+
+    fn = mgs_patch_lookup(address);
     if (!fn) return 0;
 
     patch_count(address);
@@ -283,7 +308,56 @@ static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
 static void on_interrupt(int sig)
 {
     (void)sig;
-    if (mgs_module_interrupted) _exit(130);
+    if (mgs_module_interrupted) {
+        /* Say WHERE before going. A process that has to be killed is
+         * exactly the one that cannot use any of the normal reporting
+         * routes, and two runs ended with nothing printed at all - which
+         * says only that it did not finish, not where it was. Written with
+         * write(2) rather than printf because this runs in a signal
+         * handler and stdio is not re-entrant. */
+        char buf[64];
+        uint32_t pc = mgs_module_last_pc;
+        /* The GX marker is the finer-grained of the two: the run loop can
+         * only say "in dispatch", which is true for the parser, the
+         * rasteriser and the guest's own code alike. */
+        const char* phase = (const char*)mgs_module_phase;
+        const char* gxp = (const char*)mgs_gx_phase;
+        unsigned i;
+        memcpy(buf, "\n[wedged] last pc 0x00000000 in ", 32);
+        for (i = 0; i < 8u; ++i) {
+            unsigned nib = (pc >> ((7u - i) * 4u)) & 0xFu;
+            buf[20 + i] = (char)(nib < 10u ? '0' + nib : 'A' + (nib - 10u));
+        }
+        (void)!write(2, buf, 32);
+        if (phase) {
+            size_t n = 0; while (phase[n] && n < 32u) ++n;
+            (void)!write(2, phase, n);
+        }
+        (void)!write(2, " / gx ", 6);
+        if (gxp) {
+            size_t n = 0; while (gxp[n] && n < 32u) ++n;
+            (void)!write(2, gxp, n);
+        }
+        (void)!write(2, "\n", 1);
+
+        /* THE HOST CALL STACK, which is the thing that actually answers
+         * "where is it".
+         *
+         * Every cheaper instrument tried before this one pointed somewhere
+         * confident and wrong: a phase marker that reported the last event
+         * rather than the current one, an abandon hook that released the
+         * rasteriser without releasing the run, and a cycle budget that
+         * changed nothing. backtrace() is not formally async-signal-safe,
+         * but this path is about to _exit anyway, and a stack that is
+         * occasionally garbled beats three rounds of inference. */
+        {
+            void* frames[24];
+            int n = backtrace(frames, 24);
+            (void)!write(2, "[wedged] host stack:\n", 21);
+            backtrace_symbols_fd(frames, n, 2);
+        }
+        _exit(130);
+    }
     mgs_module_interrupted = 1;
 }
 

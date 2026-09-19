@@ -22,6 +22,12 @@
 #define BP_IND_CMD         0x10u   /* 0x10-0x1F */
 #define BP_SCISSOR_TL      0x20u
 #define BP_SCISSOR_BR      0x21u
+/* The scissor box's origin. A render-to-texture pass puts its viewport
+ * somewhere in the embedded framebuffer and shifts the scissor to match, so
+ * ignoring this clips the pass against the wrong rectangle - which removes
+ * geometry that should be drawn rather than failing visibly. Stored in units
+ * of two pixels, and biased like the scissor itself. */
+#define BP_SCISSOR_OFFSET  0x59u
 #define BP_TEV_ORDER       0x28u   /* 0x28-0x2F, two stages each */
 #define BP_ZMODE           0x40u
 #define BP_BLEND_MODE      0x41u
@@ -105,6 +111,18 @@ typedef struct MgsGxBp {
 
 void mgs_bp_init(MgsGxBp* bp);
 void mgs_bp_write(MgsGxBp* bp, uint8_t reg, uint32_t value);
+
+/* Whether the game has ever set a register.
+ *
+ * Needed because zero is a legal value for some registers and "never written"
+ * is not the same thing. The scissor offset is the case that forced this: a
+ * box set without an offset must be read against the default origin, and
+ * treating the unwritten register's zero as a real offset shifts the box by
+ * 342 pixels - which clips away most of what should be drawn. */
+static inline int mgs_bp_is_set(const MgsGxBp* bp, uint8_t reg)
+{
+    return bp->written[reg] != 0u;
+}
 
 static inline uint32_t mgs_bp_get(const MgsGxBp* bp, uint8_t reg)
 {

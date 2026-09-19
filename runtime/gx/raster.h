@@ -43,6 +43,11 @@ typedef struct MgsGxRaster {
     int      trace;               /* MGS_TRACE_RASTER: explain rejections */
 
     uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
+
+    /* Returns non-zero when drawing should stop - the host has been asked to
+     * quit and is waiting for this call to come back. Optional; NULL means
+     * draw everything. See mgs_raster_triangle for why this is needed at all. */
+    int (*abandon)(void);
 } MgsGxRaster;
 
 void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb);

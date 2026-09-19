@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F97**. The two worth reading first are
+Findings from this session are **F90-F100**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -2855,6 +2855,79 @@ and `DCTouchRange` were dead-stripped.
 Ordered alignment mis-assigned it because it assumed both survived the link.
 **A name carrying `mkdd-align` rests on an assumption about what the *other*
 binary contains**, and is worth re-checking against evidence taken from ours.
+
+---
+
+**F98 — the game gets past the logo into real engine rendering, and what it
+draws first is a sphere.** With the overlay copy native, the boot reaches
+`gcn_emit_sphere_strips` (REL 0x12106C, in the `gcn_dgd.c` / `gcn_spheremap.c`
+neighbourhood). The function is unambiguous from its own code:
+
+- outer loop 32, inner loop 33;
+- `GXBegin(0x98 = GX_TRIANGLESTRIP, GX_VTXFMT2, 0x42 = 66)` per strip - and
+  66 is exactly 33 x 2, which is what the inner loop emits;
+- two helpers per vertex, each writing three floats to `0xCC008000`, the
+  write-gather pipe: a position and a normal;
+- the normal's z is `sqrtf(1 - (x*x + y*y))`, which is what makes it a unit
+  sphere. `fn_1_17834` is `sqrtf` - `frsqrte` plus Newton-Raphson refinement,
+  returning zero for non-positive input.
+
+`GXEnd` (REL 0x121278) is a bare `blr`, which is correct: the vertex count was
+declared in `GXBegin` and `GXEnd` does nothing on hardware.
+
+That is 32 draw calls and about 2,048 triangles, and it is almost certainly a
+render-to-texture pass building a sphere map.
+
+---
+
+**F99 — "it is wedged" was wrong, twice, and the instruments were what made it
+look that way.** Three separate symptoms all said the host had hung after the
+overlay copy went native, and none of them was a hang.
+
+1. **The run outlived its `timeout` with nothing printed.** Fixed by having a
+   second signal `_exit`, and by printing the last pc the run loop saw - which
+   is the only route that works when the report is unreachable.
+2. **A phase marker said `gx raster`, so it looked like the rasteriser.** The
+   marker was only ever SET, never cleared, so it reported the last thing that
+   had happened rather than what was happening. A marker that is not cleared
+   on the way out is not a marker, it is a history. Letting the rasteriser
+   abandon its work did not release the run, which should have been the clue.
+3. **A 2,000-cycle budget did not help either**, which seemed to rule out "one
+   long dispatch call" and left "an infinite loop in translated code". The
+   generated C for that loop was then read directly, and it is correct: bounded
+   counters, and a cycle-budget check on the back edge.
+
+What it actually is: **the steps are advancing, just slowly.** A heartbeat
+shows step 0, then 300,007 with 55 frames - roughly 3,000-5,000 steps per
+second against about 37,000 before. Rasterisation happens INSIDE the guest's
+dispatch call, so every triangle the game draws is host work charged to the
+step that issued it, and the boot has gone from a byte-copy loop to real
+rendering.
+
+**The lesson is about instruments, not about the bug.** Every one of the three
+observations was produced by a tool that was itself wrong or too coarse, and
+each one pointed somewhere confident and false. The heartbeat aliasing (F91)
+was the same failure a day earlier. When a measurement says something
+surprising, the measurement is the first thing to check.
+
+---
+
+**F100 — the scissor box was parsed and then ignored.** `BP_SCISSOR_TL`/`BR`
+were defined in `bp.h` and never read by the rasteriser, so every triangle was
+clipped only to the framebuffer. The hardware will not write outside the box,
+so this draws pixels the game did not ask for - and for a render-to-texture
+pass, which puts a small box in a corner of the embedded framebuffer, it
+scrawls over whatever else is in there.
+
+Two halves are needed. Coordinates carry the same 342 bias as the viewport,
+and `BP 0x59` shifts the origin in units of two pixels with the bias again;
+honouring the box without the origin clips against a rectangle of the right
+shape in the wrong place. **Zero is a legal offset**, so `bp.written[]` now
+distinguishes "set to zero" from "never set" - reading an unwritten register
+as a zero offset shifts the box 342 pixels and clips away nearly everything.
+
+Checked by disabling the feature and confirming the test fails: it reports a
+leak at exactly (320,120), the first pixel past the box's right edge.
 
 ---
 

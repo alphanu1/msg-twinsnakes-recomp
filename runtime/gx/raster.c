@@ -1,4 +1,5 @@
 #include "raster.h"
+#include "fifo.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -222,6 +223,24 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (!r || !r->efb) return;
     ++r->submitted;
 
+    /* STOP DRAWING ONCE THE HOST HAS BEEN ASKED TO QUIT.
+     *
+     * Rasterisation happens INSIDE the guest's dispatch call: the game writes
+     * to the write-gather pipe, the parser executes the command, and the
+     * triangle is filled before the store completes. So a draw call covering
+     * a lot of screen holds the run loop for as long as it takes, and the run
+     * loop is where the interrupt flag is read - which meant Ctrl-C and
+     * `timeout` both appeared to do nothing, and a run that was rendering
+     * looked identical to one that had hung.
+     *
+     * The engine's sphere generator is what surfaced this: 32 strips of 66
+     * vertices, over 2,000 triangles, in one uninterrupted stretch. Checking
+     * here costs one volatile read per triangle and makes the difference
+     * between a process that reports what it drew and one that has to be
+     * killed with nothing printed. */
+    if (r->abandon && r->abandon()) return;
+    mgs_gx_phase = "raster";
+
     vin[0] = a; vin[1] = b; vin[2] = c;
 
     for (i = 0; i < 3u; ++i) {
@@ -277,6 +296,48 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (y0 < 0) y0 = 0;
     if (x1 > (int)r->width) x1 = (int)r->width;
     if (y1 > (int)r->height) y1 = (int)r->height;
+
+    /* THE SCISSOR BOX. Not an optimisation - the hardware will not write
+     * outside it, so a renderer that ignores it draws pixels the game did not
+     * ask for. That matters most for a render-to-texture pass, which sets a
+     * small box in a corner of the embedded framebuffer and would otherwise
+     * have its geometry scrawled over everything else in there.
+     *
+     * Coordinates are biased by 342 - the same bias the viewport carries -
+     * and BP 0x59 shifts the box's origin, in units of two pixels, with the
+     * same bias again. Both halves are needed: a pass that moves its viewport
+     * moves the scissor with it, so honouring one without the other clips
+     * against a rectangle that is in the right shape and the wrong place. */
+    {
+        uint32_t tl  = mgs_bp_get(&gx->bp, BP_SCISSOR_TL);
+        uint32_t br  = mgs_bp_get(&gx->bp, BP_SCISSOR_BR);
+        uint32_t off = mgs_bp_get(&gx->bp, BP_SCISSOR_OFFSET);
+
+        /* An all-zero scissor is the power-on state, not a request to draw
+         * nothing. Until the game has set one, clip to the framebuffer. */
+        if (tl || br) {
+            /* ZERO IS A LEGAL OFFSET, so an unwritten register cannot be read
+             * as one. 171 is the value that makes the offset vanish
+             * (171 * 2 == 342, the same bias the coordinates carry), which is
+             * the right reading of "the game set a box and no origin". Taking
+             * the unwritten zero literally shifts the box 342 pixels up and
+             * left and clips away most of what should be drawn. */
+            unsigned ox = mgs_bp_is_set(&gx->bp, BP_SCISSOR_OFFSET)
+                        ? (off & 0x3FFu) : 171u;
+            unsigned oy = mgs_bp_is_set(&gx->bp, BP_SCISSOR_OFFSET)
+                        ? ((off >> 10) & 0x3FFu) : 171u;
+            int sl = (int)((tl >> 12) & 0xFFFu) - (int)(ox * 2u);
+            int st = (int)( tl        & 0xFFFu) - (int)(oy * 2u);
+            int sr = (int)((br >> 12) & 0xFFFu) - (int)(ox * 2u) + 1;
+            int sb = (int)( br        & 0xFFFu) - (int)(oy * 2u) + 1;
+
+            if (sl > x0) x0 = sl;
+            if (st > y0) y0 = st;
+            if (sr < x1) x1 = sr;
+            if (sb < y1) y1 = sb;
+        }
+    }
+
     if (x0 >= x1 || y0 >= y1) { ++r->clipped; return; }
 
     ++r->drawn;
@@ -286,6 +347,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
      * one; the binding cannot change within a primitive. */
     {
         unsigned map;
+        /* A decode is up to a megatexel and happens on a cache miss, so it
+         * belongs on the responsive side of the check too. */
+        if (r->abandon && r->abandon()) return;
         stage_texture(&gx->bp, 0u, &map, &tex_coord, &tex_enabled);
         if (tex_enabled) {
             tex = bind_texture(r, gx, map);
@@ -297,6 +361,17 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     }
 
     for (py = y0; py < y1; ++py) {
+        /* ONCE PER SCANLINE, not once per triangle.
+         *
+         * The per-triangle check above cannot release a run that is inside a
+         * single large triangle, and that is exactly where a wedged host was
+         * found sitting: the phase marker said `raster`, the abandon hook was
+         * installed, and the process still would not stop. A row is at most a
+         * few hundred pixels, so this bounds the response time to something
+         * far below a human's patience while costing one predictable branch
+         * per row. */
+        if (r->abandon && r->abandon()) return;
+
         for (px = x0; px < x1; ++px) {
             float fx = (float)px + 0.5f, fy = (float)py + 0.5f;
             float w0 = edge(sx[1], sy[1], sx[2], sy[2], fx, fy) / area;

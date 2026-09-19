@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+volatile const char* mgs_gx_phase = "idle";
+
 /* ---- register decoding ------------------------------------------------ */
 
 /* The vertex descriptor, CP 0x50 and 0x60. Two bits per attribute for the
@@ -352,10 +354,19 @@ void mgs_gx_write(MgsGx* gx, uint32_t value, unsigned size)
     uint8_t b[4];
     unsigned i;
 
+    /* Set on the way in and CLEARED ON THE WAY OUT. A marker that is only
+     * ever set says what happened last, not what is happening now, and that
+     * is actively misleading: a wedged run reported "raster" when the
+     * rasteriser had finished long before and the host was in translated
+     * code. Clearing it here means "raster" means still in the rasteriser. */
+    mgs_gx_phase = "gx-parse";
+
     if (size > 4u) size = 4u;
     for (i = 0; i < size; ++i)
         b[i] = (uint8_t)(value >> (8u * (size - 1u - i)));   /* big-endian */
     feed(gx, b, size);
+
+    mgs_gx_phase = "idle";
 }
 
 /* ---- primitives -------------------------------------------------------- */

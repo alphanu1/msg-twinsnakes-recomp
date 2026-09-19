@@ -627,6 +627,34 @@ static int service_vector(void* cpu, uint32_t pc,
  * the only thing a handler may portably touch. */
 volatile sig_atomic_t mgs_module_interrupted;
 
+/* The last pc the run loop saw, for a process that has to be killed.
+ *
+ * A wedge inside a single dispatch call cannot be reported by any of the
+ * normal routes: the run loop never comes back, so the step limit, the spin
+ * detector and the end-of-run report are all unreachable, and the only thing
+ * that happens is that `timeout` eventually kills the process with nothing
+ * printed at all. Two runs ended that way with no idea where.
+ *
+ * Updated every step and read from the signal handler. `volatile` and a
+ * plain 32-bit store because that is what a handler may safely read; it is a
+ * diagnostic, and a torn value would still name the right neighbourhood. */
+volatile uint32_t mgs_module_last_pc;
+
+/* WHICH PART OF THE HOST is running, for the same reason.
+ *
+ * Knowing the guest pc says where the GAME is; it does not say whether the
+ * host is executing translated code, parsing a GX command, filling a
+ * triangle or copying a framebuffer - and those want completely different
+ * investigations. Letting the rasteriser abandon its work did not release a
+ * wedged run, which ruled out the triangle fill and left everything else.
+ *
+ * A pointer store to a string literal: no allocation, nothing to free, and
+ * safe to read from a signal handler. */
+volatile const char* mgs_module_phase = "start";
+
+/* Cycles the translated code may run per dispatch call. See MGS_BUDGET. */
+static uint32_t s_budget = 100000u;
+
 static MgsPump s_pump;
 static void*   s_pump_user;
 
@@ -911,6 +939,11 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         env = getenv("MGS_HEARTBEAT");
         heartbeat = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
         profile = getenv("MGS_PROFILE") != NULL;
+        env = getenv("MGS_BUDGET");
+        if (env) {
+            unsigned long v = strtoul(env, NULL, 0);
+            if (v >= 64ul && v <= 10000000ul) s_budget = (uint32_t)v;
+        }
         /* MGS_PROFILE_CALLERS=<guest address> attributes arrivals at that
          * address to the callers that got there. MGS_PROFILE_SIZE_REG names
          * the argument register holding a byte count, so the report can rank
@@ -1011,6 +1044,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 
         recent[recent_n % RECENT] = pc;
         ++recent_n;
+        mgs_module_last_pc = pc;
+        mgs_module_phase = "run-loop";
 
         if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
 
@@ -1046,7 +1081,17 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * returns when it hits zero; leaving it empty would return
          * immediately every time and make no progress at all. */
         {
-            uint32_t budget = 100000u;
+            /* MGS_BUDGET sets how many cycles the translated code may run
+             * before it must come back.
+             *
+             * It is a diagnostic as much as a tuning knob. The run loop is
+             * the only place the interrupt flag is read, so the budget is
+             * also the longest the host can take to notice it - and a run
+             * that will not stop is either spending a long time inside one
+             * dispatch call or not decrementing the counter at all. Lowering
+             * this tells the two apart: if a small budget makes the host
+             * responsive, it was the former. */
+            uint32_t budget = s_budget;
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
         }
 
@@ -1075,6 +1120,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             }
         }
 
+        mgs_module_phase = "dispatch";
         if (!mod->dispatch(cpu, pc)) {
             r.stop = MGS_STOP_UNCOVERED;
             r.pc = pc;
