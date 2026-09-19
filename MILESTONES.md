@@ -582,8 +582,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       was always valid. **Pixels written 12,156,928 to 348,188,074, lit
       1,167,715 to 19,526,875, textured triangles 2,716 to 14,356, and the
       best frame 22,034 lit pixels to 26,570 — in 4,258 colours against 278.**
+- [x] **THE PORT DRAWS RECOGNISABLE FRAMES** (F138). The boot renders the
+      **Konami** logo and then the **Silicon Knights** logo — the latter with
+      its sword, its textured green circuit-board cube and gold-edged
+      lettering, all correct. First time the port has produced something a
+      person would recognise rather than a pixel count. Frames are written
+      outside the repository and are never committed (rule 8: the artwork is
+      the game's, whoever's code drew it).
 - [ ] **The texture cache refuses 2,964 of 17,320 lookups.** Each refusal is a
-      surface drawn untextured. Now the most visible gap.
+      surface drawn untextured. The logo's cube IS textured, so the path
+      works — these are formats or sizes the cache will not take. Now the
+      most visible gap.
 - [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
       million times in a long run. The probe does resolve — EXT is clear, so
       `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own

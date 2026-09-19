@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F137**. The two worth reading first are
+Findings from this session are **F90-F138**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -4642,6 +4642,38 @@ rather than trusted.
 **Newly visible:** the texture cache now reports **2,964 refusals** out of
 17,320 lookups. That is the next thing — a refusal is a texture format or
 size the cache will not take, and each one is a surface drawn untextured.
+
+---
+
+**F138 — the boot renders two recognisable logo screens, correctly.** Looking
+at the frames rather than counting them, F137's "structure in 4,258 colours"
+is the **Silicon Knights logo**: the sword, the green circuit-board cube with
+its texture applied, and the gold-edged lettering with the registered mark.
+The frame it replaced is the **Konami logo** — flat cyan text on a dark band,
+which is what 278 colours looks like.
+
+Both are correct. Not approximately correct, not recognisable-if-you-squint:
+the textured cube, the metallic gradients on the type and the thin highlight
+along the sword are all there. Everything from the FIFO parse through vertex
+decode, transform, viewport, scissor, depth, the texture cache, the TEV
+combiner, the EFB and the copy-out is producing the picture the game intended.
+
+**This is the first time the port has drawn something a person would
+recognise**, and it is worth recording as a checkpoint separate from the
+measurements that got here — a lit-pixel count cannot tell a logo from noise,
+and for most of this session the counts were the only thing being read.
+
+**Where the frames are and where they must not go.** Written to
+`~/mgs-frames/`, outside the repository, deliberately. **A rendered frame is
+the game's own artwork** — our code drew it, but what it depicts is Konami's
+and Silicon Knights'. Project rule 8 keeps it out of the tree, and
+`README.md`'s notice depends on that staying true. Do not commit frames, do
+not attach them to issues, do not upload them.
+
+**What it says about the remaining gaps.** The texture cache refusing 2,964 of
+17,320 lookups is now clearly the thing between this and more of the screen:
+the cube in this logo IS textured, so the path works and the refusals are
+formats or sizes it will not take.
 
 ---
 
