@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F143**. The two worth reading first are
+Findings from this session are **F90-F144**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -178,12 +178,11 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Is the truncated text ever EMITTED? (F143).** Every transform-stage
-   explanation is now excluded by measurement — scissor, depth, display-list
-   size, textures, viewport. Dump the x-extent of every textured triangle
-   drawn under the 2D viewport (half-width 256). If nothing exists past
-   x=208, the engine never emits those glyphs and the cause is upstream of
-   GX, exactly as it was for the font pointer in F142.
+3. **Dump the render-to-texture contents (F144).** The text quads are full
+   width; the texture they sample is blank past a column. The glyphs are
+   rendered into the 64x64 RTT strip and copied out to
+   `0x81781BE0` / `0x81785C00` / `0x8178DC40`. Read those back and find where
+   they go blank. Superseded: (F143).
 4. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
@@ -4926,6 +4925,52 @@ is emitted at all**: count textured triangles per frame against glyphs
 expected, and dump the x-extent of every textured triangle in the 2D viewport
 (half-width 256). If none exists past x=208, the engine is not emitting them
 and the cause is upstream of GX entirely — as it was for the font pointer.
+
+---
+
+**F144 — the text quads are full width; it is the TEXTURE that stops.** The
+question left by F143 was whether the glyphs past x=208 are emitted at all.
+They are — and the answer reframes the bug for the third time.
+
+Bucketing every 2D-viewport triangle by its right edge across a boot:
+
+```
+96-127:988   288-319:988   384-415:988   416-447:1976
+512-543:3674 544-575:988   576-607:2964  608-639:988
+```
+
+Two things fall straight out:
+
+1. **There is no bucket at 192-223**, where the text visibly ends. Nothing
+   stops there.
+2. The totals are all multiples of **988**, and sum to 13,554 — which is the
+   whole 2D pass. That is about **13.7 triangles per frame**.
+
+Thirteen triangles cannot be fifty-eight characters of text. **Each line is a
+single textured quad**, drawn with a texture that already contains the
+rendered string — and those quads reach x=288-447, well past the cut.
+
+**So the geometry is full width and the texture content is not.** The string
+texture is only partly filled, which is why every line stops at the same pixel
+regardless of how many characters it holds.
+
+**And that points at render-to-texture**, which is where nearly all of this
+game's drawing goes: 3,860,150 triangles into the 64x64 strip (F143) against
+13,554 for the screen. The engine draws its glyphs into a small EFB region,
+copies it out as a texture, and blits the result. If that copy captures only
+part of what was drawn, the text is truncated exactly like this — the same
+cut for every line, unrelated to character count.
+
+**Next:** dump what the RTT copies actually contain. `MGS_SAVE_FROM=<addr>`
+already reads an arbitrary address, and the three RTT destinations are known
+(`0x81781BE0`, `0x81785C00`, `0x8178DC40` from F127's copy trace). A 64x64
+texture that is blank past a certain column is the whole answer.
+
+**An instrument error worth noting**, though it cost nothing this time: the
+first version of this histogram was placed INSIDE the `if (tex_enabled)`
+branch, so "all triangles" and "textured triangles" were the same counter
+measuring the same thing. The two agreeing looked like a result and meant
+nothing. Moving it above the branch is what made the comparison real.
 
 ---
 

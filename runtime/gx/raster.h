@@ -70,6 +70,8 @@ typedef struct MgsGxRaster {
     uint32_t vp_halfw[8], vp_ox[8];  /* distinct viewports seen, by half-width */
     uint64_t vp_hits[8];
     unsigned vp_n;
+    uint64_t tex2d_maxx[20];  /* textured 2D triangles by right edge, 32px buckets */
+    uint64_t all2d_maxx[20];  /* ALL 2D triangles, same buckets */
     int      trace_preload;   /* MGS_TRACE_PRELOAD */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */

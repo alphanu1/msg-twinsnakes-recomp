@@ -335,6 +335,19 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (!r || !r->efb) return;
     ++r->submitted;
 
+    /* WHERE 2D GEOMETRY REACHES, textured and untextured separately.
+     *
+     * A first version of this counted only TEXTURED triangles and found none
+     * whose right edge lands where the text visibly ends - which is the
+     * answer to a different question. At roughly 13 textured triangles per
+     * frame in this viewport there are nowhere near enough of them to be
+     * glyphs, so the text is drawn untextured and a textured-only histogram
+     * is blind to it. Counting both is what makes the comparison mean
+     * anything.
+     *
+     * Filled after the screen coordinates exist, which is why it is not up
+     * with the other per-triangle counters. */
+
     /* WHICH VIEWPORTS ARE IN USE, kept as a small set of distinct ones.
      *
      * Every line of text on the memory-card screen stops at x=207-209 while
@@ -399,6 +412,20 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
         iw[i] = 1.0f / w;
         to_screen(r, gx, clip, w, &sx[i], &sy[i], &sz[i]);
+    }
+
+    {
+        float vp_hw;
+        memcpy(&vp_hw, &gx->viewport[0], sizeof vp_hw);
+        if (vp_hw > 200.0f) {
+            float mx = sx[0] > sx[1] ? sx[0] : sx[1];
+            int b;
+            if (sx[2] > mx) mx = sx[2];
+            b = (int)(mx / 32.0f);
+            if (b < 0) b = 0;
+            if (b > 19) b = 19;
+            ++r->all2d_maxx[b];
+        }
     }
 
     area = edge(sx[0], sy[0], sx[1], sy[1], sx[2], sy[2]);
@@ -522,6 +549,17 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * could not produce one" are different faults with different
              * fixes, and a single counter cannot tell them apart. */
             ++r->tex_wanted;
+
+            /* WHERE ON SCREEN THE TEXTURED 2D GEOMETRY ACTUALLY REACHES.
+             *
+             * Every line of text on the memory-card screen stops at x=208,
+             * and scissor, depth, display lists, textures and viewport are
+             * all now excluded by measurement. What is left is whether the
+             * glyphs past that point are drawn at all. Bucketing the right
+             * edge of each textured triangle in the MAIN viewport (half-width
+             * 256, the 2D pass - not the 64-wide render-to-texture strip)
+             * answers it: geometry that exists but is invisible shows up
+             * here, geometry that was never emitted does not. */
             tex = bind_texture(r, gx, map);
             if (!tex) ++r->tex_bind_failed;
             if (tex) {

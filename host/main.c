@@ -1306,6 +1306,23 @@ int main(int argc, char** argv)
                             }
                             {
                                 unsigned k;
+                                printf("  ALL 2D triangles by right edge "
+                                       "(32px buckets):\n   ");
+                                for (k = 0; k < 20u; ++k)
+                                    if (rs->all2d_maxx[k])
+                                        printf(" %u-%u:%llu", k * 32u,
+                                               k * 32u + 31u,
+                                               (unsigned long long)rs->all2d_maxx[k]);
+                                printf("\n  ...of which textured:\n   ");
+                                for (k = 0; k < 20u; ++k)
+                                    if (rs->tex2d_maxx[k])
+                                        printf(" %u-%u:%llu", k * 32u,
+                                               k * 32u + 31u,
+                                               (unsigned long long)rs->tex2d_maxx[k]);
+                                printf("\n");
+                            }
+                            {
+                                unsigned k;
                                 printf("  viewports in use, %u distinct "
                                        "(half-width, x-origin, triangles):\n",
                                        rs->vp_n);
