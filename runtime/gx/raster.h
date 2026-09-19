@@ -48,6 +48,20 @@ typedef struct MgsGxRaster {
     uint64_t pixels_lit;      /* of `pixels`, how many were not black */
     uint64_t tev_stages[16];  /* triangles by TEV stage count */
     uint64_t tex_on_later_stage; /* stage 0 had none, a later stage did */
+    /* WHAT THE UNTEXTURED MAJORITY ACTUALLY ASKS THE COMBINER FOR.
+     *
+     * 514,048 triangles are drawn with no texture and come out black, and no
+     * register read at the end of a run can say why: genMode and TEV_ORDER0
+     * both read correctly there. These are sampled PER DRAW and kept as a
+     * small histogram of distinct values, which is what a question about
+     * something that varies during a run needs. */
+    uint32_t cenv_key[16];    /* distinct TEV_COLOR_ENV seen, untextured */
+    uint64_t cenv_hits[16];
+    unsigned cenv_n;
+    uint32_t rascol_key[16];  /* distinct vertex colours, untextured */
+    uint64_t rascol_hits[16];
+    unsigned rascol_n;
+
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */
 

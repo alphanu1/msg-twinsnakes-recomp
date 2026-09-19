@@ -227,6 +227,22 @@ static int depth_passes(const MgsGxRaster* r, float z, float was)
     }
 }
 
+/* A tiny fixed histogram: keep the first 16 distinct values and count them.
+ *
+ * Sixteen is enough because the interesting answer is "one value, used half a
+ * million times" or "three values" - a renderer configuration that genuinely
+ * took more than sixteen shapes would itself be the finding. Overflow is
+ * counted into the last slot rather than dropped, so the totals still add up.
+ */
+static void note_value(uint32_t* keys, uint64_t* hits, unsigned* n, uint32_t v)
+{
+    unsigned i;
+    for (i = 0; i < *n; ++i)
+        if (keys[i] == v) { ++hits[i]; return; }
+    if (*n < 16u) { keys[*n] = v; hits[*n] = 1u; ++*n; return; }
+    ++hits[15];
+}
+
 void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                          const MgsGxVertex* b, const MgsGxVertex* c)
 {
@@ -392,6 +408,15 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                     if (on) { ++r->tex_on_later_stage; break; }
                 }
             }
+        }
+
+        /* Sampled here, once per triangle, while the registers still hold
+         * what this draw used. */
+        if (!tex_enabled) {
+            note_value(r->cenv_key, r->cenv_hits, &r->cenv_n,
+                       mgs_bp_get(&gx->bp, BP_TEV_COLOR_ENV));
+            note_value(r->rascol_key, r->rascol_hits, &r->rascol_n,
+                       a->color[0]);
         }
 
         if (tex_enabled) {

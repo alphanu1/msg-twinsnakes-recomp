@@ -550,9 +550,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       nothing could clear it. The line now mirrors the device, as VI's always
       has. **`PI cause 0x40` stuck to `0x00000000`, 871,157 re-offers to
       1,122, 55 disc reads to 64**, determinism intact.
-- [ ] **The third livelock.** 200,000,000 steps still equal 40,000,000 at
-      177,806 commands — but nothing is pending at exit now, so it is not an
-      interrupt that went missing. A different search.
+- [ ] **The third livelock, located** (F130). An engine loop at REL `.text
+      0xF0F2C`, holding 81.6% of samples, reached from the per-frame task
+      dispatch and apparently never returning. Not an interrupt, not the
+      renderer — a loop whose bound comes from something the runtime feeds it
+      wrongly. This is now the whole blocker.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written
@@ -562,12 +564,12 @@ This is the project. ~200 functions and the widest error bars in the plan.
       a structured banner across the middle of the screen. The whole route
       works end to end: FIFO, vertex decode, transform, viewport, scissor,
       depth, combiner, EFB and copy-out.
-- [ ] **Why the other 99.8% of the geometry shades black** (F129). Not the
-      texture path: every triangle runs **one** TEV stage, none wants a
-      texture on a later stage, **778 ask for a texture and all 778 are
-      supplied**. The game genuinely draws 514,048 triangles untextured and
-      the combiner returns black for them. Sample the actual `TEV_COLOR_ENV`
-      per draw — the exit snapshot is useless here, it reads correctly.
+- [x] **The renderer is doing what it is told** (F130). The untextured
+      majority uses exactly two combiner configurations — one that says "take
+      the vertex colour" (white, 348,160 small triangles, and these are the
+      lit pixels) and one that says "output zero" (165,888 large ones). Both
+      compute correctly by hand against the implementation. A black screen
+      with a logo banner is a boot screen, not a broken renderer.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
       registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently

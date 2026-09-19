@@ -925,6 +925,27 @@ int main(int argc, char** argv)
                                        "  of those, bind failed: %llu\n",
                                        (unsigned long long)rs->tex_wanted,
                                        (unsigned long long)rs->tex_bind_failed);
+                                {
+                                    unsigned k;
+                                    printf("  untextured draws, TEV_COLOR_ENV "
+                                           "(a,b,c,d = input selectors):\n");
+                                    for (k = 0; k < rs->cenv_n; ++k) {
+                                        uint32_t e = rs->cenv_key[k];
+                                        printf("    0x%06X  a=%u b=%u c=%u d=%u"
+                                               "  bias=%u sub=%u dest=%u  x%llu\n",
+                                               e,
+                                               (e >> 12) & 0xFu, (e >> 8) & 0xFu,
+                                               (e >> 4) & 0xFu, e & 0xFu,
+                                               (e >> 16) & 3u, (e >> 18) & 1u,
+                                               (e >> 22) & 3u,
+                                               (unsigned long long)rs->cenv_hits[k]);
+                                    }
+                                    printf("  untextured draws, vertex colour:\n");
+                                    for (k = 0; k < rs->rascol_n; ++k)
+                                        printf("    0x%08X  x%llu\n",
+                                               rs->rascol_key[k],
+                                               (unsigned long long)rs->rascol_hits[k]);
+                                }
                             }
                             printf("textures: %llu decoded, %llu hits, "
                                    "%llu misses, %llu refused, %llu evicted\n",

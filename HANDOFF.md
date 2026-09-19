@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F129**. The two worth reading first are
+Findings from this session are **F90-F130**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,15 +166,16 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The third wall, and it is not an interrupt (F128).** 200,000,000 steps
-   still equal 40,000,000 at 177,806 GX commands, but nothing is pending at
-   exit and re-offers are down to 1,912. The two interrupt faults are fixed;
-   whatever holds the boot now is something else, and the search should start
-   from a fresh thread dump and profile rather than from the interrupt path.
-2. **Why 99.8% of the geometry shades black (F129).** Not the texture path —
-   that is measured correct. Sample `TEV_COLOR_ENV` and `TEV_ALPHA_ENV` per
-   draw for the untextured majority, not at exit. This is the work that puts
-   a picture on the screen.
+1. **The third wall, located: an engine loop at REL `.text 0xF0F2C` (F130).**
+   81.6% of samples sit in three addresses inside it, it is reached from the
+   per-frame task dispatch via `0x8004A46C`, and nothing suggests it ever
+   returns. It is a counting/bucketing pass then nested loops — real
+   computation whose bound is presumably derived from something the runtime
+   is feeding it wrongly. Find what sets that bound. This is the whole
+   blocker: the renderer, the interrupts and the disc are all behaving.
+2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
+   fault (F130).** The combiner does exactly what the game configures. The
+   screen is black with a logo because the boot is on a logo screen.
 3. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
@@ -4186,6 +4187,61 @@ beside written-pixel counts, TEV stage histogram, and the wanted/failed split
 on texture binds. Between them they turned "the screen is black" into "one
 element renders, the other 99.8% of geometry is shaded black", which is a
 different problem.
+
+---
+
+**F130 — the renderer is not the problem, and F129's conclusion was wrong.**
+F129 said the gap was "the combiner's untextured path", because 514,048
+triangles are drawn untextured and come out black. Sampling the combiner's
+actual configuration per draw refutes it. There are exactly two:
+
+| TEV_COLOR_ENV | a | b | c | d | count | should give |
+|---|---|---|---|---|---|---|
+| `0x08FACF` | ZERO | **RASC** | **ONE** | ZERO | 348,160 | the vertex colour |
+| `0x08FFFF` | ZERO | ZERO | ZERO | ZERO | 165,888 | **black, deliberately** |
+
+and the vertex colour is `0xFFFFFFFF` on all 514,048 of them.
+
+The combiner computes `d + lerp(a, b, c)`. Worked by hand against the actual
+implementation: config one gives **255** per channel — white — and config two
+gives **0**. Both are exactly what the game asked for. The 348,160 white ones
+are small (about 3.4 pixels each, which is the 1,167,715 lit pixels), and the
+165,888 black ones are large (about 66 pixels each), which is why the screen
+reads as black with a logo on it.
+
+**A mostly-black screen with a logo banner is what a boot screen looks like.**
+The renderer is not failing to draw the game; the game has not got as far as
+drawing anything else.
+
+**Two wrong calls on the way there, both from the same bad habit.** Reading
+`color_input` through a filtered `sed` range twice, and twice concluding a
+selector table was incomplete — first that RASC was missing, then that the
+texture selectors were. Both times the filter had truncated the function and
+both times the table was complete. **A range-filtered read of source is not a
+read of source**, and "I found the bug" after one is worth nothing until the
+whole function is on screen.
+
+**Where the boot actually stops.** 81.6% of samples are in three addresses in
+the engine overlay — `0x7F0F9400` (54.5%), `0x7F0F9268` (13.6%),
+`0x7F0F9424` (13.5%) — all inside one function at REL `.text 0xF0F2C`
+(runtime `0x7F0F9018`, size 0x4A4). It is a counting/bucketing pass followed
+by nested loops: real computation, not a wait. The running thread is priority
+14 and its chain out is
+
+```
+0x8004A46C (main.dol)  ->  REL 0x130E68  ->  0x130C48
+  ->  0xF0CEC  ->  0xEF6C0  ->  0xF14E0  ->  the loop at 0xF0F2C
+```
+
+so it is reached from the engine's per-frame task dispatch. No arrivals were
+recorded at the function's entry across 40,000,000 steps, which — with the
+known caveat that pc hooks miss calls inside one dispatch — points at
+**entered once and never returned**.
+
+That is the third wall, and it is an engine loop whose bound is presumably
+computed from something our runtime is getting wrong. It is a different kind
+of problem from the two interrupt faults and wants a different approach:
+find what feeds the loop's bound, not what feeds the interrupt.
 
 ---
 
