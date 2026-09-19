@@ -44,6 +44,11 @@ typedef struct MgsGxRaster {
     unsigned trace_limit;         /* how many triangles to explain */
     int      no_scissor;          /* MGS_NO_SCISSOR: ignore the scissor box */
     int      no_depth;            /* MGS_NO_DEPTH: force every pixel through */
+    int      blend_enable, blend_sub;   /* BP 0x41 CMODE0, per draw */
+    int      color_update, alpha_update;
+    unsigned blend_src, blend_dst;
+    uint64_t blended, write_masked;
+    uint32_t cmode_key[16]; uint64_t cmode_hit[16]; unsigned cmode_n;
     uint64_t black_over_lit;       /* black pixels drawn over lit ones */
     uint64_t black_over_lit_x[20]; /* ...by column, 32px buckets */
 

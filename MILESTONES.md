@@ -643,9 +643,22 @@ This is the project. ~200 functions and the widest error bars in the plan.
       majority uses exactly two combiner configurations — one that says "take
       the vertex colour" (white, 348,160 small triangles, and these are the
       lit pixels) and one that says "output zero" (165,888 large ones). Both
-      compute correctly by hand against the implementation. A black screen
+      compute correctly by hand against the implementation. **Corrected by
+      F152:** the first configuration is `0x08FACF` = `a=ZERO b=RASC c=ONE
+      d=ZERO`, which computes `RASC` — the vertex colour, and that colour is
+      `0xFFFFFFFF`. Most untextured draws emit *white*, not black; only the
+      165,888 at `0x08FFFF` are black. A black screen
       with a logo banner is a boot screen, not a broken renderer.
-- [ ] **Indirect textures, lighting, fog and blending** — configured by
+- [x] **Blending and the colour/alpha update masks** (F152). `BP_BLEND_MODE`
+      (0x41, CMODE0) was defined and read nowhere, like `BP_ZMODE` before it.
+      Now honoured per draw at the pixel write, with the blend factors taking
+      which operand they are computing (ids 2 and 3 name the *other* side, so
+      `GX_BL_SRCCLR` and `GX_BL_DSTCLR` are one number read two ways).
+      562,689,130 of 574,258,282 pixels take the path. It does **not** fix the
+      truncated text: the best frame is byte-identical, because blending is
+      disabled on 99.6% of draws and the enabled ones are ONE/ZERO or plain
+      src-alpha.
+- [ ] **Indirect textures, lighting and fog** — configured by
       registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently
       dropped whole rather than split.

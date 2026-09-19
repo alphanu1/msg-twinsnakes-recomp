@@ -1234,6 +1234,39 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->pixels_lit,
                                    (unsigned long long)rs->textured,
                                    (unsigned long long)rs->alpha_killed);
+                            {
+                                /* The alpha test kills nothing. Either the
+                                 * game never arms it, or it arms it and every
+                                 * fragment passes - and a register that reads
+                                 * zero because nobody wrote it looks exactly
+                                 * like one deliberately cleared. */
+                                const MgsGxBp* b2 = &mgs_display_gx()->bp;
+                                uint32_t ac = mgs_bp_get(b2, BP_ALPHA_COMPARE);
+                                printf("  ALPHA_COMPARE 0x%06X (written %d)"
+                                       "  ref0=%u op0=%u ref1=%u op1=%u logic=%u\n",
+                                       ac, b2->written[BP_ALPHA_COMPARE],
+                                       ac & 0xFFu, (ac >> 16) & 7u,
+                                       (ac >> 8) & 0xFFu, (ac >> 19) & 7u,
+                                       (ac >> 22) & 3u);
+                            }
+                            {
+                                unsigned i;
+                                printf("  CMODE0 values in use (%u distinct):\n",
+                                       rs->cmode_n);
+                                for (i = 0; i < rs->cmode_n; ++i) {
+                                    uint32_t c = rs->cmode_key[i];
+                                    printf("    0x%06X  en=%u colupd=%u alpupd=%u "
+                                           "src=%u dst=%u sub=%u  x%llu\n",
+                                           c, c & 1u, (c >> 3) & 1u, (c >> 4) & 1u,
+                                           (c >> 8) & 7u, (c >> 5) & 7u,
+                                           (c >> 11) & 1u,
+                                           (unsigned long long)rs->cmode_hit[i]);
+                                }
+                            }
+                            printf("  blend: %llu pixels blended, "
+                                   "%llu writes masked off entirely\n",
+                                   (unsigned long long)rs->blended,
+                                   (unsigned long long)rs->write_masked);
                             printf("  coverage: %llu pixels inside a triangle, "
                                    "%llu rejected by the depth test (%.1f%%)\n",
                                    (unsigned long long)rs->covered,

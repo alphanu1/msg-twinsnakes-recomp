@@ -297,6 +297,17 @@ renderer.
   damning and is not: every triangle runs one TEV stage, none wants a texture
   on a later stage, and all 778 binds succeed. The game draws the rest
   untextured on purpose. The fault is in the combiner's untextured path.
+- **"The black geometry must be a blend / a masked pass / alpha-tested"
+  (F152).** All three are excluded by measurement. Blending is *off* for
+  99.6% of draws; `write_masked` is 0, so colour writes are never disabled;
+  and the game sets `ALPHA_COMPARE = 0x3F0000` (op0 = op1 = ALWAYS), so it
+  disables the alpha test on purpose. Those draws are opaque black by
+  intent and would be on console too.
+- **Answering "put it behind the UI" with the depth buffer (F152).** The
+  game runs these draws with depth off: **0 pixels of 574,258,282** are
+  rejected by the depth test in a whole boot. Honouring ZMODE was correct
+  and changed the frame by nothing. Submission order alone decides what is
+  in front here.
 - **A "diagnostic" that changes pixels (F150).** Suppressing black writes to
   see if the text reappeared took the boot from 2,476,033 GX commands to
   7,235. Altering the EFB alters what copies write into guest memory, and the
@@ -5329,6 +5340,78 @@ not be black. Either they are meant to sample something (and the TEV stage
 that would supply it is not reaching the combiner), or their configuration is
 being read from stale BP state. That is where to look next, and it is a
 different question from "what is in front of what".
+
+
+### F152 — blending was not implemented; it is now, and it is not the bug either
+
+`BP_BLEND_MODE` (0x41, CMODE0) was defined in `bp.h` and read nowhere, exactly
+like `BP_ZMODE` in F151. It carries two separate things, and both were being
+ignored:
+
+- **blending** — a translucent layer written opaque becomes solid paint;
+- **colour update (bit 3)** — a pass that writes only depth or only alpha has
+  its colour write masked off in hardware, so ignoring the bit turns an
+  invisible pass into geometry that covers what is under it.
+
+Both are implemented now, per draw, at the pixel write. The blend factor ids
+are named relative to the *other* operand (2 is "the other operand's colour",
+so `GX_BL_SRCCLR` and `GX_BL_DSTCLR` are the same number read from opposite
+sides), so `blend_factor()` takes which side it is computing.
+
+**It did not fix the text, and the measurements say why.** The best frame is
+*byte-identical* to the pre-blend one (md5 `d964c217…`), and the run reports:
+
+| | |
+|---|---|
+| pixels blended | 562,689,130 of 574,258,282 |
+| writes masked off entirely | **0** |
+
+The five CMODE0 values the whole boot uses:
+
+| value | blend | colupd | alpupd | src | dst | draws |
+|---|---|---|---|---|---|---|
+| 0x0004BC | **off** | 1 | 1 | 4 | 5 | **3,856,384** |
+| 0x0004A9 | on | 1 | 0 | 4 | 5 | 6,706 |
+| 0x00011D | on | 1 | 1 | 1 (ONE) | 0 (ZERO) | 5,568 |
+| 0x0004AD | on | 1 | 0 | 4 | 5 | 4,940 |
+| 0x00040D | on | 1 | 0 | 4 | 0 | 108 |
+
+**Three hypotheses die here, by measurement:**
+
+1. **"The black geometry is a translucent overlay painted opaque."** Wrong.
+   Blending is *off* for 99.6% of draws, the black ones among them. They would
+   paint solid black on real hardware too.
+2. **"They are a depth-only or alpha-only pass whose colour write we ignore."**
+   Wrong. `write_masked` is 0 — colour updates are never disabled.
+3. **"The alpha test would discard them and we do not implement it."** Wrong
+   twice over: it *is* implemented (`mgs_tev_alpha_test`), and the game sets
+   `ALPHA_COMPARE = 0x3F0000` — op0 = op1 = 7 = ALWAYS. The game deliberately
+   disables the alpha test. **0 alpha-killed is correct behaviour, not a gap.**
+
+Two corrections to the record while here:
+
+- The 165,888 black draws are `a=b=c=d=15`, and **15 is `GX_CC_ZERO`**, so
+  "a=b=c=d=ZERO" was right about the meaning. But the *other* 3,690,496
+  untextured draws are `0x08FACF` = `a=ZERO b=RASC c=ONE d=ZERO`, which
+  computes `RASC` — **vertex colour, and the vertex colour is 0xFFFFFFFF**.
+  Most untextured draws emit white, not black. Earlier notes implying the
+  untextured path emits black in general are wrong.
+- F151's depth fix is correct but **inert**: this run rejects **0 pixels of
+  574,258,282** on the depth test. The game runs these draws with depth off,
+  which is why the frame was byte-identical. Submission order alone decides
+  what is in front, so "get them behind the UI layer" cannot be answered with
+  ZMODE on this screen.
+
+**Still unexplained, and now with more excluded:** the text truncates at EFB
+x=207–209. Ruled out by measurement so far — scissor, depth buffer,
+display-list size, texture refusals, viewport, geometry extent, RTT output,
+texture content, texture coordinates, SU size registers, depth ordering,
+blending, the colour/alpha update masks, and the alpha test.
+
+**The strongest remaining signal is texture coverage: 17,320 of 3,873,704
+triangles sample a texture.** All 17,320 binds succeed. For a screen whose
+content is text, that is very low, and it is the next thing to measure — not
+another raster register.
 
 ---
 

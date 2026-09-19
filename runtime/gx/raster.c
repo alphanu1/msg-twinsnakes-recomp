@@ -15,6 +15,8 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->depth_test = 1;
     r->depth_update = 1;
     r->depth_func = 3;            /* less-or-equal, the usual default */
+    r->color_update = 1;          /* power-on: writes enabled, no blend */
+    r->alpha_update = 1;
     /* MGS_TRACE_RASTER=N explains the first N triangles; bare =1 keeps the
      * old behaviour of eight. Configurable because the interesting geometry
      * is no longer the first thing drawn: the boot logo's handful of
@@ -321,6 +323,31 @@ static int depth_passes(const MgsGxRaster* r, float z, float was)
     }
 }
 
+/* One channel of a GX blend factor.
+ *
+ * The factor ids are shared between the two operands and NAMED relative to
+ * the other one: 2 is "the other operand's colour" and 3 is one minus it, so
+ * GX_BL_SRCCLR and GX_BL_DSTCLR are the same number read from opposite sides.
+ * Passing which side is being computed is what keeps that straight.
+ *
+ * Values are 0-255 and the caller divides by 255 after multiplying, so a
+ * factor of ONE really is one rather than 255/256.
+ */
+static int blend_factor(unsigned id, int src, int dst, int src_a, int dst_a,
+                        int for_src)
+{
+    switch (id) {
+        case 0: return 0;                              /* ZERO */
+        case 1: return 255;                            /* ONE */
+        case 2: return for_src ? dst : src;            /* the other colour */
+        case 3: return 255 - (for_src ? dst : src);    /* one minus it */
+        case 4: return src_a;                          /* SRCALPHA */
+        case 5: return 255 - src_a;                    /* INVSRCALPHA */
+        case 6: return dst_a;                          /* DSTALPHA */
+        default: return 255 - dst_a;                   /* INVDSTALPHA */
+    }
+}
+
 /* A tiny fixed histogram: keep the first 16 distinct values and count them.
  *
  * Sixteen is enough because the interesting answer is "one value, used half a
@@ -379,6 +406,35 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         r->depth_test   = (int)(zm & 1u);
         r->depth_func   = (unsigned)((zm >> 1) & 7u);
         r->depth_update = (int)((zm >> 4) & 1u);
+    }
+
+    /* THE GAME'S BLEND STATE, per draw.
+     *
+     * BP 0x41 is CMODE0. It was defined and never read, which meant two
+     * different things were being ignored:
+     *
+     *   - BLENDING. A translucent layer drawn over the scene was written
+     *     opaque instead, so a darkening overlay became solid paint.
+     *   - COLOUR UPDATE (bit 3). A pass that writes only depth or only alpha
+     *     has its colour write MASKED OFF in hardware; ignoring the bit turns
+     *     it into visible geometry that covers whatever was underneath.
+     *
+     * Either explains black where black does not belong, and this game draws
+     * 165,888 triangles a run whose combiner is configured to output literal
+     * zero (HANDOFF F130). On real hardware those are a mask or a blend; here
+     * they were paint.
+     *
+     * Before the game writes the register, colour and alpha updates default
+     * to enabled and blending to off, which is the power-on state. */
+    if (mgs_bp_is_set(&gx->bp, BP_BLEND_MODE)) {
+        uint32_t cm = mgs_bp_get(&gx->bp, BP_BLEND_MODE);
+        r->blend_enable = (int)(cm & 1u);
+        r->color_update = (int)((cm >> 3) & 1u);
+        r->alpha_update = (int)((cm >> 4) & 1u);
+        r->blend_dst    = (unsigned)((cm >> 5) & 7u);
+        r->blend_src    = (unsigned)((cm >> 8) & 7u);
+        r->blend_sub    = (int)((cm >> 11) & 1u);
+        note_value(r->cmode_key, r->cmode_hit, &r->cmode_n, cm);
     }
 
     /* WHERE 2D GEOMETRY REACHES, textured and untextured separately.
@@ -751,7 +807,43 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                     ++r->black_over_lit;
                     if (bx < 20u) ++r->black_over_lit_x[bx];
                 }
-                r->efb->pixels[at] = pixel;
+
+                /* Blend and mask, in the hardware's order: the combiner's
+                 * result is the source, the framebuffer is the destination,
+                 * and the update bits decide which channels survive. */
+                {
+                    uint32_t dstp = r->efb->pixels[at];
+                    uint32_t out = pixel;
+
+                    if (r->blend_enable) {
+                        int sa = (int)((pixel >> 24) & 0xFFu);
+                        int da = (int)((dstp  >> 24) & 0xFFu);
+                        unsigned ch;
+                        out = pixel & 0xFF000000u;
+                        for (ch = 0; ch < 3u; ++ch) {
+                            unsigned sh = ch * 8u;
+                            int sc = (int)((pixel >> sh) & 0xFFu);
+                            int dc = (int)((dstp  >> sh) & 0xFFu);
+                            int sf = blend_factor(r->blend_src, sc, dc, sa, da, 1);
+                            int df = blend_factor(r->blend_dst, sc, dc, sa, da, 0);
+                            int v = r->blend_sub
+                                  ? (dc * df - sc * sf) / 255
+                                  : (sc * sf + dc * df) / 255;
+                            if (v < 0) v = 0;
+                            if (v > 255) v = 255;
+                            out |= (uint32_t)v << sh;
+                        }
+                        ++r->blended;
+                    }
+
+                    if (!r->color_update) out = (out & 0xFF000000u)
+                                              | (dstp & 0x00FFFFFFu);
+                    if (!r->alpha_update) out = (out & 0x00FFFFFFu)
+                                              | (dstp & 0xFF000000u);
+                    if (!r->color_update && !r->alpha_update) ++r->write_masked;
+
+                    r->efb->pixels[at] = out;
+                }
             }
 
             if (r->depth_update) r->depth[at] = z;
