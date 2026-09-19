@@ -312,6 +312,9 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
       searching for a name. Before this, `DVDReadAsyncPrio` was called
       16,907,347 times in one run with **one** read completed, because the
       engine retries a refused read for ever rather than failing.
+- [x] **Watching a run that takes minutes** (F89) — `MGS_HEARTBEAT` reporting
+      the game's own progress rather than host steps, Ctrl-C ending a run with
+      its report intact, and allocator tracing with file and line.
 - [ ] **Virtual two-disc mount** — mount both images at startup; when the game
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
       the SDK's expected timing.

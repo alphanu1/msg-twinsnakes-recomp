@@ -118,6 +118,13 @@ static void trace_setarenalo(void* cpu, const uint32_t* gpr)
     fprintf(stderr, "\n");
 }
 
+/* What the heartbeat reports: 0 = framebuffer copies, 1 = disc reads. */
+static uint64_t progress_counter(unsigned which)
+{
+    const MgsEfb* e = mgs_display_efb();
+    return which == 0u ? e->copies : mgs_dvd_completed();
+}
+
 static void frame_pump(void)
 {
     if (!s_display_windowed) return;
@@ -126,6 +133,7 @@ static void frame_pump(void)
 }
 
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -253,6 +261,12 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 }
 
 static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
+
+static void on_interrupt(int sig)
+{
+    (void)sig;
+    mgs_module_interrupted = 1;
+}
 
 static void usage(const char* argv0)
 {
@@ -444,6 +458,7 @@ int main(int argc, char** argv)
                     s_display_windowed = !headless;
                     mgs_module_set_display(display_pump);
                     mgs_module_set_frame(frame_pump);
+                    mgs_module_set_progress(progress_counter);
                     }
 
                     /* Tell the interrupt layer where the guest's own
@@ -496,6 +511,8 @@ int main(int argc, char** argv)
                             const char* env = getenv("MGS_STEPS");
                             if (env) limit = strtoull(env, NULL, 0);
                         }
+                        signal(SIGINT, on_interrupt);
+                        signal(SIGTERM, on_interrupt);
                         MgsRunResult r = mgs_module_run(&mod, cpu, limit);
                         static const char* why[] = {
                             "no code for that address",
@@ -570,9 +587,11 @@ int main(int argc, char** argv)
                         printf("GX draw-done tokens: %llu  PE finish delivered: %llu\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),
                                (unsigned long long)mgs_interrupt_pe_sent());
-                        printf("DVD reads completed: %llu  callbacks run: %llu\n",
+                        printf("DVD reads completed: %llu  callbacks run: %llu"
+                               "  deferred (guest had interrupts off): %llu\n",
                                (unsigned long long)mgs_dvd_completed(),
-                               (unsigned long long)mgs_dvd_callbacks());
+                               (unsigned long long)mgs_dvd_callbacks(),
+                               (unsigned long long)mgs_dvd_deferred());
                         {
                             /* MGS_SAVE_FRAME=<path> writes the last frame the
                              * game presented, so a headless run can be looked

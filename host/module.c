@@ -17,6 +17,7 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 
 /* Mirrors ModernGekkoModuleDesc. Declared here rather than included so the
@@ -617,6 +618,15 @@ static int service_vector(void* cpu, uint32_t pc,
     return 0;
 }
 
+/* Set by a signal handler, read by the run loop.
+ *
+ * A long run's numbers are printed when it finishes, which is no use when the
+ * interesting question is "what is it doing right now" and the answer takes
+ * ten minutes to arrive. Ctrl-C now ends the run the same way the step limit
+ * does, so the report still happens. `volatile sig_atomic_t` because that is
+ * the only thing a handler may portably touch. */
+volatile sig_atomic_t mgs_module_interrupted;
+
 static MgsPump s_pump;
 static void*   s_pump_user;
 
@@ -625,6 +635,13 @@ static void*   s_pump_user;
 static void (*s_display)(void);
 
 static void (*s_frame)(void);
+
+/* Whatever the host wants the heartbeat to report. Kept as a callback so
+ * this file needs no GX or DVD header. */
+static uint64_t (*s_progress)(unsigned which);
+
+void mgs_module_set_progress(uint64_t (*fn)(unsigned which));
+void mgs_module_set_progress(uint64_t (*fn)(unsigned which)) { s_progress = fn; }
 
 /* Addresses the host wants to observe the guest reaching, and what it saw.
  *
@@ -738,6 +755,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     uint64_t trace_steps = 0u;
     uint64_t trace_from = 0u;
     uint64_t trace_every = 0u;
+    uint64_t heartbeat = 0u;
 
     /* MGS_TRACE_STEPS=N prints the first N guest pcs. A stop address alone
      * says where execution ended, not how it got there, and for a boot the
@@ -752,6 +770,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * without producing 40 million lines. */
         env = getenv("MGS_TRACE_EVERY");
         trace_every = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
+        env = getenv("MGS_HEARTBEAT");
+        heartbeat = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
     }
 
     /* A ring of recent addresses. A stop address says where execution ended;
@@ -762,7 +782,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     unsigned recent_n = 0u;
 
     memset(&r, 0, sizeof r);
-    for (r.steps = 0; r.steps < max_steps; ++r.steps) {
+    for (r.steps = 0; r.steps < max_steps && !mgs_module_interrupted; ++r.steps) {
         uint32_t pc;
 
         /* Guest time advances with the run loop. The Gekko timebase is
@@ -843,6 +863,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 
         recent[recent_n % RECENT] = pc;
         ++recent_n;
+
+        /* MGS_HEARTBEAT=N prints progress every N steps. A run that stops
+         * producing output is either stuck in the guest or stuck in the
+         * host, and those want completely different investigations; this is
+         * the cheapest thing that tells them apart. */
+        if (heartbeat && (r.steps % heartbeat) == 0ull) {
+            /* Steps alone say the host is alive, which is rarely the
+             * question. What matters is whether the GAME is getting
+             * anywhere, so the counters that move when it does are here
+             * too - frames copied out, and files read. */
+            fprintf(stderr, "[beat] step %9llu  pc 0x%08X  frames %llu  "
+                            "reads %llu\n",
+                    (unsigned long long)r.steps, pc,
+                    (unsigned long long)(s_progress ? s_progress(0) : 0),
+                    (unsigned long long)(s_progress ? s_progress(1) : 0));
+        }
 
         if (trace_every ? ((r.steps % trace_every) < trace_steps)
                         : (r.steps >= trace_from && r.steps < trace_from + trace_steps))

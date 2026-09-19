@@ -2654,5 +2654,38 @@ the SDK does, rather than silently returning a short one.
 **The pattern in both of these:** a lookup that answers "not found" is
 indistinguishable, from the outside, from a game that has nothing to load.
 
+**F89 — how to watch a run that takes minutes, and two mistakes from not
+being able to.**
+The port now runs at roughly real-time - about 120,000 host steps a second,
+and a step is a VI tick every 2,000 - so a run long enough to be interesting
+takes minutes, and its report only prints at the end. Two wrong conclusions
+came straight out of that:
+
+- **"It is stuck after `dummy.tpl`."** It was not. It was running, slowly, and
+  a log that had not grown in four minutes looked identical to a hang.
+- **"120 deferred DVD completions is a bug."** They are transient: the guest
+  has interrupts off, the pump declines, and the read is delivered on a later
+  pass. The read it was waiting on completed.
+
+There was also an hour of measurements taken against a machine running five
+stale copies of the port at once, which made everything look far slower than
+it was. **Kill the previous run before starting another**; `pkill -x` did not
+reliably do it, killing by PID did.
+
+Three things added so that this does not recur:
+
+- **`MGS_HEARTBEAT=N`** prints progress every N steps - and prints what the
+  GAME has achieved (framebuffer copies, files read), not just the host's
+  step count, which only ever says the host is alive.
+- **Ctrl-C ends a run cleanly** rather than killing it, so the report still
+  prints. `SIGINT`/`SIGTERM` set a `volatile sig_atomic_t` the loop checks.
+- **`MGS_TRACE_ALLOC`** logs the game's tracking allocator and its matching
+  free with the source file and line each was called from.
+
+**Choose the heartbeat interval so it does not alias with the frame tick.**
+At 1,000,000 every beat landed on the VI interrupt, because the interrupt
+fires every 2,000 steps and 1,000,000 is a multiple of it - so every sample
+reported the same pc and looked like a hang in `__OSDispatchInterrupt`.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -1,6 +1,7 @@
 #ifndef MGS_HOST_MODULE_H
 #define MGS_HOST_MODULE_H
 
+#include <signal.h>
 #include <stdint.h>
 
 typedef struct MgsModule {
@@ -55,12 +56,16 @@ struct GuestMemory;
 void mgs_display_init(struct GuestMemory* mem);
 void mgs_module_set_display(void (*fn)(void));
 void mgs_module_set_frame(void (*fn)(void));
+void mgs_module_set_progress(uint64_t (*fn)(unsigned which));
 
 /* Observe a guest call's arguments without replacing the call. */
 void mgs_module_watch(uint32_t address);
 int  mgs_module_watch_result(uint32_t* r3, uint32_t* r4);
 void mgs_module_guest_write32(void* cpu, uint32_t addr, uint32_t v);
 void mgs_module_set_vmem(uint8_t* vmem);
+
+/* Ctrl-C ends the run cleanly, so its report is still printed. */
+extern volatile sig_atomic_t mgs_module_interrupted;
 void mgs_module_on_linked(void (*fn)(void* cpu, uint32_t module));
 void mgs_module_trace_calls(uint32_t address,
                             void (*fn)(void* cpu, const uint32_t* gpr));
@@ -75,6 +80,7 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module);
 void mgs_display_service(struct MgsMmio* mmio, struct GuestMemory* mem, unsigned height);
 int  mgs_display_present(struct MgsMmio* mmio, const struct GuestMemory* mem);
 uint64_t mgs_display_frames(void);
+uint64_t mgs_dvd_deferred(void);
 int  mgs_display_take_draw_done(void);
 void mgs_display_put_draw_done(void);
 int  mgs_display_save_ppm(const char* path, const struct GuestMemory* mem);
