@@ -550,11 +550,12 @@ This is the project. ~200 functions and the widest error bars in the plan.
       nothing could clear it. The line now mirrors the device, as VI's always
       has. **`PI cause 0x40` stuck to `0x00000000`, 871,157 re-offers to
       1,122, 55 disc reads to 64**, determinism intact.
-- [ ] **The third livelock, located** (F130). An engine loop at REL `.text
-      0xF0F2C`, holding 81.6% of samples, reached from the per-frame task
-      dispatch and apparently never returning. Not an interrupt, not the
-      renderer — a loop whose bound comes from something the runtime feeds it
-      wrongly. This is now the whole blocker.
+- [ ] **The third livelock: work repeated, not stuck** (F130, F131). The hot
+      routine at REL `.text 0xF0F2C` is a healthy 16-iteration bucket sort,
+      called very often — its registers read `stride 4, bound 64`. Not a
+      hang. But 200,000,000 steps give the same output as 40,000,000, so the
+      engine is redoing per-frame work without advancing. Compare engine
+      state between two stopping points rather than profiling again.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

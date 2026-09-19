@@ -543,6 +543,33 @@ static void trace_sem_signal(void* cpu, const uint32_t* gpr)
             mgs_module_lr(cpu));
 }
 
+/* The engine loop the boot stops in (HANDOFF F130), at REL .text 0xF1314.
+ *
+ * Its body advances by r21 and compares against r30:
+ *     r19 += r21;  while (r19 < r30) ...
+ * and r21 is `1 << (r26 - r24)`. On PowerPC a shift count of 32 or more
+ * yields ZERO, and a zero stride here never terminates - so the values of
+ * r19, r21 and r30 say directly whether this is an infinite loop or merely a
+ * long one, which is the whole question.
+ *
+ * Printed once. An infinite loop offers the same answer every time, and a
+ * trace that repeats it a million times buries it. */
+static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
+{
+    static int said;
+    if (said) return;
+    said = 1;
+    (void)cpu;
+    fprintf(stderr,
+            "[loop] at REL 0xF1314:  r19=0x%08X (index)  r21=0x%08X (stride)"
+            "  r30=0x%08X (bound)  r25=0x%08X (base)\n"
+            "[loop] r24=0x%08X  r26=0x%08X  r11=0x%08X  r12=0x%08X%s\n",
+            gpr[19], gpr[21], gpr[30], gpr[25],
+            gpr[24], gpr[26], gpr[11], gpr[12],
+            gpr[21] == 0u ? "   <-- STRIDE IS ZERO: this loop cannot end"
+                          : "");
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -786,6 +813,8 @@ int main(int argc, char** argv)
                             mgs_module_trace_calls(0x80023E3Cu, trace_sleep);
                             mgs_module_trace_calls2(0x80023F28u, trace_wakeup);
                         }
+                        if (getenv("MGS_TRACE_LOOP"))
+                            mgs_module_trace_calls3(0x7F0F9400u, trace_stuck_loop);
                         if (getenv("MGS_TRACE_THREADS")) {
                             mgs_module_trace_calls3(0x80023CCCu, trace_suspend);
                             mgs_module_trace_calls4(0x80023A44u, trace_resume);

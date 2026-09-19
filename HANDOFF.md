@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F130**. The two worth reading first are
+Findings from this session are **F90-F131**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,13 +166,15 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The third wall, located: an engine loop at REL `.text 0xF0F2C` (F130).**
-   81.6% of samples sit in three addresses inside it, it is reached from the
-   per-frame task dispatch via `0x8004A46C`, and nothing suggests it ever
-   returns. It is a counting/bucketing pass then nested loops — real
-   computation whose bound is presumably derived from something the runtime
-   is feeding it wrongly. Find what sets that bound. This is the whole
-   blocker: the renderer, the interrupts and the disc are all behaving.
+1. **The third wall: the engine repeats per-frame work without advancing
+   (F130, corrected by F131).** The hot routine at REL `.text 0xF0F2C` is a
+   healthy 16-iteration bucket sort called very often — not a hang. But
+   200,000,000 steps give the same 177,806 GX commands and 223 completions as
+   40,000,000, so the work is being redone rather than progressing.
+   **Compare engine state between two stopping points** — task table, frame
+   ring indices, heap free lists — instead of profiling again. A profile
+   cannot tell progress from repetition, which is what cost this thread three
+   wrong conclusions.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
@@ -238,6 +240,12 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **Reading a conclusion out of an instrument's silence (F131).** pc hooks
+  only see pc at dispatch boundaries and miss calls inside one chunk. Zero
+  arrivals is not evidence of "never called"; it is evidence of nothing.
+- **Judging source by a filtered range (F130).** Two "found the bug" calls in
+  one session came from `sed`/`grep` ranges that had truncated a function.
+  Read to the closing brace before concluding anything about a switch table.
 - **"The texture path is broken" (F129).** 778 textured out of 514,826 looks
   damning and is not: every triangle runs one TEV stage, none wants a texture
   on a later stage, and all 778 binds succeed. The game draws the rest
@@ -4242,6 +4250,52 @@ That is the third wall, and it is an engine loop whose bound is presumably
 computed from something our runtime is getting wrong. It is a different kind
 of problem from the two interrupt faults and wants a different approach:
 find what feeds the loop's bound, not what feeds the interrupt.
+
+---
+
+**F131 — the loop at REL 0xF0F2C is healthy, and F130's reading of it was
+wrong.** F130 called it "entered once and never returned", on two pieces of
+evidence: 81.6% of samples inside it, and zero arrivals recorded at its entry.
+Both were consistent with a hang and neither established one.
+
+Reading the registers at the inner loop settles it:
+
+```
+[loop] at REL 0xF1314:  r19=0x00000000 (index)  r21=0x00000004 (stride)
+                        r30=0x00000040 (bound)  r25=0x816F2830 (base)
+[loop] r24=0 r26=2 r11=6 r12=0
+```
+
+Stride 4, bound 64, starting at 0 — **sixteen iterations and out.** The
+`slw`-yields-zero theory was worth testing (a zero stride there really would
+never end, and DolRecomp's `slw`/`srw` do mask to 6 bits and return zero above
+31, exactly like the hardware) but it is not what is happening.
+
+So the function is short, correct, and called an enormous number of times. The
+zero arrivals at its entry were the **known pc-hook limitation** — hooks only
+see pc at dispatch boundaries and miss calls made inside one chunk. That
+caveat is recorded in this file and I used the silence as evidence anyway.
+
+**What this leaves, and it is a sharper question than before.** The engine is
+executing real per-frame work, continuously, in a hot bucket-sort kernel — and
+producing no new output: 200,000,000 steps give the same 177,806 GX commands
+and same 223 frame completions as 40,000,000. So the engine is **repeating
+work without advancing state**. The livelock is at the level of what the task
+dispatch is being asked to do, not inside any one routine.
+
+Next: compare engine state between two stopping points — the task table, the
+frame ring indices, the heap free lists — rather than profiling again. A
+profile says where the time goes; it cannot distinguish progress from
+repetition, and this whole thread has been that mistake in three different
+costumes.
+
+**Method note, since this is the third in one session.** F125 logged two
+instrument errors, F130 logged two truncated-source reads, and this is a third
+class: **treating the absence of a signal from an instrument with a documented
+blind spot as evidence.** All three share a shape — a conclusion drawn from
+something the measurement could not have shown. The fix is not more care; it
+is asking "what would this look like if I were wrong" before writing the
+finding down.
 
 ---
 
