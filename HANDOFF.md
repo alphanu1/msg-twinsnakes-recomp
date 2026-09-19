@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F150**. The two worth reading first are
+Findings from this session are **F90-F151**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -182,14 +182,15 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Clear the depth buffer every frame, not only on clearing copies (F150).**
-   9,422,255 black pixels are drawn over lit ones, peaking at x=192-287 where
-   the text stops, and the depth buffer is reset only 56 times in 3,740
-   copies — so after the first 59 frames, depth ordering is decided by
-   leftovers. That is how 3D ends up over a UI drawn after it. Test by
-   resetting depth on every copy and checking whether the text completes.
-   Note `MGS_NO_DEPTH` does NOT test this: forcing everything through makes
-   overdraw worse.
+3. **Why is 165,888 triangles' worth of geometry BLACK? (F151).** They are
+   configured `a=b=c=d=ZERO` in the combiner, which computes exactly that, and
+   on a menu screen they should not be. Either a TEV stage that should supply
+   colour is not reaching the combiner, or the configuration is read from
+   stale BP state. Depth ordering is now excluded: honouring ZMODE changed the
+   run substantially and left this screen byte-identical.
+4. ~~Clear the depth buffer every frame~~ — **superseded (F151).** ZMODE is
+   now honoured per draw, which is the principled version of that idea, and
+   the screen did not change.
 4. **Count text quads that bind NO texture (F147).** The 2D pass draws ~13.7
    triangles a frame (~7 quads) but only three text-strip textures are ever
    sampled successfully. A quad that binds nothing draws untextured and
@@ -5292,6 +5293,42 @@ EFB alters what the copies write into guest memory, and the guest reads guest
 memory — so the feedback path exists and the "diagnostic" was steering the
 thing it measured. A diagnostic that changes pixels is not a diagnostic. The
 counter that replaced it only observes.
+
+---
+
+**F151 — ZMODE was defined and never read; the game's depth state was ignored
+for every triangle in the game.** `BP_ZMODE` (0x40) carries the depth test
+enable, the comparison function and the depth-write enable. It existed in
+`bp.h` and **nothing read it**: `mgs_raster_init` set "test on, less-or-equal,
+write on" once and the rasteriser used that for all 3,873,706 triangles.
+
+Disabling the depth test is the normal way to put a layer on top, so ignoring
+the register means that request never arrives. Honouring it per draw:
+
+| | before | after |
+|---|---|---|
+| pixels written | 348,188,074 | **574,258,282** |
+| lit pixels | 19,526,875 | **30,598,363** |
+| black over lit | 9,422,255 | 25,507,953 |
+
+The black-over-lit rise is **correct, not a regression**: draws that ask for
+no depth test now pass, as the game intended. Two runs byte-identical, 13/13
+tests, 0 desyncs.
+
+**And it does not fix the truncated text.** The memory-card screen is
+byte-identical after the change — 10,393 lit pixels, same rightmost-x
+histogram — and the best frame is unchanged at 26,570. So the text bug is not
+depth ordering either, and the suggestion that a black layer sits over the
+text remains open with F150's 9.4 million black-over-lit writes unexplained by
+this.
+
+**The live thread is now the black geometry itself.** F130 found 165,888
+triangles configured `a=b=c=d=ZERO` — the combiner asked for literal black —
+and verified the combiner computes exactly that. On a menu screen those should
+not be black. Either they are meant to sample something (and the TEV stage
+that would supply it is not reaching the combiner), or their configuration is
+being read from stale BP state. That is where to look next, and it is a
+different question from "what is in front of what".
 
 ---
 

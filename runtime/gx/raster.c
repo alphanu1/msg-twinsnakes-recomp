@@ -353,6 +353,34 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (!r || !r->efb) return;
     ++r->submitted;
 
+    /* THE GAME'S OWN DEPTH STATE, per draw.
+     *
+     * BP 0x40 is ZMODE: bit 0 enables the depth test, bits 1-3 choose the
+     * comparison, bit 4 enables depth writes. It was defined and never read -
+     * the rasteriser set "test on, less-or-equal, write on" once at init and
+     * used that for every triangle in the game.
+     *
+     * That is how a UI layer ends up UNDERNEATH the scene it was drawn after.
+     * Disabling the depth test is the normal way to put something on top, and
+     * ignoring the register means the request never arrives: the overlay is
+     * compared against whatever depths happen to be in the buffer and loses.
+     * With the buffer only cleared 56 times in 3,740 copies (F127), those
+     * depths are from a frame long gone, which is why 9,422,255 black pixels
+     * end up drawn over lit ones (F150).
+     *
+     * The function encoding matches `depth_passes` as written: 0 never,
+     * 1 less, 2 equal, 3 less-or-equal, 4 greater, 5 not-equal, 6
+     * greater-or-equal, 7 always.
+     *
+     * Before the game writes the register the defaults from mgs_raster_init
+     * stand, which is the power-on state rather than a guess. */
+    if (mgs_bp_is_set(&gx->bp, BP_ZMODE)) {
+        uint32_t zm = mgs_bp_get(&gx->bp, BP_ZMODE);
+        r->depth_test   = (int)(zm & 1u);
+        r->depth_func   = (unsigned)((zm >> 1) & 7u);
+        r->depth_update = (int)((zm >> 4) & 1u);
+    }
+
     /* WHERE 2D GEOMETRY REACHES, textured and untextured separately.
      *
      * A first version of this counted only TEXTURED triangles and found none
