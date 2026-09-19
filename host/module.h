@@ -154,6 +154,9 @@ int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu);
 /* Report a submitted DSP task as started and then finished, which is what
  * the boot is waiting for. See host/interrupt.c - it is the handshake, not a
  * coprocessor, and produces no sound. */
+int      mgs_interrupt_aram(const MgsModule* mod, void* cpu);
+uint64_t mgs_interrupt_aram_raised(void);
+uint64_t mgs_interrupt_aram_refused(void);
 int      mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 uint64_t mgs_interrupt_dsp_tasks(void);
 uint64_t mgs_interrupt_pe_seen(void);

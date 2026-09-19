@@ -1020,6 +1020,11 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         if ((r.steps % 4099ull) == 0ull)
             mgs_interrupt_dsp_task(mod, cpu);
 
+        /* Far more often than a task: a transfer finishes as soon as it is
+         * started here, and the audio manager waits on each one. */
+        if ((r.steps % 127ull) == 0ull)
+            mgs_interrupt_aram(mod, cpu);
+
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */

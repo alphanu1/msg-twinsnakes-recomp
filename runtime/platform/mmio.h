@@ -104,6 +104,12 @@ typedef struct MgsMmio {
     /* The control register's last value, for edge detection on the reset. */
     uint16_t dsp_control_prev;
 
+    /* ARAM transfers that have finished and not yet had their interrupt
+     * raised. A COUNT, not a flag: the queue that owns these hands out one
+     * callback per request, so two completions collapsing into one raise is
+     * a callback that never runs and a caller that waits for ever. */
+    uint32_t aram_irq_pending;
+
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
      * all you have is a total - and "33 million reads" was the only signal
@@ -215,6 +221,10 @@ void     mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail);
 /* Take a message back out, for a post whose interrupt could not be
  * delivered. Without it the message sits there unread forever. */
 void     mgs_mmio_dsp_clear_mail(MgsMmio* m);
+
+/* Take the pending ARAM-transfer interrupt, if there is one. */
+int      mgs_mmio_take_aram_irq(MgsMmio* m);
+void     mgs_mmio_put_aram_irq(MgsMmio* m);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);

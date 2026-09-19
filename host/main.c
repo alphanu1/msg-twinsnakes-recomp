@@ -784,6 +784,12 @@ int main(int argc, char** argv)
                                 while (*d == ',' || *d == ' ') ++d;
                             }
                         }
+                        printf("ARAM: %llu transfers in, %llu out; "
+                               "interrupts %llu delivered, %llu refused\n",
+                               (unsigned long long)mgs_host_mmio()->aram.writes,
+                               (unsigned long long)mgs_host_mmio()->aram.reads,
+                               (unsigned long long)mgs_interrupt_aram_raised(),
+                               (unsigned long long)mgs_interrupt_aram_refused());
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",

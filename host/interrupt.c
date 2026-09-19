@@ -179,6 +179,36 @@ static uint64_t s_dsp_tasks;
 uint64_t mgs_interrupt_dsp_tasks(void);
 uint64_t mgs_interrupt_dsp_tasks(void) { return s_dsp_tasks; }
 
+/* An ARAM transfer has finished; tell the guest.
+ *
+ * The transfer itself is a memcpy that completed before the guest could
+ * look, but the operating system does not poll - `ARQ` hands out completion
+ * callbacks and the audio manager waits on what they set. Without the line
+ * being raised the callback never runs, and the wait is indistinguishable
+ * from a hang: `__AMPushBuffered` sat on one for 90.2% of a run.
+ *
+ * The source bit is already set where the transfer happened, which is what
+ * tells the dispatcher this is ARAM rather than the DSP or the audio
+ * interface sharing the same line. */
+int mgs_interrupt_aram(const MgsModule* mod, void* cpu);
+static uint64_t s_aram_raised, s_aram_refused;
+uint64_t mgs_interrupt_aram_raised(void);
+uint64_t mgs_interrupt_aram_raised(void) { return s_aram_raised; }
+uint64_t mgs_interrupt_aram_refused(void);
+uint64_t mgs_interrupt_aram_refused(void) { return s_aram_refused; }
+
+int mgs_interrupt_aram(const MgsModule* mod, void* cpu)
+{
+    MgsMmio* m = mgs_host_mmio();
+    if (!mgs_mmio_take_aram_irq(m)) return 0;
+    if (mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) { ++s_aram_raised; return 1; }
+    /* Not delivered - put it back rather than losing it. A transfer whose
+     * completion is dropped is a callback that never runs. */
+    mgs_mmio_put_aram_irq(m);
+    ++s_aram_refused;
+    return 0;
+}
+
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
 {

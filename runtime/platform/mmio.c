@@ -449,6 +449,14 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 cr[0] = (uint8_t)(v >> 8);
                 cr[1] = (uint8_t)v;
                 m->dsp_status |= (uint16_t)DSP_CR_ARINT;
+                /* A completed transfer also RAISES A LINE. Setting the
+                 * status bit only says which source it was; without the
+                 * interrupt the operating system's handler never runs, so
+                 * the queue that owns the transfer never calls back and
+                 * whoever is waiting on it waits for ever. Raised from the
+                 * run loop, because that is where the guest can be
+                 * interrupted. */
+                ++m->aram_irq_pending;
             }
         }
 
@@ -682,3 +690,12 @@ void mgs_mmio_dsp_clear_mail(MgsMmio* m)
     }
     mb[0] = mb[1] = mb[2] = mb[3] = 0u;
 }
+
+int mgs_mmio_take_aram_irq(MgsMmio* m)
+{
+    if (!m->aram_irq_pending) return 0;
+    --m->aram_irq_pending;
+    return 1;
+}
+
+void mgs_mmio_put_aram_irq(MgsMmio* m) { ++m->aram_irq_pending; }
