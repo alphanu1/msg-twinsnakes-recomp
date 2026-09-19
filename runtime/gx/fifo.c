@@ -136,7 +136,9 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
     gx->mem = mem;
     mgs_bp_init(&gx->bp);
     {
-        const char* e = getenv("MGS_TRACE_GXDESYNC");
+        const char* e;
+        gx->trace_teximg = getenv("MGS_TRACE_TEXIMG") != NULL;
+        e = getenv("MGS_TRACE_GXDESYNC");
         gx->trace_desync = e ? strtoull(e, NULL, 0) : 0u;
         e = getenv("MGS_TRACE_GXCP");
         gx->trace_cp = e ? strtoull(e, NULL, 0) : 0u;
@@ -356,6 +358,19 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         uint32_t packed = be32(body);
         uint8_t  reg = (uint8_t)(packed >> 24);
         uint32_t val = packed & 0x00FFFFFFu;
+        /* EVERY TEXTURE BASE ADDRESS THE GAME WRITES, kept as a small set of
+         * distinct values. One texture is refused 2,964 times for an address
+         * 53 MB into a 24 MB machine, and the question is whether the game
+         * wrote that or we synthesised it - which a histogram of what was
+         * actually written answers and nothing else does. */
+        if (gx->trace_teximg &&
+            ((reg >= 0x94u && reg <= 0x97u) || (reg >= 0xB4u && reg <= 0xB7u))) {
+            unsigned k;
+            for (k = 0; k < gx->teximg_n; ++k)
+                if (gx->teximg[k] == val) break;
+            if (k == gx->teximg_n && gx->teximg_n < 32u)
+                gx->teximg[gx->teximg_n++] = val;
+        }
         mgs_bp_write(&gx->bp, reg, val);
         bp_side_effect(gx, reg, val);
         return;

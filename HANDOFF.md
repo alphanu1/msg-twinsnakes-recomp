@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F139**. The two worth reading first are
+Findings from this session are **F90-F140**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -171,12 +171,14 @@ renderer.
    and 1 status 2.65 million times — both card slots. Nothing models the EXT
    "device present" bit. Make the absence of a card *answerable*; inventing a
    card is probably the wrong fix, since the game must handle an empty slot.
-2. **The font texture at `0x835006C0` (F139).** 2,622 of the 2,964 refusals
-   are ONE texture: format 0x6 (RGBA8) 8x8, at an address past MEM1's 24 MB.
-   Either the BP texture address is mis-derived, or the glyphs are preloaded
-   into TMEM and the register holds a TMEM offset. This is what truncates
-   every line of text on the memory-card screen, and it is the whole visible
-   gap.
+2. **Who computes the font pointer `0x835006C0`? (F139).** All 2,964 texture
+   refusals are ONE texture — format 0x6 (RGBA8) 8x8 — and the cause is now
+   narrowed hard: **not** TMEM preload (zero draws set `image_type`), and
+   **not** our BP decode (14 of 15 texture addresses parse fine through the
+   same path). The game itself writes an address above its own arena top
+   (`0x8028e700-0x817f8ee0`). So the fault is upstream of GX — an allocation,
+   a file load, or a pointer derived from something we supplied. Watch the
+   value, not the renderer.
 3. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
@@ -4715,21 +4717,64 @@ texture refusals: 0 size, 0 texels, 0 palette, 0 alloc, 2622 decode
 decoder implements RGBA8 correctly (two 32-byte halves, alpha+red then
 green+blue); it never gets that far, because `guest_ptr` refuses the address.
 
-**`0x835006C0` is not in MEM1.** With 24 MB, MEM1 ends at `0x81800000`. The
-address is the same every single time, so it is not garbage from a lost
-stream — it is a real value we are interpreting wrongly. Two candidates, and
-they want different work:
+**`0x835006C0` is not in MEM1**, which ends at `0x81800000` on a 24 MB
+machine. Both candidates have now been tested, and **both are wrong**:
 
-- the BP texture-address register is being reconstructed wrongly (it holds a
-  physical address in 32-byte units, so `(reg << 5) | 0x80000000`, and
-  `0x835006C0` implies `reg = 0x1A8036`, past the 24 MB machine); or
-- the glyphs are **preloaded into TMEM** by `GXLoadTexObjPreLoaded` /
-  `GXPreLoadEntireTexture`, in which case the register holds a TMEM offset
-  and main memory is the wrong place to look entirely.
+- **Not TMEM-preloaded.** `TX_SETIMAGE1` bit 21 is the hardware's
+  `image_type`: set, the texture unit uses a preloaded copy in texture memory
+  and the SETIMAGE3 address is not a fetch address at all. Counted across a
+  whole boot: **zero** draws have it set.
+- **Not our BP decode.** Histogramming every distinct `TX_SETIMAGE3` the game
+  writes gives **15 values, of which exactly one is bad**:
+
+```
+reg=0x00F316 -> 0x801E62C0     reg=0x08B815 -> 0x811702A0
+reg=0x007534 -> 0x800EA680     reg=0x08B80B -> 0x81170160
+reg=0x04992E -> 0x809325C0     reg=0x08E483 -> 0x811C9060
+reg=0x0663E4 -> 0x80CC7C80     reg=0x08F58E -> 0x811EB1C0
+reg=0x1A8036 -> 0x835006C0  <-- past MEM1      (+6 more, all valid)
+```
+
+Fourteen addresses parse correctly through the identical code path, so the
+game really does write `0x1A8036`.
+
+**So it is a GUEST-SIDE pointer that is wrong**, not a parsing fault — and the
+OS reports its own arena as `0x8028e700-0x817f8ee0`, so `0x835006C0` is above
+the top of the game's own heap. Something the game computed came out wrong,
+which puts the cause upstream of GX entirely: an allocation, a file load, or a
+pointer derived from data we supplied.
+
+**Next:** find who computes that pointer. The font is loaded once and drawn
+2,964 times, so watching that value — or the allocation that should have
+produced it — beats any more GX instrumentation.
+
 
 **Why this is the whole visible gap.** The logo's cube IS textured, so the
 path works; 14,356 triangles sample successfully. It is this one font texture
 that fails, and the text it draws is most of what a menu screen is.
+
+---
+
+**F140 — an instrument that never armed, caught before it was believed.** The
+texture-address histogram first reported "**0 distinct**" — which would mean
+the game never writes `TX_SETIMAGE3` at all, a startling result that would
+have sent the search somewhere useless.
+
+It was wrong. The line setting the trace flag was inserted by matching
+`e = getenv("MGS_TRACE_GXDESYNC")`, and the real source reads
+`const char* e = getenv(...)`. The edit silently did not apply, the flag
+stayed zero, and the histogram counted nothing. Armed properly, the same run
+reports 15 addresses.
+
+This is the fourth instrument failure this session — F125 logged two, F131 a
+third — and **the first caught before a conclusion was drawn from it**, by
+checking that the flag was actually set rather than trusting the output. The
+check cost one command.
+
+**The rule, stated plainly:** an instrument reporting zero is reporting either
+"the thing did not happen" or "I did not run". Those are indistinguishable in
+the output and have to be distinguished in the source, every time, before the
+number is used for anything.
 
 ---
 

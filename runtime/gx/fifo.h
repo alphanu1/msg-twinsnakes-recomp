@@ -197,6 +197,9 @@ typedef struct MgsGx {
      * data too, and acting on one of those writes a framebuffer over the
      * game's memory. Counting them was harmless; acting on them was not. */
     uint64_t draw_done_tokens;   /* BP 0x45 with the interrupt bit */
+    uint32_t teximg[32];         /* distinct TX_SETIMAGE3 values written */
+    unsigned teximg_n;
+    int      trace_teximg;       /* MGS_TRACE_TEXIMG */
     uint32_t copy_pending;       /* BP 0x52, the command, or 0 */
 
     uint64_t commands, primitives, vertices, triangles, desyncs;

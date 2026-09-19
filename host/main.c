@@ -1258,6 +1258,19 @@ int main(int argc, char** argv)
                                                (unsigned long long)rs->rascol_hits[k]);
                                 }
                             }
+                            if (getenv("MGS_TRACE_TEXIMG")) {
+                                unsigned k;
+                                printf("  texture base addresses written "
+                                       "(TX_SETIMAGE3), %u distinct:\n",
+                                       g->teximg_n);
+                                for (k = 0; k < g->teximg_n; ++k)
+                                    printf("    reg=0x%06X -> 0x%08X%s\n",
+                                           g->teximg[k],
+                                           0x80000000u | (g->teximg[k] << 5),
+                                           (0x80000000u | (g->teximg[k] << 5))
+                                               >= 0x81800000u
+                                               ? "   <-- past MEM1" : "");
+                            }
                             printf("  texture refusals: %llu size, %llu texels, "
                                    "%llu palette, %llu alloc, %llu decode\n",
                                    (unsigned long long)rs->tex.refused_size,

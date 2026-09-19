@@ -35,6 +35,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
      * drawn afterwards. Whether that is why nothing new appears is answerable
      * in one run: turn the test off and see if the picture fills in. */
     r->no_depth = getenv("MGS_NO_DEPTH") != NULL;
+    r->trace_preload = getenv("MGS_TRACE_PRELOAD") != NULL;
     {
         const char* e = getenv("MGS_TRACE_RASTER");
         r->trace = e != NULL;
@@ -166,6 +167,32 @@ static const MgsTexture* bind_texture(MgsGxRaster* r, MgsGx* gx, unsigned map)
         tlut_addr = bp->tlut_src[tlut_off];
         tlut_format = (tl >> 10) & 3u;
         if (!tlut_addr) return NULL;      /* palette never loaded: refuse */
+    }
+
+    /* IS THIS TEXTURE FETCHED FROM MEMORY, OR ALREADY IN TMEM?
+     *
+     * TX_SETIMAGE1 bit 21 is the hardware's `image_type`: 0 means the texture
+     * unit fetches from the address in SETIMAGE3, 1 means the game has
+     * PRELOADED the texture into texture memory and that address is not used
+     * for fetching at all. Reading SETIMAGE3 regardless is how a preloaded
+     * texture turns into a nonsense pointer - which is exactly what
+     * 0x835006C0 is, 53 MB into a 24 MB machine, refused 2,622 times.
+     *
+     * Reported rather than handled: TMEM is not modelled yet, so the honest
+     * outcome is still a refusal, but a refusal that says WHICH kind. */
+    {
+        uint8_t base1 = (uint8_t)((map < 4u ? BP_TX_SETIMAGE1
+                                            : BP_TX_SETIMAGE1_4) + (map & 3u));
+        uint32_t i1 = mgs_bp_get(bp, base1);
+        if (bp->written[base1] && ((i1 >> 21) & 1u)) {
+            ++r->tex_preloaded;
+            if (r->trace_preload)
+                fprintf(stderr, "[tex] PRELOADED into TMEM: map=%u fmt=0x%X "
+                                "%ux%u  SETIMAGE1=0x%06X tmem_even=0x%X  "
+                                "(SETIMAGE3=0x%06X is not a fetch address)\n",
+                        map, format, width, height, i1, i1 & 0x7FFFu, i3);
+            return NULL;
+        }
     }
 
     /* The image address is in 32-byte units, like everything else here. */
