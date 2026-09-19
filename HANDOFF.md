@@ -21,25 +21,25 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 67.4%
+## PHASE 0 PROGRESS — 68.5%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 954 / 18,485 | 5.2% |
+| Functions named | 961 / 18,485 | 5.2% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 174 / 336 | 51.8% |
-| SDK call sites covered | 5,858 / 7,078 | 82.8% |
-| GX surface named | 172 / 177 | **97.2%** |
-| **Average of the five** | | **67.4%** |
+| SDK entry points the engine calls, named | 180 / 336 | 53.6% |
+| SDK call sites covered | 5,911 / 7,078 | 83.5% |
+| GX surface the game uses, named | 81 / 81 | **100.0%** |
+| **Average of the five** | | **68.5%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
 and neither is the answer: the engine is translated mechanically, so naming it
 buys debugging rather than correctness, while boundaries are what the
 recompiler actually consumes. **The row that governs the remaining work is the
-SDK boundary** — now 51.8% of entry points and 82.8% of call sites.
+SDK boundary** — now 53.6% of entry points and 83.5% of call sites.
 
 ---
 
@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F107**. The two worth reading first are
+Findings from this session are **F90-F108**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3218,6 +3218,38 @@ lifecycle is the mixer's own contract.
 audio initialisation without at least a stand-in for task completion, so some
 phase-4 work is now on the critical path for phase 2. That is worth deciding
 deliberately rather than drifting into.
+
+---
+
+**F108 — the GX surface the game uses is fully named, and the row that
+measured it was wrong.**
+
+Seven more names, all confirmed against `dolsdk2004`'s `GXTransform.c` rather
+than inferred from position:
+
+| address | name | how |
+|---|---|---|
+| `0x800460FC` | `GXLoadNrmMtxImm` | `addr = id*3 + 0x400`, `reg = addr\|0x80000`, and a **stride of 16** through the source - rows of a 3x4 `Mtx`, not the 12 that `GXLoadNrmMtxImm3x3` would use |
+| `0x80046180` | `GXSetCurrentMtx` | a 6-bit field into `__GXData->matIdxA`, then `__GXSetMatrixIndex(GX_VA_PNMTXIDX)` |
+| `0x800461B4` | `GXLoadTexMtxImm` | `id >= 64` selects `0x500`, and `type == GX_MTX2x4` selects 8 floats over 12 |
+| `0x80046268` | `GXLoadTexMtxIndx` | the same `id >= 64` shape, indexed |
+| `0x800462C0` | `__GXSetViewport` | reads the viewport fields and writes six XF words |
+| `0x80046350` | `GXSetViewport` | stores six floats into `__GXData`, calls the above, sets `bpSentNot`. **Not `GXSetViewportJitter`**: that takes a seventh `field` argument and this takes none, so the wrapper was inlined |
+| `0x80046398` | `GXGetViewportv` | copies six floats back out of `__GXData+0x4F4` |
+| `0x800464E4` | `__GXSetMatrixIndex` | already named; reached through `GXSetCurrentMtx` |
+
+**And the GX row was measuring the wrong thing.** It compared our *count* of
+GX-prefixed names against the count in mkdd's symbol table, which is a count
+and not a coverage - after these names it read **179/177 = 101.1%**. Two
+different games do not have the same GX surface, and mkdd's table also carries
+C++ mangled names of its own (`GXDrawBegin__14stParticleDrawFUl`), so that
+denominator was never the right set.
+
+`config/gx-surface-used.txt` is the right set: every GX function *this* engine
+calls, recovered from the REL's cross-module calls, and the phase 3
+specification. Against it the row reads **81 / 81 — all of them**. The
+headline average went *down*, from 68.7% to 68.5%, which is what an honest
+denominator does.
 
 ---
 

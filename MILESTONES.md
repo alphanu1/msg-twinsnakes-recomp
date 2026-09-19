@@ -17,12 +17,12 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,075 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,082 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
 mechanical rewrite of machine code into C; decompilation in the matching-source
-sense is out of scope by design and sits at ~0%. Phase 0 progress is 67.4%. The toolchain is
+sense is out of scope by design and sits at ~0%. Phase 0 progress is 68.5%. The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -175,7 +175,12 @@ more.
       in `0x8004E700`-`0x80062000`, all unnamed and heavily called. Line
       numbers run strictly downwards within every Tremor unit and upwards
       within every `sd_*.c` one, which is the check that they are read right.
-- [ ] Name the last 6 GX functions and the **165** remaining SDK entry points
+- [x] **The GX surface this game uses is fully named** (F108) — 81 of 81,
+      which is the phase 3 specification. The row that measured it was also
+      wrong: it compared counts against another game's symbol table and read
+      101.1%. It now measures against `config/gx-surface-used.txt`, and the
+      headline average went down as a result.
+- [ ] Name the remaining SDK entry points
       the engine calls — 50 of them are leaves the call graph cannot reach
       (F81), so instruction-sequence matching and string references are the
       routes with room left. The 198 Tremor/`sd_*` functions are attributed

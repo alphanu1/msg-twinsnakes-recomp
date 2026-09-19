@@ -1228,3 +1228,14 @@
 # rand from its constants; PSMTX44Identity by exact body match.
 .text 0x80013E44 0x20 rand own
 .text 0x80025054 0x34 PSMTX44Identity sdk2004-asm
+
+# GX transform functions, confirmed against dolsdk2004 GXTransform.c.
+.text 0x800460FC 0x50 GXLoadNrmMtxImm sdk2004
+.text 0x80046180 0x34 GXSetCurrentMtx sdk2004
+.text 0x800461B4 0xB4 GXLoadTexMtxImm sdk2004
+
+# Viewport and indexed texture-matrix loads, confirmed against dolsdk2004.
+.text 0x80046268 0x58 GXLoadTexMtxIndx sdk2004
+.text 0x800462C0 0x90 __GXSetViewport sdk2004
+.text 0x80046350 0x48 GXSetViewport sdk2004
+.text 0x80046398 0x24 GXGetViewportv sdk2004

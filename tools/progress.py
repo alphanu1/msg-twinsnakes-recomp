@@ -32,11 +32,23 @@ def main():
     for l in open(P('build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s')):
         for t in re.findall(r'\bbl fn_(80[0-9A-Fa-f]{6})', l):
             sites[int(t, 16)] += 1
-    ref_gx = {m.group(1) for m in
-              (re.match(r'(\S+) = \.text:.*type:function', l)
-               for l in open(P('extern/mkdd/config/MarioClub_us/symbols.txt')))
-              if m and re.match(r'_{0,2}GX', m.group(1))}
-    gx = [n for n in named.values() if re.match(r'_{0,2}GX', n)]
+    # THE GX SURFACE **THIS GAME CALLS**, not another game's.
+    #
+    # This row used to compare our count of GX-prefixed names against the
+    # count in mkdd's symbol table, and a count is not a coverage: once four
+    # more were named it read 179/177 = 101.1%. Two different games do not
+    # have the same GX surface, and mkdd's table also carries C++ mangled
+    # names of its own (`GXDrawBegin__14stParticleDrawFUl`), so the
+    # denominator was never the right set to begin with.
+    #
+    # config/gx-surface-used.txt is that set: every GX function the engine
+    # calls directly, recovered from the REL's cross-module calls. It is the
+    # phase 3 specification, so measuring against it answers the question the
+    # row is for - how much of the renderer's interface is understood.
+    ref_gx = {line.split('#')[0].strip()
+              for line in open(P('config/gx-surface-used.txt'))
+              if line.split('#')[0].strip()}
+    gx = ref_gx & set(named.values())
 
     total = len(dol) + len(rel)
     rows = [
@@ -44,7 +56,7 @@ def main():
         ("Function boundaries recovered",            total, total),
         ("SDK entry points the engine calls, named", len([a for a in sites if a in named]), len(sites)),
         ("SDK call sites covered",                   sum(sites[a] for a in sites if a in named), sum(sites.values())),
-        ("GX surface named",                         len(gx), len(ref_gx)),
+        ("GX surface the game uses, named",          len(gx), len(ref_gx)),
     ]
     print(f"| {'Measure':<42} | {'':>15} | {'':>6} |")
     print(f"|{'-'*44}|{'-'*17}|{'-'*8}|")
