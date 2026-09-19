@@ -701,6 +701,28 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                  * rasteriser works; the other says every stage upstream of
                  * the colour is working and the colour is not. */
                 if (pixel & 0x00FFFFFFu) ++r->pixels_lit;
+
+                /* DOES ANYTHING BLACK PAINT OVER SOMETHING LIT, AND WHERE?
+                 *
+                 * 165,888 triangles a run are configured a=b=c=d=ZERO -
+                 * "output black" - and they are the large ones, about 66
+                 * pixels each. One of those covering the right of the screen
+                 * would truncate every line of text at the same column
+                 * regardless of content, which is the signature this bug has
+                 * always had.
+                 *
+                 * COUNTED, NOT SUPPRESSED. The first version of this skipped
+                 * black writes to see if the text reappeared, and that
+                 * changed the boot: 7,235 GX commands instead of 2,476,033.
+                 * Altering the EFB alters what the copies put in guest
+                 * memory, so a "diagnostic" that changes pixels is not a
+                 * diagnostic at all. This one only observes. */
+                if (!(pixel & 0x00FFFFFFu) &&
+                    (r->efb->pixels[at] & 0x00FFFFFFu)) {
+                    unsigned bx = (unsigned)px / 32u;
+                    ++r->black_over_lit;
+                    if (bx < 20u) ++r->black_over_lit_x[bx];
+                }
                 r->efb->pixels[at] = pixel;
             }
 

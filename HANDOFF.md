@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F149**. The two worth reading first are
+Findings from this session are **F90-F150**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -182,7 +182,15 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Count text quads that bind NO texture (F147).** The 2D pass draws ~13.7
+3. **Clear the depth buffer every frame, not only on clearing copies (F150).**
+   9,422,255 black pixels are drawn over lit ones, peaking at x=192-287 where
+   the text stops, and the depth buffer is reset only 56 times in 3,740
+   copies — so after the first 59 frames, depth ordering is decided by
+   leftovers. That is how 3D ends up over a UI drawn after it. Test by
+   resetting depth on every copy and checking whether the text completes.
+   Note `MGS_NO_DEPTH` does NOT test this: forcing everything through makes
+   overdraw worse.
+4. **Count text quads that bind NO texture (F147).** The 2D pass draws ~13.7
    triangles a frame (~7 quads) but only three text-strip textures are ever
    sampled successfully. A quad that binds nothing draws untextured and
    disappears, which looks exactly like a truncated line. Instrument
@@ -190,7 +198,7 @@ renderer.
    visible. Excluded already: scissor, depth, display lists, texture
    refusals, viewport, geometry extent, RTT output, texture content, texture
    coordinates, SU size (F139-F147). Superseded: (F146).
-4. **Implement EFB-to-texture copies (F145, still worth doing).**
+5. **Implement EFB-to-texture copies (F145, still worth doing).**
    `mgs_efb_copy` writes nothing unless the copy targets the external
    framebuffer, so 1,883 copies a boot discard their output and 3,860,150 of
    3,873,706 triangles draw into that path. Needs an encoder for the copy
@@ -198,7 +206,7 @@ renderer.
    is not the text bug — but a renderer that throws away its
    render-to-texture output will not survive contact with the rest of the
    game.
-5. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
+6. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
    now 14,356 with zero desyncs. The conclusion that the game deliberately
@@ -206,22 +214,22 @@ renderer.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
-7. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+8. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-8. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+9. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-9. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+10. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-10. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+11. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -232,26 +240,26 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-11. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+12. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-12. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+13. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-13. **The second window is the performance floor.** The whole engine runs at
+14. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-14. **Find why the opening video is never requested (F148).** `movie.dat` is
+15. **Find why the opening video is never requested (F148).** `movie.dat` is
     opened and never read — zero of 271 disc reads touch it — so playback is
     not starting rather than failing. `mpegGCN.c` is in the REL and already
     runs natively, so this is a presentation path plus whatever gates the
     start, not a decoder. Superseded framing:
-14. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+15. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-15. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+16. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -288,6 +296,15 @@ renderer.
   damning and is not: every triangle runs one TEV stage, none wants a texture
   on a later stage, and all 778 binds succeed. The game draws the rest
   untextured on purpose. The fault is in the combiner's untextured path.
+- **A "diagnostic" that changes pixels (F150).** Suppressing black writes to
+  see if the text reappeared took the boot from 2,476,033 GX commands to
+  7,235. Altering the EFB alters what copies write into guest memory, and the
+  guest reads guest memory. Observe with counters; never steer the thing you
+  are measuring.
+- **Using `MGS_NO_DEPTH` to test depth ordering (F150).** It forces every
+  pixel through, which makes black overdraw worse. The question "is stale
+  depth letting the wrong thing win" needs depth CLEARED more often, not
+  disabled.
 - **Judging a frame by the buffer at exit (F127, F129).** The EFB is black at
   exit while the run's best frame is 9.6% lit. Use `MGS_SAVE_BEST`.
 - **Raising a shared interrupt line without setting the device's status bit
@@ -5232,6 +5249,49 @@ been done, and until one of them is, this screen is the end of the boot.
 menu, not just this one. A memory card additionally makes the card check pass
 outright, which is what a Dolphin run with a card does — and is how the video
 was seen there.
+
+---
+
+**F150 — something black IS painting over the text, 9.4 million times.** The
+suggestion was a black layer covering the text, with the follow-up that 3D
+should be *behind* the UI anyway. Counting black pixels written over
+already-lit ones:
+
+```
+black pixels drawn OVER lit ones: 9,422,255
+  64-95:483k   96-127:867k  128-159:890k  160-191:806k
+  192-223:951k 224-255:974k 256-287:955k  288-319:853k
+  320-351:756k 352-383:817k 384-415:642k  416-447:423k
+```
+
+Roughly 2,500 per frame, spread across the whole visible width, and **peaking
+at 192-287 — straddling exactly where the text stops**.
+
+**This is the first positive evidence in the whole hunt.** Every earlier
+finding excluded something; this one shows a mechanism that is actually
+happening.
+
+**And it ties to a number already measured and not joined up.** F127 found the
+depth buffer is reset only on a clearing copy, and there are **56 clearing
+copies in 3,740** — all in the first 59. After that, "what is in front" is
+decided by depths left over from a frame long gone, so geometry that should
+lose the depth test wins it. That is precisely how 3D ends up over a UI layer
+that was drawn after it.
+
+**Why the earlier depth test looked innocent.** F127 ran `MGS_NO_DEPTH`, which
+forces *every* pixel through — that makes black overdraw worse, not better, so
+an unchanged picture proved nothing. The test that matters is the opposite:
+**clear the depth buffer on every frame's copy**, not only on copies that ask
+for a clear, and see whether the text completes.
+
+**An instrument that invalidated itself, recorded because it nearly produced a
+wrong answer.** The first version of this suppressed black writes rather than
+counting them, to see if the text reappeared. It changed the boot: **7,235 GX
+commands instead of 2,476,033**, 55 EFB copies instead of 3,740. Altering the
+EFB alters what the copies write into guest memory, and the guest reads guest
+memory — so the feedback path exists and the "diagnostic" was steering the
+thing it measured. A diagnostic that changes pixels is not a diagnostic. The
+counter that replaced it only observes.
 
 ---
 

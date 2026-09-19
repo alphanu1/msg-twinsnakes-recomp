@@ -1306,6 +1306,19 @@ int main(int argc, char** argv)
                             }
                             {
                                 unsigned k;
+                                printf("  black pixels drawn OVER lit ones: "
+                                       "%llu\n   ",
+                                       (unsigned long long)rs->black_over_lit);
+                                for (k = 0; k < 20u; ++k)
+                                    if (rs->black_over_lit_x[k])
+                                        printf(" %u-%u:%llu", k * 32u,
+                                               k * 32u + 31u,
+                                               (unsigned long long)
+                                                   rs->black_over_lit_x[k]);
+                                printf("\n");
+                            }
+                            {
+                                unsigned k;
                                 printf("  ALL 2D triangles by right edge "
                                        "(32px buckets):\n   ");
                                 for (k = 0; k < 20u; ++k)
