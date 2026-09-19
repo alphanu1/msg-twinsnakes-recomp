@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F113**. The two worth reading first are
+Findings from this session are **F90-F115**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3512,6 +3512,72 @@ run loop samples, so they see cross-module calls reliably and can MISS a call
 made from one part of the DOL to another within a single dispatch. The thread
 waiting on queue `0x8020B95C` never appeared in any of them for that reason.
 Absence in those traces is not evidence.
+
+---
+
+**F114 — the blocked thread's call chain, read out of guest memory.** The
+thread dump now walks each thread's saved stack. PowerPC's ABI has every
+frame point at the one below it with the return address a word in, and
+`OSContext` sits at the start of `OSThread`, so the saved `r1` is at +4 and
+the saved `lr` at +0x84. That turns "waiting on a queue" into a path:
+
+```
+fn_1_88        +0x98   the engine's main loop
+ fn_1_F394C    +0x98   the per-frame task scheduler, just after its bctrl
+  fn_1_12012C  +0x4C   the task it dispatched
+   fn_1_11FF60 +0x88
+    0x8004C318 +0x60   into the DOL
+     OSWaitSemaphore
+      OSSleepThread
+```
+
+**A resume address says nothing** - every switched-out thread resumes inside
+the scheduler, so that column reads identically for all of them. The stack is
+the only thing that distinguishes them, and it named the whole chain in one
+run after several rounds of guessing had not.
+
+Three names fell out of it, by behaviour next to the already-named
+`OSInitSemaphore`: **`OSWaitSemaphore`** (0x80022B54 - reads the count,
+sleeps on the queue at +4 while it is not positive), **`OSSignalSemaphore`**
+(0x80022BC4 - increments and wakes), and **`OSGetSemaphoreCount`**
+(0x80022C24, two instructions).
+
+**`DEMOBeforeRender` at 0x8004C318 is almost certainly a wrong name.** It
+came from ordered alignment against Mario Kart, and it sits inside the range
+this project's own `__FILE__` evidence assigns to `CR_System.c`
+(0x8004B6D8-0x8004C82C). Second mkdd-align error found this session, after
+`DCZeroRange` (F97).
+
+---
+
+**F115 — what the main loop is waiting for, and a fix that made it worse.**
+
+The semaphore is at 0x8020B958, waited from `0x8004C378` and signalled from
+`0x8004D170` - and `fn_8004D170` has no static callers because it is
+registered with **`GXSetDrawDoneCallback`**. So the engine's main loop waits
+for the graphics processor to finish the frame.
+
+The tally: **62 waits, 60 signals**, and the callback only signals when a
+flag at +0x64 of its state is set.
+
+**The hypothesis that follows is wrong, and it is recorded because it is
+attractive.** A graphics processor that finishes instantly finishes *too
+soon*: the token is parsed the moment the guest stores it, so the interrupt
+could be raised before `GXDrawDone` has armed the flag its callback checks -
+the callback would then run, find the flag clear, signal nobody, and the wait
+would never end. Modelling a real GPU's completion latency looks like the
+principled fix, exactly as it was for the disc (F110).
+
+It is not. Holding the finish interrupt back by 20,000 guest ticks took the
+boot from 75 frames, 20,429 GX commands and 55 disc reads to **3 frames, 629
+commands and none**. The boot depends on prompt completion long before the
+frame loop exists. Reverted.
+
+So the two missing signals are not a systemic race but something specific to
+the last frames, and the next step is to watch the callback itself: whether
+it runs 62 times and declines twice, or runs only 60. That distinguishes "the
+interrupt was not delivered" from "the guest was not ready", and they need
+opposite fixes.
 
 ---
 

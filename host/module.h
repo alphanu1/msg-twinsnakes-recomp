@@ -150,6 +150,7 @@ uint64_t mgs_interrupt_delivered(void);
 uint64_t mgs_interrupt_refused(void);
 uint64_t mgs_interrupt_failed(void);
 int mgs_interrupt_pe_finish(const MgsModule* mod, void* cpu);
+int mgs_display_peek_draw_done(void);
 
 /* Report a submitted DSP task as started and then finished, which is what
  * the boot is waiting for. See host/interrupt.c - it is the handshake, not a

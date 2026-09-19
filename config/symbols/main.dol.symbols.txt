@@ -1239,3 +1239,8 @@
 .text 0x800462C0 0x90 __GXSetViewport sdk2004
 .text 0x80046350 0x48 GXSetViewport sdk2004
 .text 0x80046398 0x24 GXGetViewportv sdk2004
+
+# Semaphore family, identified by behaviour next to the named OSInitSemaphore.
+.text 0x80022B54 0x70 OSWaitSemaphore own
+.text 0x80022BC4 0x60 OSSignalSemaphore own
+.text 0x80022C24 0x8 OSGetSemaphoreCount own

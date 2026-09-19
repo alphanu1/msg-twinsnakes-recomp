@@ -523,6 +523,26 @@ static void trace_unlock(void* cpu, const uint32_t* gpr)
             gpr[3], mgs_module_lr(cpu));
 }
 
+/* The semaphore the engine's main loop is blocked on.
+ *
+ * A task dispatched by the per-frame scheduler calls OSWaitSemaphore and
+ * never comes back, which stops the whole loop. Whether that semaphore is
+ * ever signalled - and by whom - is the question, and both calls take it as
+ * their first argument. */
+static void trace_sem_wait(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[sem] wait   0x%08X count=%d from 0x%08X\n",
+            gpr[3], (int)mgs_module_guest_read32(cpu, gpr[3]),
+            mgs_module_lr(cpu));
+}
+
+static void trace_sem_signal(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[sem] signal 0x%08X count=%d from 0x%08X\n",
+            gpr[3], (int)mgs_module_guest_read32(cpu, gpr[3]),
+            mgs_module_lr(cpu));
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -740,6 +760,10 @@ int main(int argc, char** argv)
                          * tracking allocator, with the file and line it was
                          * called from - which is how an arena running out
                          * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_SEM")) {
+                            mgs_module_trace_calls(0x80022B54u, trace_sem_wait);
+                            mgs_module_trace_calls2(0x80022BC4u, trace_sem_signal);
+                        }
                         if (getenv("MGS_TRACE_MUTEX")) {
                             mgs_module_trace_calls(0x80021028u, trace_lock);
                             mgs_module_trace_calls2(0x80021104u, trace_unlock);

@@ -225,6 +225,12 @@ int mgs_display_save_ppm(const char* path, const GuestMemory* mem)
 }
 
 /* The draw-done token, from the parser rather than from a byte scan. */
+/* Is a token waiting, without consuming it? The finish interrupt is held
+ * back for a little guest time after the token appears, so the caller needs
+ * to know one is pending before it decides to wait. */
+int mgs_display_peek_draw_done(void);
+int mgs_display_peek_draw_done(void) { return s_gx.draw_done_tokens != 0u; }
+
 int mgs_display_take_draw_done(void);
 int mgs_display_take_draw_done(void) { return mgs_gx_take_draw_done(&s_gx); }
 
