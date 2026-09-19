@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F106**. The two worth reading first are
+Findings from this session are **F90-F107**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,11 +166,13 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **See how far the boot gets now that the overlay copy is native.** The 5.7
-   MB `memcpy` was 63% of the run; with it shimmed, the same step budget buys
-   far more of the game. Re-measure with `MGS_PROFILE=1` before concluding
-   anything about what comes after it — the last three "it is stuck" calls
-   were all wrong, and all three were made without a profile.
+1. **Decide how to get past the DSP task wall (F107).** The boot waits for a
+   `done_cb` that only a DSP task completion fires. The protocol is known and
+   written down: post `0xDCD10000` then `0xDCD10003` with a DSP interrupt for
+   each, and not before the guest has booted a task. **This puts phase-4 work
+   on phase 2's critical path**, which is a decision to take deliberately -
+   either a stand-in that completes tasks, or the real voice mixer earlier
+   than planned.
 2. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
@@ -3165,6 +3167,57 @@ rather than as a whole `asm` function.
 **Call sites covered 76.1% to 82.8%**, phase 0 average 65.9% to 67.4%. Two
 names. The function count barely moved, which is the point of measuring call
 sites at all.
+
+---
+
+**F107 — THE BOOT'S CURRENT WALL, located precisely: it is waiting for a DSP
+task to finish.** Not yet fixed. The analysis is here so the next session
+starts from it.
+
+A profile of 30,000,000 steps puts **90.4% at one address**, `0x80032A60`,
+which is a three-instruction loop at the end of `fn_800329B4`:
+
+```
+.L_80032A60:
+    lwz   r0, lbl_8027DF04@sda21(r0)
+    cmpwi r0, 0
+    beq   .L_80032A60
+```
+
+`fn_800329B4` clears that global, fills a 0x4A00-based structure with vectors,
+calls `OSInitThreadQueue`, submits something through `fn_800377DC`, and then
+waits. The only other reference to the global is `fn_80032924`, which is three
+instructions - `flag = 1; blr` - and whose address is written into the
+structure at +0x28. **So the boot is waiting for a completion callback.**
+
+The structure is a `DSPTaskInfo` and the callback is its `done_cb`. From the
+SDK's `dsp_task.c`, `__DSPHandler` runs on the DSP interrupt, reads one mail,
+and dispatches on it:
+
+| mail | meaning |
+|---|---|
+| `0xDCD10000` | task started - calls `init_cb` |
+| `0xDCD10001` | resumed - calls `res_cb` |
+| `0xDCD10002` | yielded |
+| `0xDCD10003` | **done - calls `done_cb`** |
+
+So getting past this needs the DSP to post `0xDCD10000` and then `0xDCD10003`,
+raising the DSP interrupt for each. `__DSPHandler` reads exactly one mail per
+interrupt and asserts that a current task exists, so interrupts must not be
+raised before the guest has booted one - the boot mail being consumed is the
+signal that it has.
+
+**This was deliberately not built.** It is the DSP task lifecycle, which is
+phase 4 by the project's own ordering (rule 13), and a speculative half of it
+would be hard to tell apart from a correct one until much later. What is here
+already - ARAM, the sample counter, the mailbox handshake - is hardware coming
+up, which the boot needs regardless of when the mixer is written. A task
+lifecycle is the mixer's own contract.
+
+**Note what this means for the phase order:** the boot cannot proceed past
+audio initialisation without at least a stand-in for task completion, so some
+phase-4 work is now on the critical path for phase 2. That is worth deciding
+deliberately rather than drifting into.
 
 ---
 
