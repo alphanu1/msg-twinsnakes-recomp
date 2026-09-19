@@ -578,6 +578,35 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * 256, the 2D pass - not the 64-wide render-to-texture strip)
              * answers it: geometry that exists but is invisible shows up
              * here, geometry that was never emitted does not. */
+            /* THE RAW TEXTURE COORDINATE RANGE, and what GX says to divide
+             * it by.
+             *
+             * mgs_tex_sample treats u,v as 0..1 and multiplies by the texture
+             * size. GX does not: it normalises by SU_SSIZE+1 / SU_TSIZE+1,
+             * the setup-unit size registers at BP 0x30+, which the SDK sets
+             * from the texture when the object is loaded but which a game may
+             * set to anything. Those registers are referenced nowhere in this
+             * renderer, so if they ever differ from the texture size the
+             * mapping is wrong by exactly their ratio - and the text shows
+             * 120 pixels of a 160-pixel strip, which is 3/4. */
+            {
+                unsigned su = (unsigned)(0x30u + 2u * tex_coord);
+                uint32_t ss = mgs_bp_get(&gx->bp, (uint8_t)su) & 0xFFFFu;
+                float u0 = a->u[tex_coord], u1 = b->u[tex_coord], u2 = c->u[tex_coord];
+                float lo = u0 < u1 ? (u0 < u2 ? u0 : u2) : (u1 < u2 ? u1 : u2);
+                float hi = u0 > u1 ? (u0 > u2 ? u0 : u2) : (u1 > u2 ? u1 : u2);
+                if (r->trace_texuse && r->uv_n < 12u) {
+                    unsigned k;
+                    for (k = 0; k < r->uv_n; ++k)
+                        if (r->uv_ss[k] == ss && r->uv_lo[k] == lo && r->uv_hi[k] == hi)
+                            break;
+                    if (k == r->uv_n) {
+                        r->uv_ss[k] = ss; r->uv_lo[k] = lo; r->uv_hi[k] = hi;
+                        r->uv_n++;
+                    }
+                }
+            }
+
             tex = bind_texture(r, gx, map);
             if (!tex) ++r->tex_bind_failed;
             if (tex) {

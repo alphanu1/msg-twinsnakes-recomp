@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F146**. The two worth reading first are
+Findings from this session are **F90-F147**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -178,12 +178,14 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Why is only 3/4 of the text texture shown? (F146).** The 160x14 strip at
-   `0x811702A0` is fully populated across all 160 columns, and the quads that
-   sample it are full width — yet the picture stops at x=208, which is 120
-   pixels, exactly 3/4 of 160. Look at the texture coordinates and the width
-   used to normalise them. **Not** the RTT copies: nothing samples what they
-   write (F146 corrects F145).
+3. **Count text quads that bind NO texture (F147).** The 2D pass draws ~13.7
+   triangles a frame (~7 quads) but only three text-strip textures are ever
+   sampled successfully. A quad that binds nothing draws untextured and
+   disappears, which looks exactly like a truncated line. Instrument
+   `bind_texture` returning NULL per frame against the quads that are
+   visible. Excluded already: scissor, depth, display lists, texture
+   refusals, viewport, geometry extent, RTT output, texture content, texture
+   coordinates, SU size (F139-F147). Superseded: (F146).
 4. **Implement EFB-to-texture copies (F145, still worth doing).**
    `mgs_efb_copy` writes nothing unless the copy targets the external
    framebuffer, so 1,883 copies a boot discard their output and 3,860,150 of
@@ -5082,6 +5084,61 @@ a cause without checking that anything sampled what those copies write.
 **The habit this breaks, stated plainly:** "X is broken and Y is broken,
 therefore X causes Y" is not an argument. The check that costs one command —
 does anything actually read what X writes? — is the one that decides it.
+
+---
+
+**F147 — texture coordinates are correct too, and the truncation is still
+unexplained.** Following F146's 3/4 ratio, the obvious suspect was coordinate
+normalisation: `mgs_tex_sample` divides by the texture width, while GX
+normalises by `SU_SSIZE+1` from the setup-unit registers at BP 0x30+, which
+**this renderer references nowhere**. If those ever disagreed, the mapping
+would be wrong by exactly their ratio.
+
+They do not disagree. Measured per draw:
+
+```
+u 0.000 .. 1.000   SU_SSIZE=159 (scale 160)     <- the 160x14 text strip
+u 0.000 .. 1.000   SU_SSIZE= 71 (scale  72)
+u 0.000 .. 1.000   SU_SSIZE= 37 (scale  38)
+u 0.000 .. 1.000   SU_SSIZE=511 (scale 512)
+u 0.000 .. 1.406   SU_SSIZE=511 (scale 512)     <- wraps, legitimately
+```
+
+`u` runs exactly 0..1 across each text strip and the scale matches the texture
+size exactly, so normalising by the texture width gives the same answer. **The
+theory is wrong.** (`SU_SSIZE` should still be honoured rather than assumed
+equal — a game that sets them apart would break — but it is not this bug.)
+
+**And the texture holds its full content.** Rendered as ASCII, the 160x14
+strip is a warning icon followed by block glyphs running to column 159:
+
+```
+......+++......++++++++++++++........................+++++++++++++++...+++++++++++++++...
+....+++++++.....++++++++++++.........+++++++.........++................++................
+.+++++++++++++......++++.............................+++++++++++++++...+++++++++++++++...
+```
+
+**So: complete texture, correct coordinates, full-width geometry, and the
+screen still stops at x=208.** Every stage of the pipeline has now been
+measured and each one is behaving.
+
+**Excluded by measurement, cumulatively:** scissor box, depth buffer,
+display-list size, texture refusals, viewport, geometry extent,
+render-to-texture output, texture content, texture coordinates, SU size
+registers.
+
+**One observation worth following, not yet a theory.** The 2D pass draws about
+**13.7 triangles per frame** — roughly 7 quads — while the screen shows a
+warning banner, three body lines, two options and two bars: about 8. But only
+**three** text-strip textures are ever sampled successfully (160x14, 72x14,
+38x14). If some text quads bind no texture at all they would draw untextured
+and vanish, which would look exactly like a truncated line. **Count the
+draws that reach `bind_texture` and return NULL**, per frame, and compare with
+the quads that are visible.
+
+I have not found this one, and I am recording that plainly rather than
+offering a fifth theory. What the session has produced instead is a pipeline
+where every stage is now individually verified.
 
 ---
 

@@ -1339,6 +1339,16 @@ int main(int argc, char** argv)
                             }
                             if (getenv("MGS_TRACE_TEXUSE")) {
                                 unsigned k;
+                                {
+                                    unsigned q;
+                                    printf("  texcoord ranges vs SU_SSIZE, "
+                                           "%u distinct:\n", rs->uv_n);
+                                    for (q = 0; q < rs->uv_n; ++q)
+                                        printf("    u %8.3f .. %8.3f   "
+                                               "SU_SSIZE=%u (scale %u)\n",
+                                               rs->uv_lo[q], rs->uv_hi[q],
+                                               rs->uv_ss[q], rs->uv_ss[q] + 1u);
+                                }
                                 printf("  textures SAMPLED, %u distinct:\n",
                                        rs->texuse_n);
                                 for (k = 0; k < rs->texuse_n; ++k)
@@ -1498,6 +1508,31 @@ int main(int argc, char** argv)
                                             if ((cx % 80u) == 79u) printf("\n   ");
                                         }
                                         printf("\n");
+                                        /* And the glyphs themselves, as ASCII.
+                                         * Column occupancy says WHERE content
+                                         * is; it cannot say WHAT it is, and
+                                         * the question now is whether this
+                                         * strip holds the whole sentence or a
+                                         * short one. Index value as ink is
+                                         * enough to read words. */
+                                        {
+                                            unsigned rx, ry, tiles = (tw + 7u) / 8u;
+                                            printf("texture content:\n");
+                                            for (ry = 0; ry < th; ++ry) {
+                                                printf("   ");
+                                                for (rx = 0; rx < tw; ++rx) {
+                                                    unsigned tx = rx / 8u, ty = ry / 4u;
+                                                    unsigned ix = rx % 8u, iy = ry % 4u;
+                                                    uint32_t off = (ty * tiles + tx) * 32u
+                                                                 + iy * 8u + ix;
+                                                    uint8_t px2 = guest_read8(&rt.mem,
+                                                                              base + off);
+                                                    putchar(px2 ? (px2 > 0x7F ? '#' : '+')
+                                                                : '.');
+                                                }
+                                                printf("\n");
+                                            }
+                                        }
                                     }
                                 }
                             }

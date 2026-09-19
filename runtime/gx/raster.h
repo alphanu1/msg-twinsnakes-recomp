@@ -75,6 +75,7 @@ typedef struct MgsGxRaster {
     uint32_t texuse_addr[24]; unsigned texuse_fmt[24];
     uint16_t texuse_w[24], texuse_h[24];
     unsigned texuse_n; int trace_texuse;
+    uint32_t uv_ss[12]; float uv_lo[12], uv_hi[12]; unsigned uv_n;
     int      trace_preload;   /* MGS_TRACE_PRELOAD */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */
