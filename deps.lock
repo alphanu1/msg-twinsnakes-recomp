@@ -23,3 +23,5 @@ RecompCore                    283baee01e54b6c3f71e441bb78fc77b260512fa  https://
 # not code (project rules 9 and 11).
 dolsdk2004                    2328b4164b1a98422a2255d83ce9a5a7548990cc  https://github.com/doldecomp/dolsdk2004                           full     signatures
 mkdd                          ffc513c5326d1a883d4b35dd7ee1634500354763  https://github.com/doldecomp/mkdd                                 full     signatures
+tremor                        820fb3237ea81af44c9cc468c8b4e20128e3e5ad  https://gitlab.xiph.org/xiph/tremor                              full     names
+ogg                           06a5e0262cdc28aa4ae6797627a783b5010440f0  https://gitlab.xiph.org/xiph/ogg                                 full     names

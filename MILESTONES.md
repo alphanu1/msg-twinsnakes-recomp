@@ -119,8 +119,24 @@ more.
 - [x] **Gap-resync alignment added** — GX 93 → **148**, map 851 → **915**, SDK
       entry points the engine calls 70 → **96**. Precision rose with it: the
       independent `dolsdk2004` cross-check went 82% → 85%.
-- [ ] Name the last ~29 GX functions and the 240 remaining SDK entry points the
-      engine calls. Needs the Dolphin SDK-call log or Ghidra.
+- [x] **Ordered alignment exhausted, and two routes built to replace it**
+      (F72). Three reference decomps run together — MKDD, TTYD, Pikmin 2 —
+      agree on 445 names and add **zero** beyond the map, because alignment
+      cannot name a function the reference games never linked.
+      - `tools/match-callgraph.py` — a function's callees are a fingerprint,
+        weighted by rarity, cross-checked against the SDK module its
+        neighbours belong to. Iterates to a fixpoint. **24 names.**
+      - `tools/attribute-by-strings.py` + `tools/match-source-order.py` — the
+        binary hands `__FILE__` *and* `__LINE__` to a tracking allocator, so
+        a function's exact source location is compiled into it. **29 names.**
+      - One name agreed by both routes independently. **52 added**; phase 0
+        average 56.6% → **57.6%**, GX surface 168 → **171 of 177**.
+- [x] **The game embeds Tremor** (F73) — Xiph's fixed-point Vorbis decoder,
+      established from `res012.c` in the binary's own strings. Phase 4 needs
+      a software Vorbis path, not only a DSP voice mixer.
+- [ ] Name the last 6 GX functions and the 176 remaining SDK entry points the
+      engine calls. The biggest untapped source is the REL: 17,000 functions,
+      with its own file-name strings.
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the
       REL.
 - [x] **221 engine functions classified by SDK usage**, 177 of them renderer

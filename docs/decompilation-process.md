@@ -324,6 +324,121 @@ and that is measure 3.
 **Measure 2 is the one that unblocks the build.** The recompiler consumes
 function boundaries, and those are complete for both modules.
 
+## Stage 5d — Name by call graph · **DONE**
+
+**In:** our disassembly + `doldecomp/dolsdk2004`. **Out:** 24 names.
+
+Stage 5 is exhausted: three independent reference decomps now agree on 567
+names and, run together, add **nothing** beyond what the map already holds.
+
+| reference | functions | anchors | names |
+|---|---|---|---|
+| `mkdd` | 15,342 | 264 | 415 |
+| `ref-ttyd` | 6,975 | 273 | 496 |
+| `ref-pikmin2` | 24,942 | 280 | 436 |
+| **consensus (2+ agree)** | | | **445** |
+| **new** | | | **0** |
+
+What alignment cannot do is name a function the reference games never linked.
+A function's CALLEES can:
+
+```sh
+python3 tools/match-callgraph.py --asm build/phase0/out/asm/*text*.s \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --sdk-src extern/dolsdk2004/src extern/tremor extern/ogg/src \
+    --file-map build/phase0/files.txt --out callgraph.txt
+```
+
+Shared callees are weighted by rarity — a shared call to something 200
+functions use is nearly free; one that two use is decisive. **Ambiguity is
+refused**, not resolved by preference, and **a name claimed by two addresses
+withdraws both**: at most one can be right and nothing says which.
+
+**Checked by a second, independent route.** The linker lays an object's
+functions down together, so a correct name should sit among neighbours from
+its own SDK module. Of 27 candidates, 22 agreed and **5 were withdrawn**.
+
+| round | proposed | confirmed | withdrawn |
+|---|---|---|---|
+| 1 | 27 | 22 | 5 |
+| 2 | 6 | 2 | 4 |
+| 3 | 4 | 0 | 4 |
+| **total** | | **24** | |
+
+It iterates because each confirmed name is evidence next round. It stops when
+a round confirms nothing.
+
+## Stage 5e — Attribute functions to their source file · **DONE**
+
+**In:** `main.dol` + our disassembly. **Out:** 72 functions placed in a file.
+
+Shipped C carries its own source file name. This binary hands `__FILE__` to a
+tracking allocator:
+
+```
+addi r5, lbl_80063B08@l   ; "framing.c"
+li   r6, 0x360            ; 864   <- __LINE__
+bl   fn_80055B74          ; the allocator
+```
+
+```sh
+python3 tools/attribute-by-strings.py --dol discs/GGSPA4/disc1/sys/main.dol \
+    --asm build/phase0/out/asm/*text*.s \
+    --symbols config/symbols/main.dol.symbols.txt --out files.txt
+```
+
+**21 source file names, 72 functions attributed, 0 ambiguous.** And a finding
+that mattered more than the count: `res012.c`, `floor0.c`, `sharedbook.c`,
+`framing.c` — **this game embeds Tremor**, Xiph's fixed-point Vorbis decoder.
+`res012.c` is decisive; stock libvorbis renamed that file years earlier.
+
+## Stage 5f — Name by exact source line · **DONE**
+
+**In:** stage 5e's file and line pairs. **Out:** 29 names.
+
+The line number is a plain `li` in the instruction stream, so a function does
+not merely belong to `framing.c` — it contains the allocation at
+`framing.c:864`, and exactly one function does.
+
+```sh
+python3 tools/match-source-order.py --file-map files.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --src extern/tremor extern/ogg/src extern/dolsdk2004/src
+```
+
+**A wrong assumption, corrected by the data.** This was written first to
+require address order to follow source order, because a compiler emits
+functions in source order. The data refused it: `floor0.c`'s *highest*
+address holds the allocation at line 302, which is the file's *third*
+function. Metrowerks reordered them. The ordering constraint was removed —
+it would have rejected two names that a single exact line establishes alone.
+
+What is required instead: the line must land in **exactly one** function, and
+no two addresses may claim the same one. Ambiguous addresses are skipped.
+
+### Result
+
+| | |
+|---|---|
+| stage 5d, call graph | 24 |
+| stage 5f, file and line | 29 |
+| **agreed by both routes** | **1** (`vorbis_book_init_decode`) |
+| **added to `config/symbols/`** | **52** |
+
+Each carries its origin — `callgraph`, `fileline`, or `callgraph+fileline`
+where both routes agree — so any one can be re-derived or withdrawn on its
+own (rule 15).
+
+| measure | before | after |
+|---|---|---|
+| Functions named | 868 | **920** |
+| SDK entry points the engine calls, named | 151 / 336 | **160 / 336** |
+| SDK call sites covered | 2,725 | **2,755** |
+| GX surface named | 168 / 177 | **171 / 177** |
+| **phase 0 average** | 56.6% | **57.6%** |
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

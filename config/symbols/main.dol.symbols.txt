@@ -1101,3 +1101,65 @@
 .sdata2 0x8027DFC8 0x4 CPUFifo own
 .sdata2 0x8027DFCC 0x4 GPFifo own
 .sdata2 0x8027E600 0x4 __GXData dtk-sig
+
+# --- stage 5d/5e/5f, 2026-09-19 -------------------------------------------
+# callgraph : named by the set of already-named functions it calls, then
+#             cross-checked against the SDK module its neighbours belong to.
+# fileline  : named from the source file AND LINE NUMBER the function hands
+#             to the game's tracking allocator - __FILE__ and __LINE__,
+#             compiled in. An exact source location, not a resemblance.
+# Both routes agreeing on one address is recorded as `callgraph+fileline`.
+# Sources: doldecomp/dolsdk2004 (SDK), xiph/tremor and xiph/ogg (the Vorbis
+# decoder this game embeds). No code from any of them is in this repository.
+.text 0x80005708 0x1FC __OSBootDolSimple callgraph
+.text 0x80017C80 0x64 __EXIAttach callgraph
+.text 0x8001EAC8 0x154 OSFatal callgraph
+.text 0x8001EC1C 0x684 Halt callgraph
+.text 0x80022AFC 0x58 OSInitSemaphore callgraph
+.text 0x8002913C 0x110 issueCommand callgraph
+.text 0x8002C540 0xF8 AMPushData callgraph
+.text 0x8002C638 0x220 __AMPushBuffered callgraph
+.text 0x8002F978 0xC4 ARInit callgraph
+.text 0x800382F8 0x118 __CARDExiHandler callgraph
+.text 0x80038410 0xA8 __CARDTxHandler callgraph
+.text 0x8003905C 0xAC CARDInit callgraph
+.text 0x8003B9EC 0x590 CARDCheckExAsync callgraph
+.text 0x8003C09C 0x17C CARDProbeEx callgraph
+.text 0x8003C218 0x410 DoMount callgraph
+.text 0x8003C760 0x1A0 CARDMountAsync callgraph
+.text 0x8003CBD4 0x658 __CARDFormatRegionAsync callgraph
+.text 0x80040824 0x8C GXEnableBreakPt callgraph
+.text 0x80045B84 0xC8 GXBeginDisplayList callgraph
+.text 0x80045C4C 0xD4 GXEndDisplayList callgraph
+.text 0x80046EF0 0x12C TEXGetGXTexObjFromPalette fileline
+.text 0x8004C5B4 0x16C __DEMOInitGX callgraph
+.text 0x8004D2A0 0xC0 DEMODoneRender callgraph
+.text 0x8004E63C 0x110 DEMOReInit callgraph
+.text 0x80057264 0x34C vorbis_staticbook_unpack fileline
+.text 0x80057B40 0x88 floor0_unpack fileline
+.text 0x80057BC8 0x4C floor0_free_look fileline
+.text 0x800589E0 0x4C floor1_free_look fileline
+.text 0x80058A2C 0x4C floor1_free_info fileline
+.text 0x800592DC 0x50 ogg_stream_pagein fileline
+.text 0x8005A17C 0x58 ogg_stream_check fileline
+.text 0x8005A280 0xD4 _ogg_crc_init fileline
+.text 0x8005A454 0x38 ogg_page_continued fileline
+.text 0x8005A998 0x170 _vorbis_unpack_comment fileline
+.text 0x8005AE2C 0x54 vorbis_info_clear fileline
+.text 0x8005AE80 0xD4 vorbis_info_blocksize fileline
+.text 0x8005B3D8 0x230 mapping0_unpack fileline
+.text 0x8005B634 0x1B4 mapping0_look fileline
+.text 0x8005B7E8 0xFC mapping0_free_look fileline
+.text 0x8005D404 0x198 res0_unpack fileline
+.text 0x8005D5E0 0xFC res0_free_look fileline
+.text 0x8005D6DC 0x4C res0_free_info fileline
+.text 0x8005D728 0x4B4 vorbis_book_init_decode callgraph+fileline
+.text 0x8005DCAC 0xC4 vorbis_staticbook_destroy fileline
+.text 0x8005E420 0x214 _make_words fileline
+.text 0x8005FC54 0x40C _fetch_headers fileline
+.text 0x80060284 0x358 _get_prev_page_serial fileline
+.text 0x8006196C 0x184 vorbis_dsp_clear fileline
+.text 0x80061BA8 0x23C _vds_init fileline
+.text 0x80061DE4 0x5C vorbis_block_clear fileline
+.text 0x80061E40 0xCC _vorbis_block_ripcord fileline
+.text 0x80061F0C 0xC8 _vorbis_block_alloc fileline

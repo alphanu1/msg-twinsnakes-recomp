@@ -46,10 +46,42 @@ Two things still apply:
 | `ghidra-gekko-broadway-lang` | **Apache-2.0** | tool | Gekko/Broadway processor spec. **Pinned but NOT installed** — `Ghidra-GameCube-Loader` bundles the same language, and installing both duplicates it. Kept as the upstream of record. See F3. |
 | `Ghidra-GameCube-Loader` | **Apache-2.0** | tool | DOL/REL/ISO loader **and** the Gekko/Broadway language. Built against Ghidra 12.1.3 and installed. Rebuild it inside the flatpak sandbox after any Ghidra upgrade — see `tools/ghidra.sh`. |
 | `VulkanMemoryAllocator` | **MIT** | linked | GPU allocator. Not in Arch repos, so it is fetched rather than packaged. MIT, so it constrains nothing. |
+| `dolsdk2004` | **no licence file** — see the note below | reference | `doldecomp/dolsdk2004` @ `2328b416`. A **decompilation** of the 2004-04-20 Dolphin SDK's library archives, by the doldecomp community. It is the reference for SDK *semantics* — what `__OSDispatchInterrupt` does after calling a handler, where `OSBootInfo` lives, which bit of `DVDCommandBlock::state` means busy. Every one of those was a boot-blocking bug this session (HANDOFF F61-F69). **Read for behaviour and for names; no code is copied from it**, and none is compiled into this project. |
+| `tremor` | **BSD-3-Clause** (Xiph.Org) | reference | `xiph/tremor` @ `820fb323`. **This game embeds Tremor**, Xiph's fixed-point Vorbis decoder - the console build of libvorbis. Established from the binary itself: `main.dol` contains the strings `res012.c`, `floor0.c`, `sharedbook.c` and `framing.c`, and `res012.c` is decisive because stock libvorbis renamed that file years earlier. Used to NAME those functions, by the exact `__FILE__`/`__LINE__` pair each one compiles in (stage 5f). No code copied. |
+| `ogg` | **BSD-3-Clause** (Xiph.Org) | reference | `xiph/ogg` @ `1b75110b`. The container half of the same decoder - `framing.c`, which the binary also names. Same use, same rule: names only. |
 | `libogc` | **BSD-style** (Wiedenbauer/Murphy) | reference | Public GX/OS API *shapes*. The permissive alternative to a leaked Nintendo SDK header — this is why it is here. |
 | `dolphin` | **GPL-2.0+ / GPLv3-compatible in aggregate** | **liftable** | The oracle for hardware semantics *and* now a source of code: `PixelShaderGen.cpp` (TEV) and the texture decoder are the two phase-3 lifts that matter. **Sparse checkout** — VideoCommon, HW, PowerPC, DiscIO, AudioCommon, Common. 17 MB instead of ~1 GB. |
 | `ww` (Wind Waker recomp) | **MIT** | reference | The shape of a true native port: own recompiler, GX→D3D11, TEV→HLSL. MIT, so lifting from it is actually permitted — the one reference here without a licence cost. |
 | `RecompCore` | **GPL-2.0+/GPLv3-compatible** | liftable | Dolphin fork with static-recomp core and interpreter fallback. The fallback design can now be taken, not just read. 102 MB, the largest entry. |
+
+### Why `dolsdk2004` is not a rule 9 problem, and where it is still exposed
+
+Rule 9 forbids leaked source, **including a leaked copy of Nintendo's Dolphin
+SDK**, absolutely. `dolsdk2004` is not one: its own README states it is a
+*decompilation* of the SDK's built library archives — "This repository does
+not provide a complete copy of that version of the SDK" — produced the way
+every doldecomp project is, from the shipped binaries. That is the community's
+own work, which rule 9 explicitly admits, and it is the same category as the
+MKDD and TTYD maps that `align-symbols.py` already consumes.
+
+**The honest part.** It carries no licence file, so its terms are unstated, and
+a decompilation of copyrighted libraries is not a settled thing in law however
+it was produced. Two consequences, and they are already the practice here:
+
+- **Nothing is copied from it.** Not a function body, not a struct definition,
+  not a constant table. What is taken is *understanding* — that a register is
+  at 0x4D rather than 0x4E — and the constants this project uses are written
+  from the hardware's behaviour, checked against it, and then verified against
+  the game's own code. Where a value here matches one there, it matches
+  because both describe the same silicon.
+- **Names taken from it are recorded as such.** A symbol whose only evidence
+  is a name in a decomp gets that origin in `config/symbols/`, so
+  `README.md`'s provenance claim stays checkable per symbol (rule 15).
+
+If it were ever shown to contain leaked material rather than decompiled
+material, the correct response is to stop using it and to re-derive anything
+that rests on it — which the per-symbol origins make possible rather than
+hypothetical. That is why the origins exist.
 
 ## System packages, not vendored
 

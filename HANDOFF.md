@@ -154,8 +154,10 @@ indefinitely.
 1. **The game's own panic.** It reaches `"memory.c" on line 1197` inside the
    overlay and suspends its main thread. That is now the thing between here
    and the title screen.
-2. **Name the remaining unnamed SDK entry points the engine calls** — 185 of
-   336, and each is demonstrably used.
+2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
+   336. Ordered alignment is exhausted (F72); the live routes are the call
+   graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
+   the REL, which has 17,000 functions and its own file-name strings.
 3. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
 4. **Wire the REL into the module** (F30) — the four items above. This is what
@@ -2267,6 +2269,60 @@ already gone wrong, so garbage is their expected input, not an exception.
 **The image is not committed.** A rendered frame is the game's own artwork, and
 rule 8 admits no exception for it being ours that drew it. The counts above are
 analysis evidence and are committed; the pixels are not.
+
+**F72 — ordered alignment is exhausted; two new routes are not.**
+Three reference decomps (MKDD, TTYD, Pikmin 2) run together agree on 445 names
+and add **zero** beyond the existing map. Alignment cannot name a function the
+reference games never linked, and that is where the remaining 185 SDK entry
+points live. Two replacements, both now tools:
+
+- **`tools/match-callgraph.py`** — a function's callees are a fingerprint,
+  weighted by rarity. Cross-checked against the SDK module its neighbours
+  belong to, which withdrew 5 of 27. Iterates: each confirmed name is
+  evidence next round. 24 names.
+- **`tools/attribute-by-strings.py` + `tools/match-source-order.py`** — this
+  binary hands `__FILE__` **and `__LINE__`** to a tracking allocator, so a
+  function's exact source location is compiled into it. 29 names, each from a
+  line number that lands in exactly one function.
+
+One name, `vorbis_book_init_decode`, was produced by both routes
+independently. 52 added in total; phase 0 average 56.6% -> 57.6%.
+
+**F73 — this game embeds Tremor, and the binary says so.**
+`main.dol` contains `res012.c`, `floor0.c`, `sharedbook.c`, `framing.c`.
+`res012.c` is decisive: stock libvorbis renamed that file years before this
+game shipped, and **Tremor** — Xiph's fixed-point Vorbis decoder, the build
+intended for consoles — kept it. Both are BSD-3-Clause and now recorded in
+`THIRD_PARTY.md`. Stock libvorbis was fetched first, contributed nothing once
+Tremor was in, and was removed rather than left lying in `extern/`.
+
+This also explains the audio architecture: the game decodes Ogg Vorbis in
+software on the CPU, so phase 4 needs a working Tremor path rather than only
+a DSP voice mixer.
+
+**F74 — the compiler did not emit functions in source order, and assuming it
+did would have cost two correct names.**
+`tools/match-source-order.py` was written to require address order to follow
+source order. `floor0.c` refused it: the *highest* attributed address holds
+the allocation at line 302, the file's *third* function. Metrowerks reordered
+them. The constraint was wrong and was removed; uniqueness of the containing
+function, plus injectivity, is what the evidence actually supports.
+
+Worth keeping because the failure mode was benign only by luck: an ordering
+assumption that is *nearly* true produces an alignment that is off by one for
+everything after the first discrepancy, and every name after that point is
+confidently wrong.
+
+**F75 — `dolsdk2004` is a decompilation, not leaked source, and it is now
+recorded.**
+It had been in `extern/` and load-bearing all session — every register layout
+and SDK semantic in F61-F69 came from reading it — without a row in
+`THIRD_PARTY.md`, which rule 11 requires. Its README states it decompiles the
+SDK's built library archives and "does not provide a complete copy" of the
+SDK, which is the community's own work and what rule 9 admits. It carries no
+licence file, so `THIRD_PARTY.md` now says that plainly and states the two
+practices that follow: nothing is copied from it, and names taken from it
+carry an origin so they can be withdrawn per symbol if that ever changes.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
