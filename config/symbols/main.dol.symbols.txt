@@ -1224,3 +1224,7 @@
 .text 0x80025088 0x44 PSMTX44Copy sdk2004-asm
 .text 0x800250CC 0x104 PSMTX44Concat sdk2004-asm
 .text 0x800251D0 0x64 PSMTX44Transpose sdk2004-asm
+
+# rand from its constants; PSMTX44Identity by exact body match.
+.text 0x80013E44 0x20 rand own
+.text 0x80025054 0x34 PSMTX44Identity sdk2004-asm

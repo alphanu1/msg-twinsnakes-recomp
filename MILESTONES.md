@@ -17,12 +17,12 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,072 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,075 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
 mechanical rewrite of machine code into C; decompilation in the matching-source
-sense is out of scope by design and sits at ~0%. Phase 0 progress is 65.7%. The toolchain is
+sense is out of scope by design and sits at ~0%. Phase 0 progress is 67.4%. The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -481,6 +481,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       host executed it, under whatever vertex descriptor was live rather
       than the one the list will be called under. Comparing the two FIFO
       descriptions says which is happening. **Desyncs 198 to 0.**
+- [x] **The DSP mailbox handshake** (F105). `__DSP_boot_task` waits for the
+      DSP to post 0x8071FEED and then sends a dozen messages, spinning after
+      each until the DSP takes it. A sent message is consumed as the send
+      completes, reading the mailbox's low half empties it, and unhalting the
+      DSP posts the boot message. **The handshake, not a DSP** - no microcode
+      runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **`rand` and `PSMTX44Identity`** (F106) — 472 call sites between them.
+      `rand` is identifiable from its constants alone: 1103515245 and 12345,
+      the ISO C standard's own example generator. **Call sites covered 76.1%
+      to 82.8%** on two names.
 - [x] **The audio stack initialises** (F104). AR, ARQ, AI, AX and DSP all
       report in. Two walls, each one register: the ARAM ready bit at
       `0xCC005016` bit 0, which `__ARChecksize` spins on, and the audio

@@ -34,6 +34,13 @@
 #define MMIO_PI        0xCC003000u   /* processor interface */
 #define MMIO_MI        0xCC004000u   /* memory interface */
 #define MMIO_DSP       0xCC005000u   /* DSP and ARAM */
+/* The two mailboxes, from the SDK's own register indices: __DSPRegs[0..3].
+ * The top bit of each HIGH half is the "full" flag - set by whoever writes
+ * the message, cleared by whoever takes it. */
+#define DSP_MAIL_TO_HI    0x00u   /* CPU -> DSP */
+#define DSP_MAIL_TO_LO    0x02u
+#define DSP_MAIL_FROM_HI  0x04u   /* DSP -> CPU */
+#define DSP_MAIL_FROM_LO  0x06u
 #define MMIO_DI        0xCC006000u   /* disc interface */
 #define MMIO_SI        0xCC006400u   /* serial: controllers */
 #define MMIO_EXI       0xCC006800u   /* external: memory cards */
@@ -74,6 +81,10 @@ typedef struct MgsMmio {
      * rate the control register currently selects, which is the thing
      * __AI_SRC_INIT is trying to measure. */
     uint64_t ai_ticks;
+
+    /* Set when the DSP has been told to initialise and is waiting to be
+     * unhalted, at which point it posts its boot message. */
+    int      dsp_booting;
 
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when

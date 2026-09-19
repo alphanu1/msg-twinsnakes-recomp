@@ -142,6 +142,19 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
         cr[1] = (uint8_t)v;
     }
 
+    /* READING THE LOW HALF OF THE DSP's MAILBOX EMPTIES IT.
+     *
+     * `DSPReadMailFromDSP` reads both halves and the hardware clears the
+     * "mail waiting" bit as it does, so the next `DSPCheckMailFromDSP`
+     * returns zero. Leaving it set makes the same message readable forever,
+     * and the SDK's boot handshake is a sequence of distinct messages - it
+     * would take the first one for all of them. */
+    if (addr >= MMIO_DSP + DSP_MAIL_FROM_LO &&
+        addr < MMIO_DSP + DSP_MAIL_FROM_LO + 2u) {
+        uint8_t* hi = at(m, MMIO_DSP + DSP_MAIL_FROM_HI);
+        hi[0] = (uint8_t)(hi[0] & 0x7Fu);
+    }
+
     /* The half-line counter is the one register that must MOVE. The SDK's
      * retrace wait reads it until it passes a threshold, so a constant - any
      * constant, including a plausible one - spins forever. */
@@ -308,6 +321,43 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     if (!p) return;
     for (i = 0; i < size; ++i)
         p[i] = (uint8_t)(value >> (8u * (size - 1u - i)));
+
+    /* THE DSP CONSUMES A MESSAGE THE MOMENT IT IS SENT.
+     *
+     * `DSPSendMailToDSP` writes the high half - top bit set, which is the
+     * "full" flag - then the low half, and the caller then spins on
+     * `DSPCheckMailToDSP` until the DSP has taken it. Nothing here is going
+     * to take it, so the flag is cleared as the send completes. The SDK's
+     * boot handshake is a dozen of these in a row and stops at the first.
+     */
+    if (addr >= MMIO_DSP + DSP_MAIL_TO_LO &&
+        addr < MMIO_DSP + DSP_MAIL_TO_LO + 2u) {
+        uint8_t* hi = &m->regs[(MMIO_DSP + DSP_MAIL_TO_HI) - MMIO_BASE];
+        hi[0] = (uint8_t)(hi[0] & 0x7Fu);
+    }
+
+    /* UNHALTING THE DSP MAKES IT ANNOUNCE ITSELF.
+     *
+     * `DSPInit` sets bit 0x800 and then clears the halt bit, and the real
+     * DSP runs its boot ROM and posts 0x8071FEED - which `__DSP_boot_task`
+     * waits for and asserts on. Without it the boot spins reading
+     * 0xCC005004 forever, which is where 90,000,000 steps ended up.
+     *
+     * This is the handshake and NOT a DSP. No microcode runs; the messages
+     * that follow are accepted and dropped. That is enough to get past the
+     * bring-up and no further, and phase 4 is where it becomes a real
+     * coprocessor. */
+    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
+        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        uint32_t v = ((uint32_t)cr[0] << 8) | cr[1];
+        if (v & 0x800u) m->dsp_booting = 1;
+        if (m->dsp_booting && !(v & 0x4u)) {
+            uint8_t* mb = &m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE];
+            mb[0] = 0x80u; mb[1] = 0x71u;   /* 0x8071, top bit = mail waiting */
+            mb[2] = 0xFEu; mb[3] = 0xEDu;   /* 0xFEED */
+            m->dsp_booting = 0;
+        }
+    }
 
     /* WRITING THE LOW HALF OF THE LENGTH STARTS AN ARAM TRANSFER. That is
      * the SDK's own sequence: address, address, length-high with the

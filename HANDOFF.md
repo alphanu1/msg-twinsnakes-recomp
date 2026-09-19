@@ -21,25 +21,25 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 65.7%
+## PHASE 0 PROGRESS — 67.4%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 951 / 18,485 | 5.1% |
+| Functions named | 954 / 18,485 | 5.2% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 171 / 336 | 50.9% |
-| SDK call sites covered | 5,385 / 7,078 | 76.1% |
-| GX surface named | 171 / 177 | **96.6%** |
-| **Average of the five** | | **65.7%** |
+| SDK entry points the engine calls, named | 174 / 336 | 51.8% |
+| SDK call sites covered | 5,858 / 7,078 | 82.8% |
+| GX surface named | 172 / 177 | **97.2%** |
+| **Average of the five** | | **67.4%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
 and neither is the answer: the engine is translated mechanically, so naming it
 buys debugging rather than correctness, while boundaries are what the
 recompiler actually consumes. **The row that governs the remaining work is the
-SDK boundary** — now 50.9% of entry points and 76.1% of call sites.
+SDK boundary** — now 51.8% of entry points and 82.8% of call sites.
 
 ---
 
@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F104**. The two worth reading first are
+Findings from this session are **F90-F106**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3112,6 +3112,59 @@ have made the game measure a clock about ten times too fast.
 
 and runs 12,000,000 steps to its limit without spinning, with 0 desyncs. It
 had not passed 2.5 million before.
+
+---
+
+**F105 — the DSP mailbox handshake, and where the boot sits now.** After the
+audio hardware came up the boot spun 90,000,000 steps at `fn_800376D4`, which
+is four instructions: read `0xCC005004`, extract bit 0x8000, return. That is
+`DSPCheckMailFromDSP`, and its caller loops on it.
+
+The SDK's `__DSP_boot_task` waits for the DSP to post **0x8071FEED** - it
+asserts on any other value - and then sends a dozen messages, spinning on
+`DSPCheckMailToDSP` after each until the DSP takes it. Three mechanics, all
+in the mailbox registers (`__DSPRegs[0..3]`, top bit of each high half being
+the "full" flag):
+
+- a message the CPU sends is consumed **as the send completes**, because
+  nothing here is going to consume it;
+- reading the low half of the DSP's mailbox **empties it**, so the next check
+  returns zero - leaving it set makes one message readable forever, and the
+  handshake is a sequence of distinct ones;
+- unhalting the DSP (`DSPInit` sets 0x800, then clears the halt bit) posts
+  0x8071FEED, which is what the real boot ROM does.
+
+**This is the handshake and not a DSP.** No microcode runs and the messages
+after the first are accepted and dropped. It is enough to get past the
+bring-up and no further; phase 4 is where it becomes a coprocessor.
+
+**Where the boot is now:** 60,000,000 steps, no spin, 0 desyncs, cycling
+through the OS scheduler - `SelectThread`, `OSRestoreInterrupts` and
+neighbours. Frames stay at 55, disc reads at 3 and GX at 7,235 commands, so
+it is running threads without progressing. That is the next question, and it
+should be asked with a profile rather than by reading code (F92, F99).
+
+---
+
+**F106 — two names worth 472 call sites between them.**
+
+`fn_80013E44` is **`rand`**, at 303 call sites the most-called unnamed
+function in the binary. It multiplies a seed by 0x41C64E6D, adds 0x3039 and
+returns `(seed >> 16) & 0x7FFF`. Those are 1103515245 and 12345 - the linear
+congruential generator from the ISO C standard's own example - and the shift
+gives exactly the RAND_MAX range. It sits between `qsort` and `strchr`, which
+is where the Metrowerks library puts it.
+
+`fn_80025054` is **`PSMTX44Identity`**, 169 call sites. It matches the SDK's
+body instruction for instruction and offset for offset - `stfs` on the
+diagonal at 0x00, 0x14, 0x28, 0x3C and paired-single zero stores between -
+and sits exactly where `mtx44.c`'s source order puts it. The assembly matcher
+missed it because it is written as a C function wrapping an `asm` block
+rather than as a whole `asm` function.
+
+**Call sites covered 76.1% to 82.8%**, phase 0 average 65.9% to 67.4%. Two
+names. The function count barely moved, which is the point of measuring call
+sites at all.
 
 ---
 
