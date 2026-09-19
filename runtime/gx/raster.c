@@ -335,6 +335,27 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (!r || !r->efb) return;
     ++r->submitted;
 
+    /* WHICH VIEWPORTS ARE IN USE, kept as a small set of distinct ones.
+     *
+     * Every line of text on the memory-card screen stops at x=207-209 while
+     * other geometry reaches 442, and the scissor, the depth buffer, the
+     * display list and the texture path have each been ruled out. A viewport
+     * is the remaining thing that maps clip space onto pixels differently for
+     * different passes, so what matters is whether the 2D pass sets its own -
+     * and a histogram of distinct viewports answers that in one run. */
+    {
+        unsigned k;
+        uint32_t half_w = gx->viewport[0], ox = gx->viewport[3];
+        for (k = 0; k < r->vp_n; ++k)
+            if (r->vp_halfw[k] == half_w && r->vp_ox[k] == ox) break;
+        if (k == r->vp_n && r->vp_n < 8u) {
+            r->vp_halfw[r->vp_n] = half_w;
+            r->vp_ox[r->vp_n] = ox;
+            r->vp_n++;
+        }
+        if (k < 8u) ++r->vp_hits[k];
+    }
+
     /* STOP DRAWING ONCE THE HOST HAS BEEN ASKED TO QUIT.
      *
      * Rasterisation happens INSIDE the guest's dispatch call: the game writes

@@ -1304,6 +1304,22 @@ int main(int argc, char** argv)
                                                >= 0x81800000u
                                                ? "   <-- past MEM1" : "");
                             }
+                            {
+                                unsigned k;
+                                printf("  viewports in use, %u distinct "
+                                       "(half-width, x-origin, triangles):\n",
+                                       rs->vp_n);
+                                for (k = 0; k < rs->vp_n; ++k) {
+                                    float hw, ox;
+                                    memcpy(&hw, &rs->vp_halfw[k], 4);
+                                    memcpy(&ox, &rs->vp_ox[k], 4);
+                                    printf("    half-width %8.2f  x-origin %8.2f"
+                                           "  -> x range %7.1f .. %7.1f   x%llu\n",
+                                           hw, ox, ox - 342.0f - hw,
+                                           ox - 342.0f + hw,
+                                           (unsigned long long)rs->vp_hits[k]);
+                                }
+                            }
                             printf("  texture refusals: %llu size, %llu texels, "
                                    "%llu palette, %llu alloc, %llu decode\n",
                                    (unsigned long long)rs->tex.refused_size,

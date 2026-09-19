@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F142**. The two worth reading first are
+Findings from this session are **F90-F143**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -178,7 +178,13 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
+3. **Is the truncated text ever EMITTED? (F143).** Every transform-stage
+   explanation is now excluded by measurement — scissor, depth, display-list
+   size, textures, viewport. Dump the x-extent of every textured triangle
+   drawn under the 2D viewport (half-width 256). If nothing exists past
+   x=208, the engine never emits those glyphs and the cause is upstream of
+   GX, exactly as it was for the font pointer in F142.
+4. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
    now 14,356 with zero desyncs. The conclusion that the game deliberately
@@ -186,22 +192,22 @@ renderer.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
-5. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+6. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-6. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+7. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-7. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+8. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-8. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+9. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -212,21 +218,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-9. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+10. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-10. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+11. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-11. **The second window is the performance floor.** The whole engine runs at
+12. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-12. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+13. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-13. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+14. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -4877,6 +4883,49 @@ rasteriser for them. Since the lines have different character counts but the
 same pixel cut, it is spatial rather than a count limit. **Next: trace the
 viewport and projection the 2D pass sets**, since the white bars at x=442
 plainly use different transform state and are unaffected.
+
+---
+
+**F143 — the viewports are fine, and the EFB is wider than the picture.**
+Next suspect for the truncated text was the viewport, since it is the
+remaining thing that maps clip space to pixels differently per pass. A
+histogram of distinct viewports across a boot:
+
+| half-width | x-origin | x range | triangles |
+|---|---|---|---|
+| 0.00 | 854 | 512 .. 512 | 2 |
+| 256.00 | 598 | **0 .. 512** | 13,554 |
+| 32.00 | 886 | **512 .. 576** | **3,860,150** |
+
+The third looked alarming — 3.86 million triangles, almost everything, aimed
+at a 64-pixel strip past the right edge of a 512-wide screen — and it is not
+a fault. **The EFB is 640x528; 512x448 is only the COPY size.** That strip is
+the render-to-texture scratch area, which is exactly what the 1,883 64x64 RTT
+copies are reading back. The apparent contradiction (only 2 triangles clipped)
+was the thing that gave it away: if they were really off-screen, the scissor
+would have rejected all of them.
+
+So the viewport is ruled out too, and a useful fact falls out: **most of this
+game's drawing is render-to-texture**, 3.86M triangles against 13,554 for the
+main scene.
+
+**And the truncation is now measured to be independent of the texture fix.**
+The frame before and after F142 is byte-identical — 10,393 lit pixels, same
+rightmost-x histogram (`207: 37 rows, 271: 16, 208: 16, 209: 7`). F142 raised
+textured triangles across the run from 14,356 to 17,320, but changed nothing
+about this screen.
+
+**Ruled out for the truncation, all by measurement:** the scissor box, the
+depth buffer, display-list size, the texture path, and now the viewport.
+
+**What is left.** The text lines start at x≈88 and stop at x≈208, so a run of
+about 120 pixels, and they hold different character counts (13, 16, 16, 13) —
+so it is a width limit, not a glyph-count limit. Since every transform-stage
+explanation is now excluded, the next place to look is **whether the geometry
+is emitted at all**: count textured triangles per frame against glyphs
+expected, and dump the x-extent of every textured triangle in the 2D viewport
+(half-width 256). If none exists past x=208, the engine is not emitting them
+and the cause is upstream of GX entirely — as it was for the font pointer.
 
 ---
 
