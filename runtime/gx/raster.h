@@ -66,6 +66,7 @@ typedef struct MgsGxRaster {
     uint64_t covered;         /* pixels inside a triangle, before depth */
     uint64_t depth_failed;    /* ...of those, rejected by the depth test */
     uint64_t tex_preloaded;   /* draws whose texture was preloaded into TMEM */
+    uint64_t tex_second_window; /* image address resolved into the overlay window */
     int      trace_preload;   /* MGS_TRACE_PRELOAD */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */

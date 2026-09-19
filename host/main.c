@@ -844,6 +844,31 @@ static void find_inflate_error(const GuestMemory* mem)
     }
 }
 
+/* GXInitTexObj's arguments, at the call.
+ *
+ * The tex obj at 0x7F50068C ends up holding an image base 55.6 MB into a 24 MB
+ * machine, and the write watch shows GXInitTexObj storing it faithfully - so
+ * the bad value arrives as its `image_ptr` argument and the fault is in the
+ * caller. This is a cross-module call (engine -> DOL), which is the case pc
+ * hooks catch reliably.
+ *
+ * Only the calls that produce a bad pointer are printed: the game initialises
+ * many texture objects and the interesting one is rare. */
+static void trace_init_texobj(void* cpu, const uint32_t* gpr)
+{
+    uint32_t obj = gpr[3], img = gpr[4];
+    static unsigned shown;
+
+    if (img >= 0x80000000u && img < 0x81800000u) return;   /* ordinary, skip */
+    if (shown >= 8u) return;
+    ++shown;
+    fprintf(stderr,
+            "[texobj] GXInitTexObj(obj=0x%08X, image=0x%08X, %ux%u, fmt=0x%X)"
+            "  called from lr 0x%08X%s\n",
+            obj, img, gpr[5], gpr[6], gpr[7], mgs_module_lr(cpu),
+            img >= 0x81800000u ? "   <-- image pointer is past MEM1" : "");
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -1040,6 +1065,12 @@ int main(int argc, char** argv)
                      * is one of the early ones and the decision has to be
                      * made as each copy happens. */
                     mgs_display_set_best_path(getenv("MGS_SAVE_BEST"));
+                    {
+                        const char* ww = getenv("MGS_WATCH_WRITE");
+                        if (ww)
+                            mgs_host_set_write_watch(
+                                (uint32_t)strtoul(ww, NULL, 0));
+                    }
                     mgs_module_set_display(display_pump);
                     mgs_module_set_frame(frame_pump);
                     mgs_module_set_progress(progress_counter);
@@ -1089,6 +1120,8 @@ int main(int argc, char** argv)
                         }
                         if (getenv("MGS_TRACE_HUFT"))
                             mgs_module_trace_calls4(0x7F0F95CCu, trace_huft_result);
+                        if (getenv("MGS_TRACE_TEXOBJ"))
+                            mgs_module_trace_calls(0x800439E8u, trace_init_texobj);
                         if (getenv("MGS_TRACE_LOOP"))
                             mgs_module_trace_calls3(0x7F0F9400u, trace_stuck_loop);
                         if (getenv("MGS_TRACE_THREADS")) {

@@ -195,10 +195,50 @@ static const MgsTexture* bind_texture(MgsGxRaster* r, MgsGx* gx, unsigned map)
         }
     }
 
-    /* The image address is in 32-byte units, like everything else here. */
-    return mgs_tex_get(&r->tex, gx->mem,
-                       0x80000000u | ((i3 & 0x00FFFFFFu) << 5),
-                       format, width, height, tlut_addr, tlut_format);
+    /* THE IMAGE ADDRESS, AND THE SECOND WINDOW IT MAY HAVE COME FROM.
+     *
+     * The address is in 32-byte units. Reconstructing it as MEM1 is right for
+     * every texture the game allocates - but not for one it points at inside
+     * its own static data, because the engine overlay does not live in MEM1
+     * here. It lives in the second address window at 0x7E000000, which is not
+     * an address a GameCube has.
+     *
+     * `GXInitTexObj` converts its pointer to a physical address the way the
+     * hardware does, by masking to 26 bits, and stores that shifted down by
+     * five. For a MEM1 pointer that is exactly right. For an overlay pointer
+     * it silently produces a physical address that means nothing:
+     *
+     *     0x7F5006C0 & 0x03FFFFFF = 0x035006C0,  >> 5 = 0x1A8036
+     *
+     * and rebuilding THAT as MEM1 gives 0x835006C0 - 55.6 MB into a 24 MB
+     * machine. That is the font texture, refused 2,964 times, and it is why
+     * every line of text on the memory-card screen stops mid-word.
+     *
+     * The information is not lost, only ambiguous, and the ranges resolve it.
+     * A masked-to-26-bits address that cannot be in MEM1 must have come from
+     * the window above it, and `0x7C000000 | phys` inverts the mask exactly
+     * for every address in [0x7E000000, 0x80000000). MEM1 is tried first, so
+     * an ordinary texture is unaffected.
+     *
+     * This is a consequence of where the overlay is placed, not a fault in
+     * the game, and it will stop mattering if the overlay ever moves into
+     * MEM1 proper. Until then the reconstruction belongs here, where the
+     * address is turned back into a pointer. */
+    {
+        uint32_t phys = (i3 & 0x00FFFFFFu) << 5;
+        uint32_t addr = 0x80000000u | phys;
+
+        if (addr >= 0x80000000u + GUEST_RAM_SIZE) {
+            uint32_t alt = 0x7C000000u | phys;
+            if (alt >= GUEST_VMEM_BASE &&
+                alt <  GUEST_VMEM_BASE + GUEST_VMEM_SIZE) {
+                addr = alt;
+                ++r->tex_second_window;
+            }
+        }
+        return mgs_tex_get(&r->tex, gx->mem, addr,
+                           format, width, height, tlut_addr, tlut_format);
+    }
 }
 
 /* Which texture map and coordinate set a stage uses. Two stages share one

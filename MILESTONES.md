@@ -592,13 +592,22 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [x] **The boot reaches an interactive menu** (F139). The game's "Warning —
       No Memory Card" screen, with Retry and Continue without saving. It waits
       there because that is what the game does with no card and no input.
-- [ ] **The font texture at `0x835006C0`** (F139). 2,622 of 2,964 texture
-      refusals are ONE texture — format 0x6 (RGBA8) 8x8 — at an address past
-      MEM1's 24 MB. It truncates every line of text on that screen
-      mid-word. Either the BP texture address is reconstructed wrongly, or the
-      glyphs are preloaded into TMEM and the register holds a TMEM offset.
-      The scissor and display-list truncation were both tested and are not
-      the cause. This is the whole visible gap.
+- [x] **Textures in the second window now resolve: 2,964 refusals to ZERO**
+      (F142). The engine overlay lives at `0x7E000000`, which is not an
+      address a GameCube has, so the SDK's cached-to-physical arithmetic
+      (mask to 26 bits, shift down 5) turns a pointer into its own static data
+      into a physical address that means nothing. The information is
+      ambiguous rather than lost: an address that cannot be in MEM1 came from
+      the window above it, and `0x7C000000 | phys` inverts the mask exactly.
+      **Textured triangles 14,356 to 17,320, cache misses 2,977 to 14.**
+      A general hazard of the second-window design, worth looking for
+      elsewhere.
+- [ ] **The truncated text is a SEPARATE bug** (F142). Fixing the textures did
+      not move it: every line still stops at x=207-209. Ruled out by
+      measurement — the scissor box, display-list truncation, the texture
+      path, and the depth buffer. The glyphs past that point are never drawn
+      at all. Next: the viewport and projection the 2D pass sets, since the
+      white bars at x=442 use different transform state and are unaffected.
 - [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
       million times in a long run. The probe does resolve — EXT is clear, so
       `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own

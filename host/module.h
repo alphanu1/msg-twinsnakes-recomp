@@ -106,6 +106,7 @@ unsigned mgs_display_best_w(void);
 unsigned mgs_display_best_h(void);
 uint64_t mgs_host_vmem_reads(void);
 uint64_t mgs_host_vmem_writes(void);
+void mgs_host_set_write_watch(uint32_t addr);
 uint32_t mgs_host_vmem_lo(void);
 uint32_t mgs_host_vmem_hi(void);
 uint32_t mgs_module_msr(const void* cpu);

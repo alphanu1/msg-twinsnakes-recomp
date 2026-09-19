@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F141**. The two worth reading first are
+Findings from this session are **F90-F142**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -4815,6 +4815,68 @@ never fetched, not a renderer that cannot draw it.
 overlay, so a watch on that word names the function that fills the tex obj in
 one run — and whether it is a load path that failed or a relocation step that
 was skipped.
+
+---
+
+**F142 — the engine's own static data is not at a GameCube address, and the
+SDK's pointer arithmetic breaks on it.** Tracing `GXInitTexObj`'s arguments at
+the call site gives the whole chain in one line:
+
+```
+[texobj] GXInitTexObj(obj=0x7F500680, image=0x7F5006C0, 8x8, fmt=0x6)
+         called from REL 0x7F3FB6D8
+```
+
+The image pointer is `0x7F5006C0` — **in the second address window at
+0x7E000000**, where the engine overlay lives. Nothing is corrupt. The SDK
+converts a pointer to a physical address the way the hardware does, by masking
+to 26 bits, and stores it shifted down by five:
+
+```
+0x7F5006C0 & 0x03FFFFFF = 0x035006C0,  >> 5 = 0x1A8036
+```
+
+which is exactly the value in the texture object. Rebuilt as MEM1 that is
+`0x835006C0` — 55.6 MB into a 24 MB machine, and refused 2,964 times.
+
+**So the fault is where we put the overlay, not anything the game did.** Any
+pointer into the second window that passes through SDK address arithmetic
+comes out meaningless, because `0x7E000000` is not an address a GameCube has.
+This is a general hazard of the second-window design, not a texture-specific
+one, and it is worth looking for elsewhere.
+
+**The information is ambiguous, not lost.** A masked-to-26-bits address that
+cannot be in MEM1 must have come from the window above it, and
+`0x7C000000 | phys` inverts the mask exactly across
+`[0x7E000000, 0x80000000)`. MEM1 is tried first, so ordinary textures are
+untouched.
+
+| | before | after |
+|---|---|---|
+| texture refusals | 2,964 | **0** |
+| textured triangles | 14,356 | **17,320** |
+| texture cache misses | 2,977 | **14** |
+| textures decoded | 13 | 14 |
+
+**AND IT DID NOT FIX THE TRUNCATED TEXT.** The memory-card screen still cuts
+every line at x=207-209. I expected the font texture to be the cause and it is
+not — the fix is real and worth keeping, but the truncation is a separate bug
+that this leaves untouched.
+
+**What is now ruled out for the truncation**, each by measurement:
+
+- the scissor box (`MGS_NO_SCISSOR` leaves the cut identical);
+- display-list truncation (rounding the size up costs 231 desyncs and changes
+  no geometry);
+- the texture path (0 refusals now, cut unchanged);
+- the depth buffer (forcing every pixel through gives 10x the lit pixels and
+  the same best frame).
+
+The glyphs past x=208 are not drawn at all — no geometry reaches the
+rasteriser for them. Since the lines have different character counts but the
+same pixel cut, it is spatial rather than a count limit. **Next: trace the
+viewport and projection the 2D pass sets**, since the white bars at x=442
+plainly use different transform state and are unaffected.
 
 ---
 

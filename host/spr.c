@@ -281,10 +281,36 @@ static uint64_t host_external_read(void* cpu, uint32_t addr, uint8_t size)
     return mgs_mmio_read(&s_mmio, addr, size);
 }
 
+/* MGS_WATCH_WRITE=<hex>: who writes this address?
+ *
+ * The font's GXTexObj is a static global in the overlay at 0x7F50068C, and it
+ * holds an address 55.6 MB into a 24 MB machine. Every write to the overlay
+ * window comes through here, so this is the one place that can name the
+ * writer - and `lr` at the moment of the store is the function that did it.
+ *
+ * Only the first few are printed. A static that is written once needs one
+ * line; a static written every frame needs to be recognised as such and not
+ * buried.
+ */
+static uint32_t s_watch_addr;
+static unsigned s_watch_hits;
+
+void mgs_host_set_write_watch(uint32_t addr);
+void mgs_host_set_write_watch(uint32_t addr) { s_watch_addr = addr; }
+
 static void host_external_write(void* cpu, uint32_t addr, uint64_t value, uint8_t size)
 {
     uint8_t* p;
     unsigned i;
+
+    if (s_watch_addr && addr <= s_watch_addr &&
+        s_watch_addr < addr + size && s_watch_hits < 16u) {
+        ++s_watch_hits;
+        fprintf(stderr, "[watch] write #%u to 0x%08X: value 0x%llX size %u  "
+                        "from lr 0x%08X  pc 0x%08X\n",
+                s_watch_hits, addr, (unsigned long long)value, size,
+                cpu ? mgs_module_lr(cpu) : 0u, mgs_module_last_pc);
+    }
 
     p = vmem_ptr(addr, size);
     if (p) {
