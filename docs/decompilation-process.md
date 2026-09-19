@@ -203,6 +203,9 @@ is committed, so the derivation can be re-run and checked.
 
 ## Stage 5b — Match inline-assembly bodies · **DONE**
 
+*(Second pass, 2026-09-19 — the first pass read a quarter of the available
+assembly. See below.)*
+
 **In:** our disassembly + `doldecomp/dolsdk2004` sources.
 **Out:** 3 symbols, origin `sdk2004-asm`.
 
@@ -323,6 +326,57 @@ and that is measure 3.
 
 **Measure 2 is the one that unblocks the build.** The recompiler consumes
 function boundaries, and those are complete for both modules.
+
+## Stage 5b, second pass — all of the SDK's assembly · **DONE**
+
+**In:** our disassembly + `doldecomp/dolsdk2004`. **Out:** 12 matches, 3 new.
+
+```sh
+python3 tools/match-sdk-asm.py --sdk extern/dolsdk2004/src/*/*.c \
+    --asm build/phase0/out/asm/auto_01_800055E0_text.s \
+    --boundaries build/phase0/main.symbols.txt --out asmmatch.txt
+```
+
+The first pass handled `void f() { asm { ... } }` and found **33** signatures.
+The decomp writes nearly all of its assembly as `asm void PSVECAdd(...) { }` —
+the whole function — and there are **146**. Both forms gives **113** usable.
+
+**Offsets cannot be compared across the two sides.** The decomp writes them
+symbolically (`psq_l f2, Vec.x(a), 0, 0`); our disassembly has the resolved
+numbers. Including them made every signature fail — the first attempt after
+widening the parser produced **zero** matches.
+
+**The quantised W bit replaces them and carries the distinction they were for.**
+`psq_l` with W=0 moves a pair, W=1 moves one. A three-component vector loads
+2+1; a four-component quaternion loads 2+2. Their mnemonic sequences are
+otherwise identical, so without W the matcher refuses both as non-unique and
+with mnemonics alone it names one of them wrong.
+
+| | |
+|---|---|
+| exact full-sequence matches | 12 |
+| already named — independent confirmation | 9 |
+| **new** | **3** |
+
+The three are `PSQUATAdd`, `PSQUATSubtract`, `PSQUATScale` — at 913, 697 and
+687 call sites, the three most-called unnamed functions in the binary.
+
+| measure | before | after |
+|---|---|---|
+| SDK call sites covered | 2,764 / 7,078 (39.1%) | **5,061 / 7,078 (71.5%)** |
+| phase 0 average | 57.9% | **64.6%** |
+
+**Three names moved call-site coverage by 32 points.** Counting *functions*
+named treats a leaf called 900 times the same as one called once; the
+call-site measure is the one that says what the engine actually depends on.
+
+### Where the call graph stops
+
+Of the 172 SDK entry points still unnamed when this was measured: 43 have a
+named callee, 14 a named caller, 52 either — and **50 have no calls and no
+callers at all**. Stage 5d has a hard ceiling and has reached it. A leaf is
+named by its instruction sequence (this stage) or by a string it references
+(stage 5e), and those are the two with room left.
 
 ## Stage 5d — Name by call graph · **DONE**
 

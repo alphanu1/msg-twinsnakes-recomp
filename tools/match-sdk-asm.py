@@ -24,8 +24,28 @@ FUNC = re.compile(
     re.M | re.S)
 ASM = re.compile(r'asm\s*\{(.*?)\}', re.S)
 
-def opcodes(text):
-    """Opcode mnemonics PLUS memory offsets, in order.
+# A WHOLE function written in assembly: `asm void PSVECAdd(...) { ... }`.
+#
+# This is how the SDK decomp writes nearly all of its assembly - 146 of them -
+# and handling only the inner `asm { }` block form saw 33. That mattered more
+# than the count suggests: whole-assembly functions are exactly the small
+# leaves that call nothing and are called by nothing, so the call graph cannot
+# reach them, and their instruction sequence is the only signature they have.
+ASM_FUNC = re.compile(
+    r'^\s*(?:static\s+)?asm\s+[\w\*]+\s+\**(\w+)\s*\([^;{]*\)\s*\{(.*?)^\}',
+    re.M | re.S)
+
+def opcodes(text, numeric_offsets=True):
+    """Opcode mnemonics, the quantised W bit, and optionally memory offsets.
+
+    OFFSETS CANNOT BE COMPARED ACROSS THE TWO SIDES. The SDK decomp writes
+    them symbolically - `psq_l f2, Vec.x(a), 0, 0` - because the Metrowerks
+    assembler resolves them from the struct; our disassembly has the resolved
+    numbers. Including them makes every signature fail to match rather than
+    making it stricter.
+
+    What replaces them is the W bit, which IS comparable and carries the
+    distinction the offsets were there for.
 
     Mnemonics alone are not a signature. PSVECDotProduct and
     PSQUATDotProduct have byte-identical mnemonic sequences - psq_l, psq_l,
@@ -43,20 +63,39 @@ def opcodes(text):
         if not m:
             continue
         offs = re.findall(r'(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(', line)
-        out.append(m.group(1) + ('@' + ','.join(str(int(o, 0)) for o in offs) if offs else ''))
+        tag = m.group(1)
+
+        # The quantised load/store's W BIT, which says whether it moves one
+        # value or two. It is the difference between a three-component vector
+        # and a four-component quaternion, and those otherwise have identical
+        # mnemonic sequences - psq_l, psq_l, ps_add, psq_st twice over. The
+        # SDK writes its offsets symbolically (`Vec.x(a)`), so the offsets
+        # cannot be compared across the two sides; the W bit can, and it is
+        # the operand that actually distinguishes them.
+        if tag.startswith('psq_'):
+            ops = line.split(',')
+            if len(ops) >= 3:
+                w = ops[-2].strip()
+                if re.fullmatch(r'[01]', w):
+                    tag += '/w' + w
+
+        if numeric_offsets and offs:
+            tag += '@' + ','.join(str(int(o, 0)) for o in offs)
+        out.append(tag)
     return out
 
 def load_sdk(paths):
     sigs = {}
     for p in paths:
         src = open(p, errors='ignore').read()
-        for name, body in FUNC.findall(src):
-            blocks = ASM.findall(body)
+        bodies = [(n, ASM.findall(b)) for n, b in FUNC.findall(src)]
+        bodies += [(n, [b]) for n, b in ASM_FUNC.findall(src)]
+        for name, blocks in bodies:
             if not blocks:
                 continue
             ops = []
             for b in blocks:
-                ops += opcodes(b)
+                ops += opcodes(b, numeric_offsets=False)
             if len(ops) >= 4:                 # too short to be distinctive
                 sigs.setdefault(tuple(ops), []).append(name)
     return sigs
@@ -76,16 +115,20 @@ def load_ours(path):
             continue
         if cur is None:
             continue
-        m = re.match(r'^/\* \S+ \S+ [0-9A-F ]+\*/\s+([a-z][a-z0-9_.]*)(.*)', line)
+        m = re.match(r'^/\* \S+ \S+ [0-9A-F ]+\*/\s+(.*)', line)
         if m:
-            offs = re.findall(r'(-?(?:0x[0-9A-Fa-f]+|\d+))\s*\(', m.group(2))
-            ops.append(m.group(1) + ('@' + ','.join(str(int(o, 0)) for o in offs) if offs else ''))
+            # Same extraction as the SDK side, and without numeric offsets,
+            # so the two signatures are built the same way from both.
+            ops += opcodes(m.group(1), numeric_offsets=False)
     return out
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--sdk', nargs='+', required=True, help='SDK decomp .c files')
     ap.add_argument('--asm', required=True, help='our disassembly (.s)')
+    ap.add_argument('--boundaries',
+                    help='dtk map of every function and its size, so the '
+                         'output carries a size the merge can check against')
     ap.add_argument('--out')
     a = ap.parse_args()
 
@@ -120,10 +163,23 @@ def main():
     for fn, n in sorted(hits.items()):
         print(f"  {fn} -> {n}")
     if a.out and hits:
+        # A size of zero is not a placeholder - the merge checks the size
+        # against dtk's recovered boundary, and one that does not match means
+        # the candidate is not the function it claims to be. Emitting zero
+        # makes every match fail that check for the wrong reason.
+        bounds = {}
+        if a.boundaries:
+            for line in open(a.boundaries):
+                m = re.match(r'^\S+ = (\.\w+):0x([0-9A-Fa-f]+); '
+                             r'// type:function size:0x([0-9A-Fa-f]+)', line)
+                if m:
+                    bounds[int(m.group(2), 16)] = int(m.group(3), 16)
+
         with open(a.out, 'w') as f:
             for fn, n in sorted(hits.items()):
-                addr = fn.split('_')[-1]
-                f.write(f".text 0x{addr.upper()} 0x0 {n} sdk2004-asm\n")
+                addr = int(fn.split('_')[-1], 16)
+                f.write(f".text 0x{addr:08X} 0x{bounds.get(addr, 0):X} "
+                        f"{n} sdk2004-asm\n")
         print(f"wrote {a.out}")
 
 if __name__ == '__main__':

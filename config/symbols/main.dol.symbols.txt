@@ -1191,3 +1191,8 @@
 
 # stage 5d, iteration 3: each confirmed name is evidence for the next pass
 .text 0x80032930 0x58 __AXDSPResumeCallback callgraph
+
+# stage 5b, second pass: whole-assembly functions (146 in the decomp, not only the 33 inner asm{} blocks) matched on mnemonics plus the quantised W bit - which is what separates a three-component vector from a four-component quaternion, and named the three most-called unnamed functions in the game
+.text 0x80025800 0x24 PSQUATAdd sdk2004-asm
+.text 0x80025824 0x24 PSQUATSubtract sdk2004-asm
+.text 0x80025848 0x1C PSQUATScale sdk2004-asm

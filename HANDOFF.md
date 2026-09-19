@@ -2455,5 +2455,51 @@ the same name is the opposite case and is recorded in the origin.
 
 **Session total: 868 -> 942 names, phase 0 average 56.6% -> 57.9%.**
 
+**F80 — the assembly matcher was seeing a quarter of the SDK's assembly, and
+the three most-called unnamed functions in the game were in the rest.**
+
+`tools/match-sdk-asm.py` handled `void f() { asm { ... } }` and found 33
+signatures. The SDK decomp writes nearly all of its assembly as
+`asm void PSVECAdd(...) { ... }` - the whole function - and there are **146**.
+Handling both forms gives 113 usable signatures.
+
+Two changes made them comparable:
+
+- **Offsets cannot be compared across the two sides.** The decomp writes them
+  symbolically (`psq_l f2, Vec.x(a), 0, 0`) because the Metrowerks assembler
+  resolves them from the struct; our disassembly has the resolved numbers.
+  Including them made every signature fail to match rather than making it
+  stricter, which is why the first attempt produced **zero** matches.
+- **The quantised W bit replaces them, and carries the distinction they were
+  there for.** `psq_l` with W=0 moves a pair, W=1 moves one. A three-component
+  vector loads 2+1; a four-component quaternion loads 2+2. Their mnemonic
+  sequences are otherwise identical - `psq_l, psq_l, ps_add, psq_st` twice -
+  so without W the matcher refused both as non-unique, and with mnemonics
+  alone it would have named one of them wrong.
+
+12 exact matches. **Nine were already named**, by run alignment, which is an
+independent confirmation of those nine rather than a wasted result. The three
+new ones are `PSQUATAdd`, `PSQUATSubtract` and `PSQUATScale` - at 913, 697 and
+687 call sites, **the three most-called unnamed functions in the binary**.
+
+| measure | before | after |
+|---|---|---|
+| SDK call sites covered | 2,764 / 7,078 (39.1%) | **5,061 / 7,078 (71.5%)** |
+| SDK entry points named | 164 / 336 | **167 / 336** |
+| phase 0 average | 57.9% | **64.6%** |
+
+**The lesson worth keeping:** three names moved call-site coverage by 32
+points. Counting *functions* named treats a leaf called 900 times the same as
+one called once, and the naming effort had been steered by that count. The
+call-site measure is the one that says what the engine actually depends on.
+
+**F81 — the remaining unnamed SDK entry points are mostly unreachable by the
+call graph, and it is worth knowing which.**
+Of 172 unnamed at the time of measuring: 43 have a named callee, 14 a named
+caller, 52 either - and **50 have no calls and no callers at all**. The call
+graph has a hard ceiling here and it has been reached. What names a leaf is
+its instruction sequence (F80) or a string it references (F77), and those are
+the two routes with room left.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

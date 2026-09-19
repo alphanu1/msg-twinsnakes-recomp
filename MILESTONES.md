@@ -145,8 +145,17 @@ more.
       `tools/merge-symbols.py` is now the single gate every candidate passes,
       enforcing the map's invariants in one place.
       **Session total: 868 → 942 names; phase 0 average 56.6% → 57.9%.**
-- [ ] Name the last 6 GX functions and the 172 remaining SDK entry points the
-      engine calls. The biggest untapped source is the REL: 17,000 functions,
+- [x] **The assembly matcher fixed, and with it call-site coverage** (F80) —
+      it had been reading 33 of the SDK's 146 assembly functions, and the
+      three most-called unnamed functions in the whole binary were in the
+      rest. `PSQUATAdd`, `PSQUATSubtract` and `PSQUATScale`, at 913/697/687
+      call sites. **SDK call sites covered 39.1% → 71.5%; phase 0 average
+      57.9% → 64.6%.** Nine further matches confirmed names run alignment had
+      already produced, independently.
+- [ ] Name the last 6 GX functions and the 169 remaining SDK entry points the
+      engine calls. The call graph has reached its ceiling (F81): 50 of them
+      have no callers and no callees at all, so instruction-sequence matching
+      and string references are the routes with room left. The biggest untapped source is the REL: 17,000 functions,
       with its own file-name strings.
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the
       REL.
