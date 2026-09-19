@@ -140,7 +140,12 @@ more.
       decompilation exists, so the file is recoverable and the name is not.
       It located the boot blocker exactly (F76) and placed the MPEG decoder,
       closing a phase-0 question (F10).
-- [ ] Name the last 6 GX functions and the 176 remaining SDK entry points the
+- [x] **Callers used as evidence as well as callees** (F79), so leaf functions
+      become identifiable at all. +22 names over four passes to a fixpoint.
+      `tools/merge-symbols.py` is now the single gate every candidate passes,
+      enforcing the map's invariants in one place.
+      **Session total: 868 → 942 names; phase 0 average 56.6% → 57.9%.**
+- [ ] Name the last 6 GX functions and the 172 remaining SDK entry points the
       engine calls. The biggest untapped source is the REL: 17,000 functions,
       with its own file-name strings.
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the

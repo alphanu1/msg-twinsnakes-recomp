@@ -2431,5 +2431,29 @@ after it is built.
    applies. Whether that default is larger or smaller than the configured
    value is the question that decides whether this is our bug at all.
 
+**F79 — callers are evidence too, and leaves have nothing else.**
+The call-graph matcher used only callees, which says nothing about a leaf
+function - and a great many SDK functions are leaves. Who CALLS a function is
+as distinctive: `OSInit` calling something at a particular point identifies it
+as well as that something calling `OSDisableInterrupts`. Our side is exact,
+because the disassembly says which named function contains each `bl`.
+
+Shared callers are weighted like shared callees, by rarity: a caller with three
+callees is decisive, one with forty is nearly free. With two kinds of evidence
+to meet it, the distinctiveness threshold drops to two and the module
+cross-check still filters - the one pass that proposed a name whose module
+disagreed with its neighbours had it withdrawn.
+
+22 more names over four passes before the fixpoint stops finding anything.
+
+`tools/merge-symbols.py` is now the single place candidates enter the map, so
+the invariants live in one place rather than in whatever script produced them.
+Refused: an address already named, a name already used, a size disagreeing
+with dtk's boundary, an address that is not a boundary. Two candidates
+claiming one address with different names withdraw both. Two stages proposing
+the same name is the opposite case and is recorded in the origin.
+
+**Session total: 868 -> 942 names, phase 0 average 56.6% -> 57.9%.**
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

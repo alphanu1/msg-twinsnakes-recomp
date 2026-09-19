@@ -1163,3 +1163,31 @@
 .text 0x80061DE4 0x5C vorbis_block_clear fileline
 .text 0x80061E40 0xCC _vorbis_block_ripcord fileline
 .text 0x80061F0C 0xC8 _vorbis_block_alloc fileline
+
+# stage 5d, second pass: callers used as evidence as well as callees, so leaf functions become identifiable (--min-distinct 2, module cross-check retained)
+.text 0x8001E9CC 0xFC ConfigureVideo callgraph
+.text 0x80025864 0x258 ProcessNextCommand callgraph
+.text 0x80029EE0 0x8C ShowMessage callgraph
+.text 0x8002C35C 0xC4 __AM_dvd_callback callgraph
+.text 0x80031D3C 0x23C __AXProcessAux callgraph
+.text 0x80032A80 0x3A0 __AXOutInit callgraph
+.text 0x80038B78 0x1B4 SetupTimeoutAlarm callgraph
+.text 0x8003A45C 0x324 DoneCallback callgraph
+.text 0x8003C628 0x138 __CARDMountCallback callgraph
+.text 0x8003D86C 0x130 CreateCallbackFat callgraph
+.text 0x8004713C 0x108 TEXGetGXTexObjFromPaletteCI callgraph
+.text 0x8004C318 0x1CC DEMOBeforeRender callgraph
+.text 0x8005A48C 0x150 vorbis_synthesis_headerin callgraph
+.text 0x8005E874 0x1DC _vorbis_synthesis1 callgraph
+.text 0x8005F498 0x178 _ov_open1 callgraph
+.text 0x8005FA30 0x194 _bisect_forward_serialno callgraph
+
+# stage 5d, iteration 2: each confirmed name is evidence for the next pass
+.text 0x80005F28 0x3C DEMOWinMenuChild callgraph
+.text 0x80007204 0xA8 DEMOPadRead callgraph
+.text 0x800316A0 0x4C AXInitEx callgraph
+.text 0x800326B0 0x1B8 __AXOutNewFrame callgraph
+.text 0x80032868 0xBC __AXOutAiCallback callgraph
+
+# stage 5d, iteration 3: each confirmed name is evidence for the next pass
+.text 0x80032930 0x58 __AXDSPResumeCallback callgraph

@@ -149,6 +149,32 @@ def main():
 
     ours = our_callgraph(a.asm, named)
     sdk = sdk_callgraph(a.sdk_src)
+
+    # CALLERS, as well as callees.
+    #
+    # A leaf function calls nothing, so a callee fingerprint says nothing
+    # about it - and a great many SDK functions are leaves. Who calls it is
+    # then the only evidence there is, and it is good evidence: `OSInit`
+    # calling something at a particular point is as distinctive as that
+    # something calling `OSDisableInterrupts`.
+    #
+    # Our side of this is exact: the disassembly says which named function
+    # contains each `bl`. The decomp's side is its own source.
+    ours_callers = collections.defaultdict(collections.Counter)
+    addr_of = {n: a2 for a2, n in named.items()}
+    for caller_addr, callees in ours.items():
+        cname = named.get(caller_addr)
+        if not cname:
+            continue
+        for callee_name, n in callees.items():
+            target = addr_of.get(callee_name)
+            if target is not None:
+                ours_callers[target][cname] += n
+
+    sdk_callers = collections.defaultdict(collections.Counter)
+    for caller, callees in sdk.items():
+        for callee, n in callees.items():
+            sdk_callers[callee][caller] += n
     print(f"our call graph   {len(ours):>6} functions with calls")
     print(f"SDK call graph   {len(sdk):>6} functions with calls")
 
@@ -186,7 +212,7 @@ def main():
     confirmed_total = {}
     for round_no in range(1, a.rounds + 1):
         found = one_round(ours, sdk, named, freq, where, defined_in,
-                          file_of, a, round_no)
+                          file_of, ours_callers, sdk_callers, a, round_no)
         if not found:
             break
         for addr, name in found.items():
@@ -203,7 +229,8 @@ def main():
                         f"{confirmed_total[addr]} callgraph\n")
         print(f"wrote {a.out}")
 
-def one_round(ours, sdk, named, freq, where, defined_in, file_of, a, round_no):
+def one_round(ours, sdk, named, freq, where, defined_in, file_of,
+              ours_callers, sdk_callers, a, round_no):
     taken = set(named.values())
     assigned, ambiguous, weak = {}, 0, 0
 
@@ -211,10 +238,13 @@ def one_round(ours, sdk, named, freq, where, defined_in, file_of, a, round_no):
         if addr in named:
             continue
         mine = set(calls)
+        mine_callers = set(ours_callers.get(addr, ()))
         need = a.min_distinct
         if addr in file_of:
             need = min(need, 2)      # the file is already strong evidence
-        if len(mine) < need:
+        # Callees and callers together. A function with one named callee and
+        # three named callers is as well identified as one with four callees.
+        if len(mine) + len(mine_callers) < need:
             weak += 1
             continue
 
@@ -231,14 +261,19 @@ def one_round(ours, sdk, named, freq, where, defined_in, file_of, a, round_no):
             if want_file and defined_in.get(name) != want_file:
                 continue
             shared = mine & set(theirs)
-            if len(shared) < need:
+            shared_callers = mine_callers & set(sdk_callers.get(name, ()))
+            if len(shared) + len(shared_callers) < need:
                 continue
             # Weight by rarity: 1/frequency. A shared call to something used
             # by 200 functions is nearly free; one used by 2 is decisive.
             score = sum(1.0 / freq[c] for c in shared)
+            # A shared CALLER counts the same way, by how many functions that
+            # caller calls: `OSInit` calls a great many things, so being one
+            # of them is weak; a caller with three callees is strong.
+            score += sum(1.0 / max(1, len(sdk.get(c, ()))) for c in shared_callers)
             # Penalise a candidate that calls a great deal we do not.
             extra = len(set(theirs) - mine)
-            scored.append((score, -extra, name, shared))
+            scored.append((score, -extra, name, sorted(shared | shared_callers)))
 
         if not scored:
             continue
@@ -247,7 +282,7 @@ def one_round(ours, sdk, named, freq, where, defined_in, file_of, a, round_no):
         if len(scored) > 1 and scored[1][0] > best[0] * 0.75:
             ambiguous += 1          # the evidence does not distinguish them
             continue
-        assigned[addr] = (best[2], sorted(best[3]), best[0])
+        assigned[addr] = (best[2], list(best[3]), best[0])
 
     # One name, one address. Two addresses claiming the same function is a
     # contradiction, not a near miss: at most one can be right, and nothing
