@@ -1466,6 +1466,22 @@ int main(int argc, char** argv)
                              * the SDK's dispatcher reads THIS register to
                              * decide which. A PI bit set with no status bit
                              * here is an interrupt nobody can claim. */
+                            {
+                                /* THE MEMORY CARD BUS. EXI channel 0 and 1
+                                 * status are the two hottest reads in a long
+                                 * run - 2.65 million each - so what they
+                                 * report is what the card layer is deciding
+                                 * on. Bit 12 (0x1000) is EXT, "a device is
+                                 * present"; bit 11 (0x800) is the insertion
+                                 * interrupt. The SDK's __EXIProbe reads
+                                 * exactly these. */
+                                uint32_t c0 = mgs_mmio_read(mm, 0xCC006800u, 4);
+                                uint32_t c1 = mgs_mmio_read(mm, 0xCC006814u, 4);
+                                printf("EXI CSR  chan0 0x%08X (EXT %d, EXTINT %d)"
+                                       "  chan1 0x%08X (EXT %d, EXTINT %d)\n",
+                                       c0, (c0 >> 12) & 1, (c0 >> 11) & 1,
+                                       c1, (c1 >> 12) & 1, (c1 >> 11) & 1);
+                            }
                             printf("DSP control 0x%04X  status bits set: "
                                    "%s%s%s%s\n", csr,
                                    (csr & 0x08u) ? "AI " : "",

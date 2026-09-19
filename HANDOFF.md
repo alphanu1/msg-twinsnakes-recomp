@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F136**. The two worth reading first are
+Findings from this session are **F90-F137**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -171,29 +171,33 @@ renderer.
    and 1 status 2.65 million times — both card slots. Nothing models the EXT
    "device present" bit. Make the absence of a card *answerable*; inventing a
    card is probably the wrong fix, since the game must handle an empty slot.
-2. **The 6,317 GX desyncs.** Was 77 in 177,806 commands, now 6,317 in
-   2,294,248 — the rate rose too (0.043% to 0.28%). Twenty times the traffic
-   is reaching command shapes the parser has never seen.
-   `MGS_TRACE_GXDESYNC` names them.
+2. **The texture cache refuses 2,964 of 17,320 lookups (F137).** Each refusal
+   is a surface drawn untextured. Find which formats or sizes it will not
+   take — `textures: 13 decoded, 14343 hits, 2977 misses, 2964 refused`.
+3. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
+   778 of 514,826 triangles want a texture" was measured while a display list
+   was being dropped every frame and the stream desynced 6,317 times. It is
+   now 14,356 with zero desyncs. The conclusion that the game deliberately
+   draws untextured needs redoing on a clean stream.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
-4. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+5. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-5. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+6. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-6. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+7. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-7. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+8. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -204,21 +208,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-8. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+9. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-9. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+10. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-10. **The second window is the performance floor.** The whole engine runs at
+11. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-11. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+12. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-12. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+13. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -4580,6 +4584,64 @@ card layer may be waiting on a probe that never resolves either way.
 **Note for whoever looks:** "no card present" is a perfectly good answer and
 the game must handle it, so the fix is probably not to invent a card. It is
 to make the absence *answerable*.
+
+---
+
+**F137 — we were throwing away a display list every frame, on an assertion
+the hardware does not make.** Every desync in the run was the same one:
+
+```
+[gx] desync 1: display list is not 32-byte aligned  op=0x40 ... cmds=18264
+[gx] desync 2: ... cmds=20241
+[gx] desync 3: ... cmds=22218
+```
+
+Dead regular, **1,977 commands apart** — once per frame. Printing the operands
+instead of just the offending low bits:
+
+```
+[gx] CALL_DL addr=0x8097CAE0 size=83 (0x53)  addr%32=0 size%32=19
+```
+
+The **address is fine** — 32-byte aligned, a plausible heap pointer, and the
+*same address and size every single time*. A parser that had lost the stream
+would produce varying garbage. The game really is calling
+`GXCallDisplayList(0x8097CAE0, 83)`.
+
+**Our check required the SIZE to be a 32-byte multiple too.** The SDK asserts
+that, which is where the rule came from — but **asserts are compiled out of a
+release build**, so a game can pass any size it likes, and the hardware simply
+fetches. 6,317 refusals in a 40,000,000-step boot, every one a real list
+discarded.
+
+The address check is what carries the signal and it stays, along with the
+mapped-memory check and a new bound against an implausibly large size. The
+size alignment requirement is gone.
+
+| | before | after |
+|---|---|---|
+| **GX desyncs** | 6,317 | **0** |
+| pixels written | 12,156,928 | **348,188,074** |
+| lit pixels | 1,167,715 | **19,526,875** |
+| textured triangles | 2,716 | **14,356** |
+| textures decoded | 2 | **13** |
+| **best frame** | 22,034 lit (9.6%) | **26,570 lit (11.6%)** |
+
+**And there is finally something to look at.** The best frame has structure —
+bands, a centred block, a vertical stem — in **4,258 distinct lit colours**,
+against 278 for the flat banner it replaces.
+
+**Why this hid so much.** A desync is not one lost command: the parser keeps
+reading at the wrong offset until it happens to resync, so a refusal once a
+frame corrupted BP state for a good part of every frame. That is why texture
+enable looked absent (F129's "the game draws untextured on purpose" was
+measuring a corrupted stream, and is now suspect), and why the earlier finding
+that only 778 of 514,826 triangles wanted a texture should be re-measured
+rather than trusted.
+
+**Newly visible:** the texture cache now reports **2,964 refusals** out of
+17,320 lookups. That is the next thing — a refusal is a texture format or
+size the cache will not take, and each one is a surface drawn untextured.
 
 ---
 

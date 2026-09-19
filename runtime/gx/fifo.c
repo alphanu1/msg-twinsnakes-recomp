@@ -236,6 +236,10 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
     }
 }
 
+/* No real display list approaches this. It is a guard against a wild size
+ * read out of a lost stream, not a statement about the hardware. */
+#define MGS_GX_DL_MAX (4u * 1024u * 1024u)
+
 static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size);
 
 /* The handful of blitting-processor registers that DO something rather than
@@ -455,23 +459,41 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
      * turns a corrupt pointer into a refusal rather than a stack overflow. */
     if (gx->dl_depth >= 4u || !size) return;
 
-    /* WHAT THE HARDWARE REQUIRES, used here as a validity check.
+    /* WHAT THE HARDWARE REQUIRES, used here as a validity check - AND THE
+     * SIZE IS NOT PART OF IT.
      *
-     * `GXCallDisplayList` takes a 32-byte-aligned address and a 32-byte
-     * multiple of a size - the command processor fetches display lists in
-     * 32-byte units and the SDK asserts on both. A list that satisfies
-     * neither did not come from the game; it came from this parser reading a
-     * byte of vertex data as an opcode.
+     * `GXCallDisplayList` takes a 32-byte-aligned address, and the command
+     * processor fetches from it in 32-byte units. The SDK asserts on the
+     * SIZE being a 32-byte multiple too, and this refused anything else on
+     * that basis. That was wrong in a way that cost a display list every
+     * single frame: asserts are compiled out of a release build, so a game
+     * can pass any size it likes, and this one does - `GXCallDisplayList(
+     * 0x8097CAE0, 83)`, at the same address with the same size, once per
+     * frame for the whole run. 6,317 refusals in a 40,000,000-step boot,
+     * every one of them a real list thrown away.
      *
-     * Checking matters far more than it looks. A bogus call is not one bad
-     * command, it is an ARBITRARY REGION OF MEMORY fed back through the
-     * parser - and a region of zeroes parses as one NOP per byte. That is
-     * how a single lost byte turned into 23,157,036,840 "commands" and
-     * 841,627,908 desyncs: the stream desynchronised once, read garbage as a
-     * display-list call, and executed megabytes of whatever was there. */
-    if ((addr & 0x1Fu) || (size & 0x1Fu)) {
-        desync(gx, "display list is not 32-byte aligned",
-               GX_OP_CALL_DL, size & 0x1Fu);
+     * The ADDRESS is what carries the signal. A parser that has lost the
+     * stream produces a wild pointer, and the alignment plus a mapped-memory
+     * check catches that; a legitimate call that happens to be 83 bytes long
+     * does not deserve to be treated as corruption.
+     *
+     * Checking still matters far more than it looks. A bogus call is not one
+     * bad command, it is an ARBITRARY REGION OF MEMORY fed back through the
+     * parser - and a region of zeroes parses as one NOP per byte. That is how
+     * a single lost byte turned into 23,157,036,840 "commands" and
+     * 841,627,908 desyncs. So the address check stays, the mapped-memory
+     * check stays, and a size beyond any plausible list is still refused.
+     */
+    if (addr & 0x1Fu) {
+        if (gx->trace_desync)
+            fprintf(stderr, "[gx] CALL_DL addr=0x%08X size=%u  addr%%32=%u\n",
+                    addr, size, addr & 0x1Fu);
+        desync(gx, "display list address is not 32-byte aligned",
+               GX_OP_CALL_DL, addr & 0x1Fu);
+        return;
+    }
+    if (size > MGS_GX_DL_MAX) {
+        desync(gx, "display list is implausibly large", GX_OP_CALL_DL, size);
         return;
     }
 
