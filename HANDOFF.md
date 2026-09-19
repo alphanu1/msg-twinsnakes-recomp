@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F133**. The two worth reading first are
+Findings from this session are **F90-F134**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,32 +166,34 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **Name the zlib state field that is ping-ponging (F133).** inflate is in a
-   true infinite loop inside `inflate_blocks`: output buffer untouched across
-   80,000,000 steps, identical Huffman table rebuilt for ever, input and
-   output space both plentiful. Only megabyte 23 — the `z_stream` at
-   `0x81701998` and zlib's internal state — changes. Hash MB 23 per 4 KB at
-   two budgets, then per word inside the page that differs. That names the
-   field, and the field names the bug.
+1. **The identical raster counters (F134).** `12,156,928 pixels, 1,167,715
+   lit` before AND after a change that multiplied triangles by 7.5 — exactly
+   53.0 screens of 512x448 in both, reproducible across three runs. Something
+   caps or short-circuits the pixel path. Not understood, and the most
+   interesting loose thread on the board.
+2. **The 6,317 GX desyncs.** Was 77 in 177,806 commands, now 6,317 in
+   2,294,248 — the rate rose too (0.043% to 0.28%). Twenty times the traffic
+   is reaching command shapes the parser has never seen.
+   `MGS_TRACE_GXDESYNC` names them.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
-3. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+4. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-4. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+5. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-5. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+6. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-6. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+7. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -202,21 +204,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-7. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+8. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-8. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+9. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-9. **The second window is the performance floor.** The whole engine runs at
+10. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-10. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+11. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-11. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+12. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -238,6 +240,11 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **Treating a host-initiated guest call as an ABI call (F134).** The host
+  enters guest code at an arbitrary instruction boundary, so it is an
+  asynchronous interruption: CTR, CR, XER and the FP file must all be saved,
+  not just the registers a caller would care about. Saving only gpr/pc/lr
+  cost this boot 13x its graphics, via one `bdnz` loop count.
 - **Reading a conclusion out of an instrument's silence (F131).** pc hooks
   only see pc at dispatch boundaries and miss calls inside one chunk. Zero
   arrivals is not evidence of "never called"; it is evidence of nothing.
@@ -4401,6 +4408,81 @@ argument, and each was plausible enough to have been written up as the answer.
 The per-megabyte hash is the one that actually decided it, and it is worth
 keeping as a standard probe: *what changed in memory* is a question almost
 nothing else in this runtime can answer.
+
+---
+
+**F134 — THE BOOT'S WALL WAS THE HOST CLOBBERING CTR. One register, and it
+cost 13x the graphics.**
+
+Chasing F133's infinite loop into `huft_build` produced the answer in three
+steps, each one narrowing:
+
+1. **Which loop.** `*hn` only grows within one `inflate_trees_dynamic` call,
+   so a decrease marks a new call. After the first 200,000 iterations it never
+   decreased again: **one `huft_build` call, never returning.**
+2. **Which variable.** Its loop variables read `k=7 g=14 h=0 w=0 l=9` — all
+   in range — except `a`, the count of codes of length k, which must be small
+   and non-negative. It read **-48,492 and falling by exactly 50,000 per
+   sample interval.** That loop is `while (a--)`, compiled to a **`bdnz`
+   counted loop**.
+3. **Why.** CTR and r29 must fall in lockstep. They had not:
+
+```
+[ctr] CTR=2130691640 (0x7EFFC638)  r29=-48492  DESYNCHRONISED
+```
+
+`0x7EFFC638` is not a count. It is **an address in the overlay's window**.
+CTR holds indirect-branch targets as well as loop counts, so something had
+done `mtctr <function pointer>` and left it there — giving the loop 2.13
+billion iterations to run instead of seven.
+
+**The culprit is ours.** `mgs_module_call_guest` — how the host runs a guest
+callback — saved and restored `gpr[32]`, `pc` and `lr`, **and nothing else**.
+Not CTR, not CR, not XER, not the floating-point file. It is used by the disc
+pump for read callbacks, and a callback that makes one indirect call leaves
+CTR holding a function pointer.
+
+**This is not an ABI call.** The host enters guest code at an arbitrary
+instruction boundary in whatever the guest was doing, so it is an
+asynchronous interruption and everything must come back unchanged. Treating
+it as a call — where CTR is volatile and the caller does not care — is the
+mistake, and it is an easy one because the code *looks* like a call.
+
+Sixty-four disc callbacks in a boot, and one of them landed inside zlib's
+`while (a--)`.
+
+**The fix** saves bytes 0..663 of `CPUState` (gpr, fpr, ps1, pc, lr, ctr, cr,
+xer, fpscr) and the graphics quantisation registers, and restores them.
+`msr` is deliberately left out: a callback may legitimately change interrupt
+state.
+
+**Measured, same 40,000,000 steps:**
+
+| | before | after |
+|---|---|---|
+| GX commands | 177,806 | **2,294,248** |
+| primitives | 8,422 | **63,094** |
+| triangles | 514,828 | **3,862,060** |
+| EFB copies | 474 | **3,740** |
+| frame completions | 223 | **1,857** |
+| **disc reads** | **64** | **271** |
+| stopped at | zlib's huft_build | `0x800461B4`, in GX |
+
+**Disc reads 64 to 271 is the one that matters**: the game is streaming data
+again, which is what inflate was waiting to finish so it could ask for more.
+Three runs byte-identical, so determinism survives.
+
+**An anomaly, recorded rather than explained.** The raster counters are
+*byte-identical* across the change — `12,156,928 pixels, 1,167,715 lit` both
+before and after, with 7.5x the triangles — and reproducibly so across three
+runs. 12,156,928 is exactly 53.0 screens of 512x448 in both. That is not
+noise and it is not understood; something is capping or short-circuiting the
+pixel path. It is the next thing to look at, and guessing at it here would
+repeat this session's most expensive habit.
+
+**Desyncs rose 77 to 6,317** — the rate as well as the count (0.043% to
+0.28%). Twenty times the command traffic is reaching a parser that has not
+seen most of it before.
 
 ---
 

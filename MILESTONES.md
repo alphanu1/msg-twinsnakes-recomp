@@ -559,15 +559,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       same GX commands, same disc reads, same heap free lists, same task
       table. And inflate is **not failing**: none of its five error strings
       is pointed at by any word in guest RAM.
-- [ ] **Why the decompression never completes** (F133). Narrowed hard: it is
-      a true infinite loop inside `inflate_blocks`, **not** starvation and
-      **not** table overflow. The stream has 59,633 bytes of input and 3.3 MB
-      of output space; `huft_build`'s `MANY` check reads `1024 <= 1440 ok`.
-      Hashing guest memory per megabyte at two step budgets shows **the output
-      buffer and the Huffman table are byte-identical after 80,000,000 extra
-      steps** — zero decompressed bytes, same table rebuilt for ever. Only the
-      `z_stream` and zlib's internal state move. Next: narrow megabyte 23 per
-      4 KB, then per word, to name the state field.
+- [x] **The decompression wall: the host was clobbering CTR** (F134).
+      `mgs_module_call_guest` saved `gpr`, `pc` and `lr` and nothing else, so
+      a disc-read callback left CTR holding an overlay function pointer —
+      `0x7EFFC638` — and the `bdnz` loop in zlib's `while (a--)` had 2.13
+      billion iterations to run instead of seven. The host enters guest code
+      at an arbitrary instruction boundary, so it is an interruption and the
+      whole volatile state must be preserved. **GX commands 177,806 to
+      2,294,248, triangles 514,828 to 3,862,060, disc reads 64 to 271**, at
+      the same 40,000,000 steps. Three runs byte-identical.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

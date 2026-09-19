@@ -562,8 +562,71 @@ static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
      * varying ones mean real progress through different blocks. That is the
      * difference between "the engine is stuck" and "the engine is working".*/
     static uint64_t seen;
+    static uint32_t max_hn, max_sum, over;
     ++seen;
+
+    /* THE OVERFLOW CHECK, EVALUATED ON EVERY ITERATION.
+     *
+     * huft_build returns Z_MEM_ERROR when `*hn + z > MANY` (1440), and that
+     * return sets no message - so it is invisible except here. Sampling one
+     * iteration in 200,000 cannot catch it, because *hn grows THROUGH a
+     * single huft_build call: the check that matters is the last one, not a
+     * random one. Two guest reads per iteration is cheap enough to do them
+     * all and keep the maximum. */
+    {
+        static uint32_t prev_hn; static uint64_t calls;
+        uint32_t hn = mgs_module_guest_read32(cpu, gpr[22]);
+        uint32_t sum = hn + gpr[30];
+        if (hn > max_hn) max_hn = hn;
+        if (sum > max_sum) max_sum = sum;
+        if (sum > 1440u) ++over;
+        /* *hn only GROWS within one inflate_trees_dynamic call, which resets
+         * it to 0 before the literal tree. So a decrease is a new call, and
+         * counting decreases distinguishes "called for ever" from "one call
+         * that never returns" - two faults with nothing in common. */
+        if (hn < prev_hn) ++calls;
+        prev_hn = hn;
+        if (seen != 1u && (seen % 200000u) == 0u)
+            fprintf(stderr, "[calls] %llu iterations, %llu restarts of the "
+                            "tree build (*hn went backwards)\n",
+                    (unsigned long long)seen, (unsigned long long)calls);
+        /* huft_build's own loop variables, named as zlib names them.
+         * k and g are bit lengths and cannot exceed BMAX (15); h indexes the
+         * table stack and must not go negative; w is the bits already
+         * consumed. Anything outside those ranges is the corruption, and
+         * which one is outside says which loop is running away. */
+        /* CTR AND r29 MUST FALL IN LOCKSTEP.
+         *
+         * The loop is `while (a--)`, compiled to a bdnz counted loop: mtctr
+         * loads r29's value, then each turn decrements CTR and r29 together.
+         * They can only disagree if something outside the loop changed one of
+         * them - and the only thing that touches CTR from outside is an
+         * interrupt saving and restoring the context. So printing both is the
+         * whole diagnosis: equal means the loop is honest and the data is
+         * wrong, unequal means we are corrupting the guest. */
+        if (seen != 1u && (seen % 200000u) == 0u) {
+            uint32_t ctr;
+            memcpy(&ctr, (const uint8_t*)cpu + 648u, sizeof ctr);
+            fprintf(stderr, "[ctr] CTR=%u (0x%08X)  r29=%d  %s\n",
+                    ctr, ctr, (int32_t)gpr[29],
+                    ctr == gpr[29] ? "in step"
+                                   : "DESYNCHRONISED - CTR was clobbered");
+        }
+        if (seen != 1u && (seen % 200000u) == 0u)
+            fprintf(stderr, "[huft] k=%d g=%d h=%d w=%d l=%d  i=0x%08X "
+                            "a_left=%d%s\n",
+                    (int32_t)gpr[26], (int32_t)gpr[28], (int32_t)gpr[27],
+                    (int32_t)gpr[24], (int32_t)gpr[11], gpr[12],
+                    (int32_t)gpr[29],
+                    ((int32_t)gpr[26] > 15 || (int32_t)gpr[28] > 15 ||
+                     (int32_t)gpr[27] < 0 || (int32_t)gpr[24] < 0)
+                        ? "   <-- OUT OF RANGE" : "");
+    }
+
     if (seen != 1u && (seen % 200000u) != 0u) return;
+    fprintf(stderr, "[many] over %llu iterations: max *hn=%u  max *hn+z=%u  "
+                    "MANY=1440  times over: %u\n",
+            (unsigned long long)seen, max_hn, max_sum, over);
 
     /* THE z_stream, RECOVERED BY WALKING ONE FRAME UP.
      *
@@ -619,6 +682,71 @@ static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
          * r22 holds the `hn` pointer and r30 the table size z, both still
          * live at this point in the inner loop, so the check can be evaluated
          * here without hooking the branch itself. */
+        /* WHICH WORDS OF ZLIB'S STATE ACTUALLY MOVE.
+         *
+         * Everything else about this loop is identical every time round - the
+         * table, its address, its parameters, the output buffer. So the loop
+         * is driven by whatever DOES change, and the cheapest way to find it
+         * is to photograph the region once and diff it later, inside a single
+         * run. Two runs at different budgets would answer the same question
+         * more slowly and with more that could differ for unrelated reasons.
+         *
+         * 64 KB around the z_stream covers it and its internal state, which
+         * the allocator put next to it. */
+        /* WHERE zlib's REAL STATE LIVES, before assuming the snapshot below
+         * covers it. z->state is the inflate internal_state, and its
+         * `blocks` member is the inflate_blocks state that holds the bit
+         * buffer and the mode - the things that must move if the decoder is
+         * advancing. If either lies outside the snapshotted window, "nothing
+         * changed" says nothing about them. */
+        {
+            uint32_t st = mgs_module_guest_read32(cpu, z + 0x1Cu);
+            fprintf(stderr, "[zstate] z->state=0x%08X", st);
+            if (st >= 0x80000000u && st < 0x81800000u) {
+                unsigned k;
+                fprintf(stderr, "  words:");
+                for (k = 0; k < 10u; ++k)
+                    fprintf(stderr, " %u:0x%08X", k,
+                            mgs_module_guest_read32(cpu, st + k * 4u));
+            }
+            fprintf(stderr, "\n");
+        }
+
+        {
+            enum { SNAP_BASE = 0x81700000, SNAP_WORDS = 0x10000 / 4 };
+            static uint32_t snap[SNAP_WORDS];
+            static int taken;
+            unsigned w, changed = 0u, shown = 0u;
+
+            if (!taken) {
+                taken = 1;
+                for (w = 0; w < SNAP_WORDS; ++w)
+                    snap[w] = mgs_module_guest_read32(cpu, SNAP_BASE + w * 4u);
+            } else {
+                fprintf(stderr, "[state] words changed since the first sample:\n");
+                for (w = 0; w < SNAP_WORDS; ++w) {
+                    uint32_t now = mgs_module_guest_read32(cpu, SNAP_BASE + w * 4u);
+                    if (now == snap[w]) continue;
+                    ++changed;
+                    if (shown < 24u) {
+                        uint32_t addr = SNAP_BASE + w * 4u;
+                        fprintf(stderr, "   0x%08X  0x%08X -> 0x%08X%s\n",
+                                addr, snap[w], now,
+                                addr == z + 0x08u ? "   (z->total_in)" :
+                                addr == z + 0x14u ? "   (z->total_out)" :
+                                addr == z + 0x00u ? "   (z->next_in)" :
+                                addr == z + 0x0Cu ? "   (z->next_out)" :
+                                addr == z + 0x04u ? "   (z->avail_in)" :
+                                addr == z + 0x10u ? "   (z->avail_out)" :
+                                addr == z + 0x1Cu ? "   (z->state)" : "");
+                        ++shown;
+                    }
+                }
+                fprintf(stderr, "[state] %u of %u words changed in 64 KB\n",
+                        changed, (unsigned)SNAP_WORDS);
+            }
+        }
+
         {
             uint32_t hn = mgs_module_guest_read32(cpu, gpr[22]);
             uint32_t zsz = gpr[30];

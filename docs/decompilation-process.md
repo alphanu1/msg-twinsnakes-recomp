@@ -1737,6 +1737,75 @@ wrong.** The answer was not to revert the mirror but to make the other half
 honest, and the regression is recorded because the wrong conclusion here
 ("the mirror is bad, revert it") is the attractive one.
 
+### One register: the host was clobbering CTR
+
+The boot spent 81.6% of its time in zlib's `huft_build` and never finished.
+The cause was ours, it was one register, and finding it took three narrowing
+measurements rather than any insight.
+
+**Which loop.** `*hn` only grows within one `inflate_trees_dynamic` call, so a
+decrease marks a new call. Counting decreases: after the first 200,000
+iterations it never decreased again. **One `huft_build` call, never
+returning** - which also corrected an earlier reading that had it being called
+repeatedly.
+
+**Which variable.** Its loop variables read `k=7 g=14 h=0 w=0 l=9`, all within
+zlib's bounds, except `a` - the count of codes of length k, necessarily small
+and non-negative - which read **-48,492 and falling by exactly 50,000 per
+sample interval**. That loop is `while (a--)`, and Metrowerks compiled it to a
+**`bdnz` counted loop**.
+
+**Why.** CTR and r29 fall in lockstep in a `bdnz` loop. They had not:
+
+```
+[ctr] CTR=2130691640 (0x7EFFC638)  r29=-48492  DESYNCHRONISED
+```
+
+`0x7EFFC638` is not a count; it is an address in the overlay's window. CTR
+carries indirect-branch targets as well as loop counts, so something had left
+a function pointer in it, and the loop had 2.13 billion iterations to run
+instead of seven.
+
+**The fault.** `mgs_module_call_guest`, which is how the host runs a guest
+callback, saved and restored `gpr[32]`, `pc` and `lr` **and nothing else** -
+not CTR, CR, XER or the floating-point file. The disc pump uses it for read
+callbacks; a callback that makes one indirect call leaves CTR holding a
+function pointer.
+
+**The reasoning error behind it is worth more than the fix.** This is not a
+call the guest made. The host enters guest code at an arbitrary instruction
+boundary in whatever the guest was doing, so from the interrupted code's point
+of view it is an **asynchronous interruption** and everything must come back
+unchanged. Treating it as an ABI call - where CTR is volatile and no caller
+cares - is wrong, and it is an easy mistake because the code reads like a
+call. Sixty-four disc callbacks in a boot, and one of them landed inside
+`while (a--)`.
+
+The fix saves bytes 0..663 of `CPUState` (gpr, fpr, ps1, pc, lr, ctr, cr, xer,
+fpscr) plus the graphics quantisation registers. `msr` is deliberately
+excluded: a callback may legitimately change interrupt state.
+
+**Measured, at the same 40,000,000 steps:**
+
+| | before | after |
+|---|---|---|
+| GX commands | 177,806 | **2,294,248** |
+| primitives | 8,422 | **63,094** |
+| triangles | 514,828 | **3,862,060** |
+| EFB copies | 474 | **3,740** |
+| frame completions | 223 | **1,857** |
+| **disc reads** | **64** | **271** |
+
+Disc reads quadrupling is the one that matters: the game is streaming again,
+which is what inflate was blocking. Three runs byte-identical.
+
+**Left open, and recorded rather than guessed at.** The raster counters are
+byte-identical across the change - `12,156,928 pixels, 1,167,715 lit` both
+before and after, with 7.5x the triangles, reproducible across three runs, and
+exactly 53.0 screens of 512x448 in both. Something caps or short-circuits the
+pixel path and it is not understood. Desyncs also rose from 77 to 6,317, the
+rate along with the count.
+
 ## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.

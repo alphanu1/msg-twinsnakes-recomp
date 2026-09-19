@@ -478,6 +478,8 @@ static int mgs_fp_unavailable(void* cpu)
 #define CPU_CR_OFFSET   652u
 #define CPU_XER_OFFSET  656u
 #define CPU_GQR_OFFSET  768u
+/* gpr, fpr, ps1, pc, lr, ctr, cr, xer, fpscr - everything below msr at 664. */
+#define CPU_VOLATILE_BYTES 664u
 
 #define MSR_EE          0x8000u
 
@@ -1262,16 +1264,44 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
                           const uint32_t* args, unsigned arg_count,
                           uint64_t max_steps)
 {
-    uint32_t saved_gpr[32];
-    uint32_t saved_pc, saved_lr;
+    /* THE WHOLE VOLATILE STATE, not just the registers an ABI call would
+     * clobber.
+     *
+     * This is not a call the guest made. The host enters guest code at an
+     * arbitrary instruction boundary in whatever the guest was doing, so from
+     * the interrupted code's point of view it is an asynchronous interruption
+     * and EVERYTHING it was relying on has to come back unchanged.
+     *
+     * Saving only gpr, pc and lr - which is what this did - left CTR, CR, XER
+     * and the whole floating-point file to be trampled by the callback. CTR
+     * is the one that bites: it holds both indirect-branch targets and
+     * `bdnz` loop counts, so a callback that makes one indirect call destroys
+     * the count of any counted loop it interrupted.
+     *
+     * That is exactly what stopped this boot. A disc-read callback landed
+     * inside zlib's huft_build, in `while (a--)` compiled to bdnz, and left
+     * CTR holding an overlay function address - 0x7EFFC638, about 2.13
+     * billion. The loop then had 2.13 billion iterations to run instead of
+     * seven, so inflate never returned, the engine never got its data, and
+     * the boot sat there for ever building the same Huffman table. Sixty-four
+     * callbacks in a boot and one of them has to land somewhere.
+     *
+     * Bytes 0..663 of CPUState are gpr, fpr, ps1, pc, lr, ctr, cr, xer and
+     * fpscr - everything above msr, which is deliberately NOT restored
+     * because the callback may legitimately have changed interrupt state. The
+     * graphics quantisation registers sit further on and are saved
+     * separately. */
+    uint8_t  saved_core[CPU_VOLATILE_BYTES];
+    uint8_t  saved_gqr[32];
+    uint32_t saved_pc;
     uint32_t* gpr = mgs_module_gpr(cpu);
     uint64_t step;
     unsigned i;
     int returned = 0;
 
-    memcpy(saved_gpr, gpr, sizeof saved_gpr);
+    memcpy(saved_core, cpu, sizeof saved_core);
+    memcpy(saved_gqr, (const uint8_t*)cpu + CPU_GQR_OFFSET, sizeof saved_gqr);
     saved_pc = mgs_module_pc(cpu);
-    saved_lr = mgs_module_lr(cpu);
 
     for (i = 0; i < arg_count && i < 8u; ++i) gpr[3 + i] = args[i];
     mgs_module_set_lr(cpu, MGS_GUEST_RETURN_SENTINEL);
@@ -1296,9 +1326,9 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
         }
     }
 
-    memcpy(gpr, saved_gpr, sizeof saved_gpr);
-    mgs_module_set_pc(cpu, saved_pc);
-    mgs_module_set_lr(cpu, saved_lr);
+    memcpy(cpu, saved_core, sizeof saved_core);
+    memcpy((uint8_t*)cpu + CPU_GQR_OFFSET, saved_gqr, sizeof saved_gqr);
+    mgs_module_set_pc(cpu, saved_pc);   /* in saved_core too; explicit is clearer */
     return returned;
 }
 
