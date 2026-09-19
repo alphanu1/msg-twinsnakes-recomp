@@ -244,6 +244,12 @@ more.
 - [x] **The stream codec is Ogg Vorbis (Tremor), not DSP-ADPCM.** The game
   decodes it in software, so the translated code may simply run as-is rather
   than needing a native decoder.
+- [x] **The opening video is never STARTED** (F148). `movie.dat` is opened at
+  init and never read — zero of the boot's 271 disc reads touch it — so
+  playback is not being requested rather than failing. And the decoder is the
+  game's own code: `mpegGCN.c` is in the REL, already recompiled to native.
+  The runtime needs a **presentation path**, not a decoder, plus whatever
+  gates the start.
 - [x] **Neither — it is MPEG.** 95 MB in `files/shared/movie.dat`, decoded by
   the game's own `mpegGCN.c`. The runtime needs an MPEG decoder and a
   presentation path; that is new work the plan did not carry.

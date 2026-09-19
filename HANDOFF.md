@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F147**. The two worth reading first are
+Findings from this session are **F90-F148**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -240,6 +240,11 @@ renderer.
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
+14. **Find why the opening video is never requested (F148).** `movie.dat` is
+    opened and never read — zero of 271 disc reads touch it — so playback is
+    not starting rather than failing. `mpegGCN.c` is in the REL and already
+    runs natively, so this is a presentation path plus whatever gates the
+    start, not a decoder. Superseded framing:
 14. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
 15. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
@@ -5139,6 +5144,46 @@ the quads that are visible.
 I have not found this one, and I am recording that plainly rather than
 offering a fifth theory. What the session has produced instead is a pipeline
 where every stage is now individually verified.
+
+---
+
+**F148 — the opening video is never started, which is one step earlier than
+"not implemented".** The boot goes Konami logo, Silicon Knights logo, memory
+card warning. A video is meant to play before that screen and does not.
+
+The game **does** open the file:
+
+```
+[dvd] DVDOpen("./shared/movie.dat", 0x7F4A4ED0) -> entry 1651
+```
+
+alongside `vox.dat` and `demo.dat`, at init — it opens all the big archives up
+front. But every one of the boot's **271 disc reads** resolves elsewhere:
+
+| file | reads |
+|---|---|
+| `stage.dat` | 168 |
+| `shared/audio/banks/bank048.spd` | 50 |
+| `shared/audio/banks/bank001.spd` | 49 |
+| `mgso_pal.rel`, `dummy.tpl`, two `.spt` headers | 1 each |
+
+**Not one byte of `movie.dat` is read.** Playback never begins, so the absent
+MPEG support is not yet the blocker — something upstream declines to start it.
+
+**And the decoder is not ours to write.** `mpegGCN.c` is in the REL (stage
+5e-DOL), so it is the game's own code, already recompiled to native and ready
+to run. What the runtime lacks is the **presentation path** — getting decoded
+frames to the screen — not a decoder. That is the same shape as Vorbis, where
+the game decodes in software and the translated code simply runs, and it makes
+this much cheaper than the design document's "the runtime needs an MPEG
+decoder" implies.
+
+**So the next step is not to build anything.** Find why playback is never
+requested: whether the sequence that would call it is reached at all, or
+whether it is gated on something the runtime reports wrongly — a capability
+check, a region or hardware test, or a state the memory-card path sets. The
+boot reaching the card screen at all suggests the video was skipped rather
+than attempted and failed.
 
 ---
 
