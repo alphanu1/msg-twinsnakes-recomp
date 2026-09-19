@@ -151,10 +151,9 @@ indefinitely.
 
 ## NEXT, IN ORDER
 
-1. **The game's own panic** (F76), with the memory architecture now mapped
-   (F78). Heap 2 is exhausted or its free list is corrupt; the big 17.8 MB
-   block it is carved from demonstrably succeeded. Three concrete next steps
-   are listed under F78.
+1. **Get further into the boot.** The `memory.c:1197` panic is fixed (F84,
+   F85) and the game now runs in the overlay and issues disc reads. The next
+   thing is simply to see where it stops.
 2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
    336. Ordered alignment is exhausted (F72); the live routes are the call
    graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
@@ -2538,6 +2537,85 @@ engine actually calls: **SDK entry points named, 167/336**, and **SDK call
 sites covered, 5,061/7,078 (71.5%)**. `tools/progress.py` already says the
 average is "a headline, not a statistic"; F80 is the demonstration - three
 names moved call-site coverage 32 points and function coverage by 0.02.
+
+**F84 — the boot blocker was an arena 646 KB too small, and the chain to it
+was four layers deep.**
+
+Each layer looked like a different bug, and three of them were dead ends until
+the layer above was understood:
+
+1. The engine panics at `memory.c:1197`. Heap 2's free-list head is
+   `0x00380000` - **not an address, but NULL plus an offset**, which is what
+   `libgv_cnf.c` computes when the block it carves the heaps from is NULL.
+2. So the ~17.8 MB allocation failed, and failed **silently**: the game's
+   allocator is a function pointer, and its `MUST_SUCCEED` path calls
+   `OSCheckHeap` and then returns NULL anyway rather than halting.
+3. That allocation came from a heap of 19,546,080 bytes -
+   `OSCreateHeap(0x8045C020, 0x81700000)`. The heap starts **1,882,912 bytes
+   above the arena base**, because the game takes five arena allocations
+   first (4 KB, 16 KB, 106 KB, 32 KB, 16 KB and one of 1,703,936).
+4. And the arena's ceiling was `0x81700000`, because `BootInfo->arenaHi` was
+   left at zero and the SDK then falls back on the DOL's own `__ArenaHi`
+   linker symbol - a megabyte below the top of memory.
+
+**On real hardware the apploader sets that field.** It loads the disc's
+filesystem table at the top of MEM1 and gives the arena everything below it.
+`runtime/os/boot_info.c` now does the same: the FST is copied to
+`0x817F8EE0`, `FSTLocation` and `FSTMaxLength` are set, and the arena ceiling
+is the FST's address. Arena `0x8028E700-0x817F8EE0`. The panic is gone, heap 2
+is created and fully consumed as intended, and the game proceeds into the
+overlay and starts issuing disc reads.
+
+**Worth keeping about the shape of this:** the visible symptom was four layers
+from the cause, and every layer in between was a *correct* mechanism reporting
+a *correct* result about bad input. Nothing on the path was broken except the
+last thing checked.
+
+**F85 — the recompiled overlay's `.bss` sat on top of its own relocation
+tables, so every engine global read relocation data instead of zero.**
+
+The game loads a REL *file*. Its loaded sections end at `0x491B7C` and the
+remaining 925 KB is relocation data. `.bss` is not in the file: the game
+allocates it separately and hands the pointer to `OSLink`, which relocates
+every reference in ITS copy to point there.
+
+DolRecomp compiles the overlay at a fixed base and resolves those references
+itself, placing `.bss` immediately after `.data` - where a **statically
+linked** module's bss belongs, and which here is exactly the relocation
+tables. So the recompiled engine's globals landed at `0x7F499BA0` and up,
+reading relocation data.
+
+That is why the heap table was empty although `fn_1_F43E0` had run: it wrote
+descriptors into memory that was never zero, and the allocator then read a
+free list that was never a list.
+
+The host now zeroes that region once linking is done - which is what `.bss`
+means, and the relocation tables are dead by then. The range is read from the
+module's own section table rather than assumed, with one catch worth
+recording: **after linking, the header's offsets are addresses.** `OSLink`
+rewrites `sectionInfoOffset` and every section offset in place, so adding the
+module base a second time overflows and every read returns zero from nowhere.
+And the `.bss` section entry then points at the memory the GAME allocated,
+somewhere else entirely, so taking the maximum over all sections picks that
+instead of the image's end.
+
+**F86 — host-side observation of the guest, without replacing anything.**
+Three facilities added to `host/module.c`, all read-only:
+
+- `mgs_module_watch(addr)` - record a call's arguments the first time the
+  guest reaches it. Used for `OSLink`, whose `r4` is the only report of where
+  the overlay's `.bss` was allocated.
+- `mgs_module_trace_calls(addr, fn)` - every call, with its arguments. Used
+  for the game's tracking allocator, which turned "the arena ran out" into a
+  list of five allocations with their source file and line.
+- `mgs_module_on_linked(fn)` - the window between `OSLink` returning and the
+  overlay's first instruction, which is the only moment the `.bss` fix can
+  happen.
+
+The allocator itself is a leaf reached inside a chunk, so the host never sees
+it; **the stack does**. PowerPC frames are a linked list - first word the
+previous frame, second word the return address - so walking it named the
+subsystem that took each arena allocation.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

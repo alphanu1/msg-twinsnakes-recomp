@@ -1016,6 +1016,63 @@ command-processor register.
 Not done: indirect textures, lighting, fog, blending, and near-plane clipping -
 a triangle straddling the camera is dropped whole rather than split.
 
+### Getting past the engine's first panic
+
+The port reached `"memory.c" on line 1197` and stopped. The cause was four
+layers below the symptom, and **every layer in between was a correct mechanism
+reporting a correct result about bad input**.
+
+| layer | what it said | what it meant |
+|---|---|---|
+| the panic | heap 2's free list starts at `0x00380000` | not an address — NULL plus an offset |
+| the carve | `libgv_cnf.c` computes heap bases from one block | that block was NULL |
+| the allocation | 18,675,712 bytes, `MUST_SUCCEED` | it failed *silently*: the allocator is a function pointer whose must-succeed path calls `OSCheckHeap` and returns NULL anyway |
+| the heap | `OSCreateHeap(0x8045C020, 0x81700000)` = 19,546,080 | starts 1,882,912 bytes above the arena base, leaving ~646 KB too little |
+| the arena | `0x80290700 - 0x81700000` | `BootInfo->arenaHi` was zero, so the SDK fell back on the DOL's `__ArenaHi` symbol |
+
+**The apploader sets `arenaHi`, and what it sets it to is decided by the FST.**
+It loads the disc's filesystem table at the top of MEM1 and gives the arena
+everything below. `runtime/os/boot_info.c` now does the same, and the arena
+becomes `0x8028E700 - 0x817F8EE0`.
+
+```
+[OSReport] Arena : 0x8028e700 - 0x817f8ee0
+overlay .bss: cleared 0x7F499B7C + 0x700F8 (relocation tables, dead after linking)
+[OSReport] << Dolphin SDK - PAD  release build: Aug  6 2003 04:30:02 (0x2301) >>
+  heap 2: size 14481408  free        0  list 0x00000000
+  heap 4: size  2820096  free  2820096  list 0x7F7CB800  2 blocks
+```
+
+### The overlay's `.bss` is not where the recompiler put it
+
+A REL is loaded as a **file**: its loaded sections end at `0x491B7C` and the
+remaining 925 KB is relocation data. `.bss` is not in the file — the game
+allocates it and `OSLink` relocates every reference to point there.
+
+DolRecomp resolves those references itself and places `.bss` immediately after
+`.data`, where a *statically linked* module's bss belongs — which here is
+exactly the relocation tables. Every engine global read relocation data
+instead of zero, which is why the heap table was empty although the
+heap-creation code had run.
+
+The host zeroes that region once linking is done. Two things the section table
+does **not** say plainly, both found the hard way:
+
+- **After linking, the header's offsets are addresses.** `OSLink` rewrites
+  `sectionInfoOffset` and each section's offset in place, so adding the module
+  base again overflows and every read returns zero.
+- **The `.bss` entry then points at the game's allocation**, elsewhere in
+  MEM1, so a maximum over all sections picks that rather than the image's end.
+
+### Observing the guest without replacing it
+
+`host/module.c` gained three read-only facilities: watch one call's arguments,
+trace every call to an address, and a hook for the window between `OSLink`
+returning and the overlay's first instruction. The game's allocator is a leaf
+reached inside a chunk so the host never sees its address — **the stack does**,
+and walking the PowerPC frame chain named the subsystem behind each arena
+allocation.
+
 ## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.

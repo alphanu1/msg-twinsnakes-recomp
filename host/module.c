@@ -246,11 +246,31 @@ static uint8_t* cpu_ram(void* cpu)
  * guest panic.
  */
 #define MGS_MEM1_SIZE (24u * 1024u * 1024u)
+#define MGS_VMEM_BASE 0x7E000000u
+#define MGS_VMEM_SIZE (32u * 1024u * 1024u)
+
+/* The second addressable window, which these accessors have to know about
+ * because the overlay lives in it. Bounded to MEM1 alone, a read of the
+ * module header at 0x7F008000 returns zero - and zero is a valid-looking
+ * header, so the failure is silent. */
+static uint8_t* s_vmem;
+
+void mgs_module_set_vmem(uint8_t* vmem);
+void mgs_module_set_vmem(uint8_t* vmem) { s_vmem = vmem; }
 
 static uint8_t* gptr(void* cpu, uint32_t addr, uint32_t size)
 {
-    uint32_t off = addr & 0x3FFFFFFFu;        /* fold 0x8... and 0xC... */
-    uint8_t* ram = cpu_ram(cpu);
+    uint32_t off;
+    uint8_t* ram;
+
+    if (addr - MGS_VMEM_BASE < MGS_VMEM_SIZE) {
+        off = addr - MGS_VMEM_BASE;
+        if (!s_vmem || size > MGS_VMEM_SIZE - off) return NULL;
+        return s_vmem + off;
+    }
+
+    off = addr & 0x3FFFFFFFu;                 /* fold 0x8... and 0xC... */
+    ram = cpu_ram(cpu);
     if (!ram || off > MGS_MEM1_SIZE || size > MGS_MEM1_SIZE - off) return NULL;
     return ram + off;
 }
@@ -470,6 +490,11 @@ uint32_t mgs_module_guest_read32(void* cpu, uint32_t addr)
     return gread32(cpu, addr);
 }
 
+void mgs_module_guest_write32(void* cpu, uint32_t addr, uint32_t v)
+{
+    gwrite32(cpu, addr, v);
+}
+
 uint32_t mgs_module_msr(const void* cpu)
 {
     uint32_t msr;
@@ -601,6 +626,85 @@ static void (*s_display)(void);
 
 static void (*s_frame)(void);
 
+/* Addresses the host wants to observe the guest reaching, and what it saw.
+ *
+ * Watching a call is not the same as replacing it. The guest runs OSLink
+ * itself; the host only reads the arguments on the way past, because they
+ * carry something nothing else reports - where the overlay's .bss was
+ * allocated. Every engine global lives at an offset from that, so without it
+ * the host can name a structure but cannot look at one.
+ */
+static uint32_t s_watch_addr;
+static uint32_t s_watch_r3, s_watch_r4;
+static int      s_watch_seen;
+
+/* A second, chattier watch: every call to one address, with its arguments.
+ * The first watch answers "what was it called with"; this one answers "how
+ * many times, and in what order", which is what a resource running out
+ * needs. */
+static uint32_t s_trace_addr, s_trace_addr2, s_trace_addr3, s_trace_addr4;
+static void (*s_trace_fn)(void* cpu, const uint32_t* gpr);
+static void (*s_trace_fn2)(void* cpu, const uint32_t* gpr);
+static void (*s_trace_fn3)(void* cpu, const uint32_t* gpr);
+static void (*s_trace_fn4)(void* cpu, const uint32_t* gpr);
+
+void mgs_module_trace_calls(uint32_t address,
+                            void (*fn)(void* cpu, const uint32_t* gpr));
+void mgs_module_trace_calls(uint32_t address,
+                            void (*fn)(void* cpu, const uint32_t* gpr))
+{
+    s_trace_addr = address; s_trace_fn = fn;
+}
+
+void mgs_module_trace_calls2(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr));
+void mgs_module_trace_calls2(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr))
+{
+    s_trace_addr2 = address; s_trace_fn2 = fn;
+}
+
+void mgs_module_trace_calls3(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr));
+void mgs_module_trace_calls3(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr))
+{
+    s_trace_addr3 = address; s_trace_fn3 = fn;
+}
+
+void mgs_module_trace_calls4(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr));
+void mgs_module_trace_calls4(uint32_t address,
+                             void (*fn)(void* cpu, const uint32_t* gpr))
+{
+    s_trace_addr4 = address; s_trace_fn4 = fn;
+}
+
+void mgs_module_watch(uint32_t address);
+void mgs_module_watch(uint32_t address) { s_watch_addr = address; s_watch_seen = 0; }
+
+/* Called once, the first time the guest executes in the overlay AFTER the
+ * watched call returned - which is to say, when linking is finished and the
+ * module's own code is about to run. Anything that has to happen between
+ * those two moments happens here, and nowhere else is that window visible. */
+static void (*s_linked)(void* cpu, uint32_t module);
+static int s_linked_done;
+
+void mgs_module_on_linked(void (*fn)(void* cpu, uint32_t module));
+void mgs_module_on_linked(void (*fn)(void* cpu, uint32_t module))
+{
+    s_linked = fn; s_linked_done = 0;
+}
+
+int mgs_module_watch_result(uint32_t* r3, uint32_t* r4);
+int mgs_module_watch_result(uint32_t* r3, uint32_t* r4)
+{
+    if (!s_watch_seen) return 0;
+    if (r3) *r3 = s_watch_r3;
+    if (r4) *r4 = s_watch_r4;
+    return 1;
+}
+
 void mgs_module_set_display(void (*fn)(void));
 void mgs_module_set_display(void (*fn)(void)) { s_display = fn; }
 
@@ -711,6 +815,32 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             s_display();
 
         pc = mgs_module_pc(cpu);
+
+        /* Read the arguments of a watched call as the guest reaches it. The
+         * first sighting is the one kept: OSLink is called once per module,
+         * and a later call would be a different module's. */
+        if (s_watch_addr && pc == s_watch_addr && !s_watch_seen) {
+            const uint32_t* g = mgs_module_gpr(cpu);
+            s_watch_r3 = g[3];
+            s_watch_r4 = g[4];
+            s_watch_seen = 1;
+        }
+
+        if (s_trace_addr && pc == s_trace_addr && s_trace_fn)
+            s_trace_fn(cpu, mgs_module_gpr(cpu));
+        if (s_trace_addr2 && pc == s_trace_addr2 && s_trace_fn2)
+            s_trace_fn2(cpu, mgs_module_gpr(cpu));
+        if (s_trace_addr3 && pc == s_trace_addr3 && s_trace_fn3)
+            s_trace_fn3(cpu, mgs_module_gpr(cpu));
+        if (s_trace_addr4 && pc == s_trace_addr4 && s_trace_fn4)
+            s_trace_fn4(cpu, mgs_module_gpr(cpu));
+
+        if (s_linked && s_watch_seen && !s_linked_done &&
+            pc >= 0x7E000000u && pc < 0x80000000u) {
+            s_linked_done = 1;
+            s_linked(cpu, s_watch_r3);
+        }
+
         recent[recent_n % RECENT] = pc;
         ++recent_n;
 

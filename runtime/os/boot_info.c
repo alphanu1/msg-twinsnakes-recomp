@@ -51,6 +51,7 @@
  * paths that assume hardware this host does not provide. */
 #define CONSOLE_RETAIL2   0x00000002u
 #define MEM1_SIZE         0x01800000u
+#define MEM1_TOP          0x81800000u
 
 /* 162 MHz bus, 486 MHz core. The timebase is the bus clock over four, which
  * is where MGS_TIMEBASE_HZ comes from - so these two must agree with it. */
@@ -104,9 +105,42 @@ void mgs_boot_info_init(GuestMemory* mem, const MgsDisc* disc)
      * booted without an apploader-supplied arena gets. Inventing values here
      * would override the game's own layout. */
     guest_write32(mem, BI_ARENA_LO, 0u);
-    guest_write32(mem, BI_ARENA_HI, 0u);
-    guest_write32(mem, BI_FST_LOCATION, 0u);
-    guest_write32(mem, BI_FST_MAX_LENGTH, 0u);
+    /* THE ARENA'S CEILING, AND WHY IT IS NOT LEFT AT ZERO.
+     *
+     * Zero tells the SDK to fall back on the DOL's own `__ArenaHi` linker
+     * symbol, which for this game sits at 0x81700000 - a megabyte below the
+     * top of memory. That is not what a real boot produces. The APPLOADER
+     * sets this field, and what it sets it to is decided by where it put the
+     * filesystem table: the FST is loaded at the very top of MEM1 and the
+     * arena is given everything below it.
+     *
+     * Leaving it zero costs the game most of that megabyte, and the game
+     * notices. Its configuration allocates a single ~17.8 MB block and carves
+     * every engine heap out of it; with `__ArenaHi` the heap is about 646 KB
+     * short, the allocation returns NULL, and the engine panics in
+     * `memory.c:1197` with a heap whose free list starts at 0x00380000 -
+     * which is not an address, but NULL plus an offset.
+     *
+     * So the FST is placed and the ceiling set from it, as the apploader
+     * does. See HANDOFF F84.
+     */
+    if (disc && disc->mounted && disc->fst.raw && disc->fst.size) {
+        uint32_t size = (uint32_t)disc->fst.size;
+        uint32_t at = (MEM1_TOP - size) & ~0x1Fu;   /* the apploader aligns */
+        uint32_t i;
+        uint8_t* p = guest_ptr(mem, at, size);
+
+        if (p) {
+            for (i = 0; i < size; ++i) p[i] = disc->fst.raw[i];
+            guest_write32(mem, BI_FST_LOCATION, at);
+            guest_write32(mem, BI_FST_MAX_LENGTH, size);
+            guest_write32(mem, BI_ARENA_HI, at);
+        } else {
+            guest_write32(mem, BI_ARENA_HI, MEM1_TOP);
+        }
+    } else {
+        guest_write32(mem, BI_ARENA_HI, MEM1_TOP);
+    }
 
     guest_write32(mem, OS_SIM_MEM_SIZE, MEM1_SIZE);
     guest_write32(mem, OS_BI2_ADDRESS, 0u);

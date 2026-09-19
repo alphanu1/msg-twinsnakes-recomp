@@ -45,6 +45,79 @@ static void display_pump(void)
 /* One retrace. Present what the video interface is scanning; if there is
  * nothing there yet, leave the boot overlay up rather than replace it with a
  * black rectangle that says less. */
+/* Read a NUL-terminated guest string. Byte by byte through the swapping
+ * accessor rather than by casting: the guest is big-endian. */
+static void guest_string(void* cpu, uint32_t addr, char* out, unsigned n)
+{
+    unsigned i;
+    out[0] = '\0';
+    if (!addr) return;
+    for (i = 0; i + 1u < n; ++i) {
+        uint32_t w = mgs_module_guest_read32(cpu, addr + (i & ~3u));
+        char c = (char)((w >> (8u * (3u - (i & 3u)))) & 0xFFu);
+        if (!c) break;
+        out[i] = c;
+    }
+    out[i] = '\0';
+}
+
+/* fn_8004E7BC(size, mustSucceed, file, line) - the game's tracking allocator,
+ * and fn_8004E830(ptr, file, line) - the matching free. Logged together
+ * because an arena that runs out is a question about the PAIR: what was taken
+ * and what was given back. */
+static void trace_alloc(void* cpu, const uint32_t* gpr)
+{
+    char file[64];
+    guest_string(cpu, gpr[5], file, sizeof file);
+    fprintf(stderr, "[alloc] %9u bytes  must=%u  %s:%u\n",
+            gpr[3], gpr[4], file, gpr[6]);
+}
+
+static void trace_free(void* cpu, const uint32_t* gpr)
+{
+    char file[64];
+    guest_string(cpu, gpr[4], file, sizeof file);
+    fprintf(stderr, "[free ] 0x%08X                %s:%u\n",
+            gpr[3], file, gpr[5]);
+}
+
+/* OSCreateHeap(lo, hi) - the bounds every later allocation comes out of.
+ * "The arena is 21 MB" says nothing if the heap carved from it is smaller. */
+static void trace_createheap(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu;
+    fprintf(stderr, "[heap] OSCreateHeap(0x%08X, 0x%08X) = %u bytes\n",
+            gpr[3], gpr[4], gpr[4] - gpr[3]);
+}
+
+/* OSSetArenaLo(lo) - every move of the arena's floor, and WHO moved it.
+ *
+ * The allocator that calls this is a leaf reached inside a chunk, so the host
+ * never sees its address; the stack does. PowerPC frames are a linked list -
+ * each frame's first word is the previous frame, and its second word is the
+ * return address into the caller - so walking it names the subsystem that
+ * took the memory, which is the only part that matters here. */
+static void trace_setarenalo(void* cpu, const uint32_t* gpr)
+{
+    static uint32_t last;
+    uint32_t frame = gpr[1];
+    unsigned depth;
+
+    if (gpr[3] > last && last)
+        fprintf(stderr, "[arena] lo -> 0x%08X  (+%u bytes)\n", gpr[3], gpr[3] - last);
+    else
+        fprintf(stderr, "[arena] lo -> 0x%08X\n", gpr[3]);
+    last = gpr[3];
+
+    fprintf(stderr, "        callers:");
+    for (depth = 0; depth < 5u && frame >= 0x80000000u && frame < 0x81800000u; ++depth) {
+        uint32_t ret = mgs_module_guest_read32(cpu, frame + 4u);
+        if (ret) fprintf(stderr, " 0x%08X", ret);
+        frame = mgs_module_guest_read32(cpu, frame);
+    }
+    fprintf(stderr, "\n");
+}
+
 static void frame_pump(void)
 {
     if (!s_display_windowed) return;
@@ -352,6 +425,7 @@ int main(int argc, char** argv)
                     mgs_cpu_bind_msr(mgs_module_msr_ptr(cpu));
                     mgs_host_install_spr_handler(cpu);
                     mgs_host_set_vmem(rt.mem.vmem);
+                    mgs_module_set_vmem(rt.mem.vmem);
 
                     /* Finished DVD reads have to be reported on the guest
                      * thread. Nothing else does it, and until this was here
@@ -380,6 +454,24 @@ int main(int argc, char** argv)
                         MgsSdkFn probe = mgs_patch_lookup(0x800201A4u);
                         (void)probe;
                         mgs_interrupt_set_dispatch(0x800201A4u);  /* __OSDispatchInterrupt */
+                        /* OSLink(module, bss). The bss pointer is the base
+                         * every engine global is an offset from, and nothing
+                         * else reports it. */
+                        mgs_module_watch(0x80020AD8u);
+                        /* Zero the overlay's .bss the moment linking is
+                         * done. Until then the relocation tables occupying
+                         * that memory are still needed. */
+                        mgs_module_on_linked(mgs_clear_overlay_bss);
+                        /* MGS_TRACE_ALLOC logs every call to the game's
+                         * tracking allocator, with the file and line it was
+                         * called from - which is how an arena running out
+                         * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_ALLOC")) {
+                            mgs_module_trace_calls(0x8004E7BCu, trace_alloc);
+                            mgs_module_trace_calls2(0x8004E830u, trace_free);
+                            mgs_module_trace_calls3(0x8001CC08u, trace_createheap);
+                            mgs_module_trace_calls4(0x8001CD90u, trace_setarenalo);
+                        }
                     }
                     if (mod.set_patch_hook) {
                         mod.set_patch_hook(mgs_host_patch_dispatch);
@@ -521,6 +613,18 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_vmem_reads(),
                                (unsigned long long)mgs_host_vmem_writes(),
                                mgs_host_vmem_lo(), mgs_host_vmem_hi());
+                        {   /* The engine's heaps, if the overlay linked -
+                             * this is what the panic at memory.c:1197 is
+                             * about. */
+                            uint32_t mod_, bss_;
+                            if (mgs_module_watch_result(&mod_, &bss_)) {
+                                printf("OSLink saw: module 0x%08X  bss 0x%08X\n",
+                                       mod_, bss_);
+                                /* The RECOMPILED overlay's globals, which is
+                                 * where the engine actually keeps them. */
+                                if (mod_) mgs_dump_heaps(cpu, mod_ + 0x4B6678u - 0x24AD8u);
+                            }
+                        }
                         mgs_dump_threads(cpu, NULL);
                         patch_report();
                         mgs_mmio_report_hot(mgs_host_mmio(), 6u);

@@ -294,6 +294,18 @@ Order within the phase is set by what blocks boot: OS, then DVD, then PAD.
 - [ ] Disc path resolution: explicit argument, then config, then conventional
       locations. The image is never required to sit beside the executable. `.iso`/`.gcm` direct, `.rvz` decoded,
       extracted folder for development. `.nkit` refused.
+- [x] **The boot ROM's arena ceiling** (F84) — the apploader places the disc's
+      filesystem table at the top of MEM1 and gives the arena everything
+      below. Left at zero, the SDK falls back on the DOL's `__ArenaHi` symbol
+      a megabyte lower, the engine's 17.8 MB heap block fails, and the game
+      panics in `memory.c:1197`. **That panic is now gone and the game runs
+      in its own overlay.**
+- [x] **The overlay's `.bss` zeroed after linking** (F85) — the recompiled
+      module places it on top of the REL's relocation tables, so every engine
+      global read relocation data instead of zero.
+- [x] **Read-only host observation of the guest** (F86) — call watching, call
+      tracing with arguments, and a hook for the window between `OSLink`
+      returning and the overlay's first instruction.
 - [ ] **Virtual two-disc mount** — mount both images at startup; when the game
       polls for disc 2, report cover opened, disc 2 inserted, cover closed, on
       the SDK's expected timing.
