@@ -1337,6 +1337,15 @@ int main(int argc, char** argv)
                                            (unsigned long long)rs->vp_hits[k]);
                                 }
                             }
+                            if (getenv("MGS_TRACE_TEXUSE")) {
+                                unsigned k;
+                                printf("  textures SAMPLED, %u distinct:\n",
+                                       rs->texuse_n);
+                                for (k = 0; k < rs->texuse_n; ++k)
+                                    printf("    0x%08X  fmt=0x%X  %ux%u\n",
+                                           rs->texuse_addr[k], rs->texuse_fmt[k],
+                                           rs->texuse_w[k], rs->texuse_h[k]);
+                            }
                             printf("  texture refusals: %llu size, %llu texels, "
                                    "%llu palette, %llu alloc, %llu decode\n",
                                    (unsigned long long)rs->tex.refused_size,
@@ -1453,6 +1462,43 @@ int main(int argc, char** argv)
                                     }
                                     printf("   %u occurrence%s\n",
                                            hits, hits == 1u ? "" : "s");
+                                }
+                            }
+                            {
+                                /* MGS_DUMP_TEXCOLS=<addr>,<w>,<h>: which
+                                 * COLUMNS of a C8 texture hold anything.
+                                 *
+                                 * The text strips are 160x14 and 72x14 in
+                                 * format 0x9, C8 - one byte per texel in 8x4
+                                 * tiles. A column that is entirely zero holds
+                                 * no glyph, so this says directly whether the
+                                 * texture itself is short or the quad that
+                                 * samples it is. No palette needed: a nonzero
+                                 * INDEX is content whatever colour it maps
+                                 * to. */
+                                const char* dt = getenv("MGS_DUMP_TEXCOLS");
+                                if (dt) {
+                                    uint32_t base = 0; unsigned tw = 0, th = 0;
+                                    if (sscanf(dt, "%x,%u,%u", &base, &tw, &th) == 3
+                                        && tw && th && tw <= 1024u && th <= 1024u) {
+                                        unsigned cx, cy, tiles_x = (tw + 7u) / 8u;
+                                        printf("texture 0x%08X %ux%u (C8) column "
+                                               "occupancy:\n   ", base, tw, th);
+                                        for (cx = 0; cx < tw; ++cx) {
+                                            unsigned any = 0;
+                                            for (cy = 0; cy < th; ++cy) {
+                                                unsigned tx = cx / 8u, ty = cy / 4u;
+                                                unsigned ix = cx % 8u, iy = cy % 4u;
+                                                uint32_t off = (ty * tiles_x + tx) * 32u
+                                                             + iy * 8u + ix;
+                                                if (guest_read8(&rt.mem, base + off))
+                                                { any = 1; break; }
+                                            }
+                                            putchar(any ? '#' : '.');
+                                            if ((cx % 80u) == 79u) printf("\n   ");
+                                        }
+                                        printf("\n");
+                                    }
                                 }
                             }
                             if (getenv("MGS_FIND_ZMSG")) {

@@ -72,6 +72,9 @@ typedef struct MgsGxRaster {
     unsigned vp_n;
     uint64_t tex2d_maxx[20];  /* textured 2D triangles by right edge, 32px buckets */
     uint64_t all2d_maxx[20];  /* ALL 2D triangles, same buckets */
+    uint32_t texuse_addr[24]; unsigned texuse_fmt[24];
+    uint16_t texuse_w[24], texuse_h[24];
+    unsigned texuse_n; int trace_texuse;
     int      trace_preload;   /* MGS_TRACE_PRELOAD */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */

@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F145**. The two worth reading first are
+Findings from this session are **F90-F146**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -178,16 +178,21 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Implement EFB-to-texture copies (F145).** `mgs_efb_copy` returns without
-   writing anything unless the copy is to the external framebuffer, so all
-   1,883 render-to-texture copies in a boot discard their output — and
-   **3,860,150 of 3,873,706 triangles are drawn into that path**. Read the
-   EFB source rectangle, convert to the target copy format, write it tiled at
-   `copy_dest`/`copy_stride`. **GB8 (format 0xC)** first: it is what this game
-   uses, 64x64, and it is what the memory-card screen's text needs. The
-   texture cache already decodes these formats, so only the encoder is
-   missing.
-4. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
+3. **Why is only 3/4 of the text texture shown? (F146).** The 160x14 strip at
+   `0x811702A0` is fully populated across all 160 columns, and the quads that
+   sample it are full width — yet the picture stops at x=208, which is 120
+   pixels, exactly 3/4 of 160. Look at the texture coordinates and the width
+   used to normalise them. **Not** the RTT copies: nothing samples what they
+   write (F146 corrects F145).
+4. **Implement EFB-to-texture copies (F145, still worth doing).**
+   `mgs_efb_copy` writes nothing unless the copy targets the external
+   framebuffer, so 1,883 copies a boot discard their output and 3,860,150 of
+   3,873,706 triangles draw into that path. Needs an encoder for the copy
+   formats, GB8 (0xC) first. Nothing samples those destinations today, so it
+   is not the text bug — but a renderer that throws away its
+   render-to-texture output will not survive contact with the rest of the
+   game.
+5. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
    now 14,356 with zero desyncs. The conclusion that the game deliberately
@@ -195,22 +200,22 @@ renderer.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
-6. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+7. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
    before. `MGS_TRACE_GXDESYNC` names them.
-7. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+8. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-8. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+9. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-9. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+10. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -221,21 +226,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-10. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+11. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-11. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+12. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-12. **The second window is the performance floor.** The whole engine runs at
+13. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-13. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+14. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-14. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+15. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -5026,6 +5031,57 @@ encoder is the missing half.
 **Scale to expect:** 3,860,150 of the run's 3,873,706 triangles are drawn into
 the render-to-texture strip (F143). Almost everything this game draws goes
 through the path that currently discards its output.
+
+---
+
+**F146 — F145's CAUSAL CLAIM IS WRONG. The render-to-texture gap is real; it
+is not what truncates the text.** F145 concluded that unimplemented
+EFB-to-texture copies leave the text's texture blank. Two measurements refute
+it.
+
+**The textures the game actually samples**, all 14 of them:
+
+```
+0x800EA680  fmt=0xE  512x448      0x811C9060  fmt=0x0  512x512
+0x809325C0  fmt=0xE  512x448      0x811EB1C0  fmt=0x0  512x32
+0x80CC7C80  fmt=0xE  512x448      0x811EF320  fmt=0x0  512x32
+0x80CFFC80  fmt=0xE  512x448      0x811F3480  fmt=0x0  576x32
+0x80CABC80  fmt=0xE  512x448      0x811F79E0  fmt=0x0  512x512
+0x811702A0  fmt=0x9  160x14   <-- a text strip
+0x8116FCE0  fmt=0x9   72x14   <-- a text strip
+0x81170160  fmt=0xE   38x14   <-- a text strip
+```
+
+**None is at a render-to-texture destination.** Those copies go to
+`0x8178DC40` and `0x81785C00`, and nothing samples either. So the RTT output
+is never read, and whether it is written cannot be what truncates the text.
+
+**And the text texture is complete.** Column occupancy of the 160x14 C8 strip
+at `0x811702A0`, a `#` where any texel in that column is non-zero:
+
+```
+.#############.##############........#######.........###############...#########
+######...###############...###############....###############...###############.
+```
+
+Content runs the full 160 columns, with the gaps between words visible. The
+string is all there.
+
+**So the texture is complete and the geometry is full width, and the picture
+still stops at x=208.** That leaves the mapping between them — texture
+coordinates, or the width used to normalise them — and nothing else. The
+visible run is 88..208, which is **120 pixels of a 160-pixel texture: exactly
+three quarters.** That ratio is the next thing to explain.
+
+**What is still true from F145:** EFB-to-texture copies really are
+unimplemented, 1,883 of them per boot really do discard their output, and
+3,860,150 of 3,873,706 triangles really are drawn into that path. It remains
+worth implementing. It is simply not this bug, and I should not have asserted
+a cause without checking that anything sampled what those copies write.
+
+**The habit this breaks, stated plainly:** "X is broken and Y is broken,
+therefore X causes Y" is not an argument. The check that costs one command —
+does anything actually read what X writes? — is the one that decides it.
 
 ---
 

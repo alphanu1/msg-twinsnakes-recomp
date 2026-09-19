@@ -611,7 +611,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
       copy formats, **GB8 (0xC)** first, writing tiled at
       `copy_dest`/`copy_stride`. The truncation was chased through the
       scissor, depth buffer, display lists, textures, viewport and geometry
-      first — all excluded by measurement (F139-F144).
+      first — all excluded by measurement (F139-F144). **It is not the cause
+      of the truncated text** (F146): nothing samples what those copies write,
+      and the text's own texture is fully populated. Still worth implementing
+      on its own merits.
 - [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
       million times in a long run. The probe does resolve — EXT is clear, so
       `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own

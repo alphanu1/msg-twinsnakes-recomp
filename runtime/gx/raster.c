@@ -36,6 +36,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
      * in one run: turn the test off and see if the picture fills in. */
     r->no_depth = getenv("MGS_NO_DEPTH") != NULL;
     r->trace_preload = getenv("MGS_TRACE_PRELOAD") != NULL;
+    r->trace_texuse = getenv("MGS_TRACE_TEXUSE") != NULL;
     {
         const char* e = getenv("MGS_TRACE_RASTER");
         r->trace = e != NULL;
@@ -234,6 +235,23 @@ static const MgsTexture* bind_texture(MgsGxRaster* r, MgsGx* gx, unsigned map)
                 alt <  GUEST_VMEM_BASE + GUEST_VMEM_SIZE) {
                 addr = alt;
                 ++r->tex_second_window;
+            }
+        }
+        /* Which (address, format, size) triples are sampled, kept distinct.
+         * An EFB-to-texture encoder has to write the layout the game will
+         * READ, so the sampling side is what specifies it - guessing from the
+         * copy format alone would only be half the contract. */
+        if (r->trace_texuse) {
+            unsigned k;
+            for (k = 0; k < r->texuse_n; ++k)
+                if (r->texuse_addr[k] == addr && r->texuse_fmt[k] == format)
+                    break;
+            if (k == r->texuse_n && r->texuse_n < 24u) {
+                r->texuse_addr[k] = addr;
+                r->texuse_fmt[k] = format;
+                r->texuse_w[k] = (uint16_t)width;
+                r->texuse_h[k] = (uint16_t)height;
+                r->texuse_n++;
             }
         }
         return mgs_tex_get(&r->tex, gx->mem, addr,
