@@ -126,6 +126,10 @@ static uint64_t progress_counter(unsigned which)
     return which == 0u ? e->copies : mgs_dvd_completed();
 }
 
+/* Set when the user closed the window or pressed Escape: the run stops, and
+ * the post-run viewer is skipped so one close means closed. */
+static int s_quit_requested;
+
 static void frame_pump(void)
 {
     static uint64_t shown = ~0ull;
@@ -136,8 +140,19 @@ static void frame_pump(void)
     /* Input has to stay responsive on every tick; the picture only needs
      * redrawing when the game has actually finished one. The copy counter is
      * the honest signal for that - it is what the game does to put a frame in
-     * the external framebuffer. */
-    mgs_video_pump();
+     * the external framebuffer.
+     *
+     * A QUIT HERE MUST ACTUALLY QUIT. This used to discard the pump's result,
+     * so Escape and the window's close button were polled and thrown away for
+     * as long as the guest ran - and with a large step budget that is
+     * forever. The window could not be closed by any normal means. Stopping
+     * the guest is what the interrupt flag already means, so reuse it rather
+     * than invent a second way to stop. */
+    if (!mgs_video_pump()) {
+        s_quit_requested = 1;
+        mgs_module_interrupted = 1;
+        return;
+    }
 
     /* Two signals, not one. The copy counter catches GX drawing a frame;
      * the scan-out address catches anything that writes the external
@@ -1429,6 +1444,18 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused_palette,
                                    (unsigned long long)rs->tex.refused_alloc,
                                    (unsigned long long)rs->tex.refused_decode);
+                            {
+                                unsigned k;
+                                printf("textures decoded by shape "
+                                       "(a shape re-decoded often is dynamic - "
+                                       "during the movie, the video frame):\n");
+                                for (k = 0; k < rs->tex.shape_n; ++k)
+                                    printf("    fmt 0x%X  %ux%u   x%llu\n",
+                                           rs->tex.shape_key[k] >> 24,
+                                           (rs->tex.shape_key[k] >> 12) & 0xFFFu,
+                                           rs->tex.shape_key[k] & 0xFFFu,
+                                           (unsigned long long)rs->tex.shape_hit[k]);
+                            }
                             printf("textures: %llu decoded, %llu hits, "
                                    "%llu misses, %llu refused, %llu evicted\n",
                                    (unsigned long long)rs->tex.decodes,
@@ -1798,7 +1825,7 @@ int main(int argc, char** argv)
      * renderer shows the boot overlay instead. The counters are on stdout
      * either way. Press a key to swap between them.
      */
-    if (!headless) {
+    if (!headless && !s_quit_requested) {
         int showing_game = mgs_display_frames() > 0u;
 
         if (!showing_game) overlay_draw(0);

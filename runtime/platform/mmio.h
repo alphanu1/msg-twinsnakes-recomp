@@ -134,6 +134,7 @@ typedef struct MgsMmio {
     uint16_t pad_script_btn[16];
     unsigned pad_script_n;
     uint32_t pad_frame;
+    uint16_t pad_reported;
 
 } MgsMmio;
 

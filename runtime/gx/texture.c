@@ -394,6 +394,24 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         return NULL;
     }
 
+    /* WHAT IS ACTUALLY BEING DECODED, by shape.
+     *
+     * A texture re-decoded every frame is a dynamic one, and during the movie
+     * that is the video frame itself. Counting decodes by (format, size)
+     * names it without having to guess from the picture. */
+    {
+        unsigned k;
+        uint32_t shape = (format << 24) | ((width & 0xFFFu) << 12)
+                       | (height & 0xFFFu);
+        for (k = 0; k < c->shape_n; ++k)
+            if (c->shape_key[k] == shape) { ++c->shape_hit[k]; break; }
+        if (k == c->shape_n && c->shape_n < 16u) {
+            c->shape_key[c->shape_n] = shape;
+            c->shape_hit[c->shape_n] = 1u;
+            ++c->shape_n;
+        }
+    }
+
     t->hash = hash;
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;

@@ -1393,3 +1393,43 @@
 # nobody. That symmetry is what ruled out "the flag was clear" as the cause
 # of the boot's missing signal (F124).
 .text 0x8004C318 0x1CC frame_submit_and_wait own
+
+# ---------------------------------------------------------------------------
+# CARD, by source-order alignment against doldecomp/dolsdk2004 · sdk2004-align
+#
+# The method is stage 5's, applied to a different reference: dolsdk2004
+# publishes the CARD sources, and the compiler emits a translation unit's
+# functions in source order. Where a run of unnamed functions is BRACKETED BY
+# TWO NAMED ONES and the number between matches the number the source requires
+# exactly, each name is fixed by construction - there is no room for it to be
+# anything else. A count that does not match means a function was stripped or
+# the file order differs, and nothing in that gap is named.
+#
+# Three such brackets, all exact:
+#
+#   CARDMountAsync .. __CARDFormatRegionAsync   expects 4, found 4
+#   __CARDAccess   .. __CARDIsReadable          expects 1, found 1
+#   CARDGetStatus  .. CARDRenameAsync           expects 2, found 2
+#
+# Corroborated by shape: the SDK's sync wrappers around an async call are all
+# 0x48 bytes here - CARDRename (already named) is 0x48, and so are CARDMount,
+# CARDCreate and CARDSetStatus below.
+#
+# Gaps deliberately NOT named: __CARDFormatRegionAsync..__CARDAccess expects 4
+# and has 2, and __CARDIsReadable..CreateCallbackFat expects 5 and has 4. Both
+# are short by functions the linker stripped, and which one was dropped decides
+# every name in the gap, so they stay unnamed.
+.text 0x8003C900 0x48 CARDMount sdk2004-align
+.text 0x8003C948 0x9C DoUnmount sdk2004-align
+.text 0x8003C9E4 0xAC CARDUnmount sdk2004-align
+.text 0x8003CA90 0x144 FormatCallback sdk2004-align
+.text 0x8003D37C 0x134 __CARDIsWritable sdk2004-align
+.text 0x8003E8FC 0x174 CARDSetStatusAsync sdk2004-align
+.text 0x8003EA70 0x48 CARDSetStatus sdk2004-align
+
+# CARDCreate.c holds exactly three functions and the first is named, so the
+# next two are its remaining two unless one was stripped - and the 0x48 sync
+# wrapper being present says it was not. Anchored on one side only, which is
+# why it is recorded apart from the brackets above.
+.text 0x8003D99C 0x220 CARDCreateAsync sdk2004-align
+.text 0x8003DBBC 0x48 CARDCreate sdk2004-align

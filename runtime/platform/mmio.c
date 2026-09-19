@@ -817,7 +817,12 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
  * layer once a frame; read by si_reply when the port is polled. */
 void mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons)
 {
-    if (m) m->pad_buttons = (uint16_t)(m->pad_forced | buttons);
+    if (!m) return;
+    m->pad_buttons = (uint16_t)(m->pad_forced | buttons);
+    if (m->pad_buttons && m->pad_reported != m->pad_buttons) {
+        m->pad_reported = m->pad_buttons;
+        fprintf(stderr, "[pad] buttons now 0x%04X\n", m->pad_buttons);
+    }
 }
 
 void mgs_mmio_tick_frame(MgsMmio* m)

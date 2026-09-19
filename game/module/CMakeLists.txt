@@ -57,6 +57,23 @@ target_compile_definitions(mgs_rel_code PRIVATE DOLRECOMP_ENABLE_REPLACEMENTS=1
 set_target_properties(mgs_dol_code mgs_rel_code PROPERTIES
   POSITION_INDEPENDENT_CODE ON)
 
+# -O2, NEVER -O3, and never -ffast-math. This is the generated code, so it is
+# the code the rule is actually about: paired-single semantics need exact
+# rounding, and a divergence here is indistinguishable from a bug in the shim
+# layer. -ffp-contract=off goes with it - contraction into a fused multiply-add
+# changes the rounding of an expression the Gekko rounded twice, and the
+# recompiler emits a fused op where the guest used one.
+#
+# The build inherited -O3 from CMAKE_BUILD_TYPE=Release for a long time, in 316
+# places. It happened to be harmless - the module carries no FMA or AVX
+# instructions, so no contraction was possible and the arithmetic was
+# IEEE-exact either way - but "harmless by luck on this host" is not the
+# standard, and -O3 on multi-MB generated files costs build time for nothing.
+if(NOT MSVC)
+  target_compile_options(mgs_dol_code PRIVATE -O2 -fno-fast-math -ffp-contract=off)
+  target_compile_options(mgs_rel_code PRIVATE -O2 -fno-fast-math -ffp-contract=off)
+endif()
+
 add_library(mgs_dispatch OBJECT dispatch.c)
 target_include_directories(mgs_dispatch PRIVATE
   "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")

@@ -2050,6 +2050,58 @@ than the current one, and a heartbeat whose interval was not coprime to the
 run loop's tick sampled the same handler every time (F91). **A measurement
 that says something surprising is the first thing to check, not the last.**
 
+## Stage 5g — CARD by source-order brackets · **DONE**
+
+**In:** our function boundaries + `doldecomp/dolsdk2004`'s CARD sources.
+**Out:** 9 symbols, origin `sdk2004-align`.
+
+Stage 5 aligned against a symbol map. This aligns against **source order**: the
+compiler emits a translation unit's functions in the order they are written, so
+a run of unnamed functions between two named ones must be that file's functions
+in that order - provided the counts agree.
+
+```
+# the source order of a CARD translation unit
+grep -nE "^[A-Za-z_][A-Za-z0-9_ *]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\(" \
+    extern/dolsdk2004/src/card/CARDMount.c | grep -v ";"
+
+# every function boundary in the range, named or not
+grep -oE "0x8003[C-E][0-9A-F]{3}; // type:function size:0x[0-9A-F]+" \
+    build/phase0/main.symbols.txt
+```
+
+**The check that makes this evidence rather than resemblance is the count.**
+A name is taken only where the gap is bracketed by two NAMED functions and the
+number of unnamed functions in it equals the number the source requires:
+
+| bracket | source expects | binary has | taken |
+|---|---|---|---|
+| `CARDMountAsync` .. `__CARDFormatRegionAsync` | 4 | 4 | yes |
+| `__CARDAccess` .. `__CARDIsReadable` | 1 | 1 | yes |
+| `CARDGetStatus` .. `CARDRenameAsync` | 2 | 2 | yes |
+| `__CARDFormatRegionAsync` .. `__CARDAccess` | 4 | **2** | **no** |
+| `__CARDIsReadable` .. `CreateCallbackFat` | 5 | **4** | **no** |
+
+The last two gaps are short by functions the linker stripped. Which one was
+dropped decides every name in the gap, so nothing in them is named. Recording
+the refusals matters as much as the names: a method that only ever succeeds is
+not being checked.
+
+**Cross-checked independently by shape.** The SDK's sync wrapper around an
+async call compiles to 0x48 bytes in this binary. `CARDRename` at 0x8003ECB4
+was already named `own+sdk2004` and is 0x48. The three wrappers this stage
+names - `CARDMount`, `CARDCreate`, `CARDSetStatus` - are 0x48, 0x48 and 0x48,
+and each sits immediately after a much larger `*Async` function. That is a
+second, independent signal agreeing with the ordering.
+
+**Counts before and after:**
+
+| | before | after |
+|---|---|---|
+| functions named | 987 | **996** |
+| SDK entry points named | 193 / 336 | **197 / 336** |
+| SDK call sites covered | 6,137 / 7,078 | **6,142 / 7,078** |
+
 ## Stage 9 — Verify against the original · **PLANNED**
 
 **In:** the port and Dolphin. **Out:** a divergence report.

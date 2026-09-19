@@ -43,6 +43,7 @@ typedef struct MgsTexture {
 
 typedef struct MgsTexCache {
     MgsTexture entry[MGS_TEX_CACHE_ENTRIES];
+    uint32_t shape_key[16]; uint64_t shape_hit[16]; unsigned shape_n;
     uint64_t   clock;
     uint64_t   hits, misses, decodes, evictions, refused;
     /* Why a lookup was refused, split out: a size we will not take, a texel

@@ -179,6 +179,56 @@ static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
 {
     ++gx->desyncs;
     if (!gx->trace_desync || gx->desyncs > gx->trace_desync) return;
+    {   /* the 32 bytes leading up to this, oldest first */
+        unsigned k;
+        fprintf(stderr, "[gx] bytes before desync %llu:",
+                (unsigned long long)gx->desyncs);
+        for (k = 32u; k > 0u; --k)
+            fprintf(stderr, " %02X", gx->recent[(gx->recent_at - k) & 63u]);
+        fprintf(stderr, "\n");
+    }
+    {   /* The last draws: op count*vsize=len. If len-2 is not count*vsize,
+         * the stream and our descriptor disagree about the vertex. */
+        unsigned k;
+        fprintf(stderr, "[gx] last draws (op cnt*vsz=len):");
+        for (k = 12u; k > 0u; --k) {
+            uint64_t e = gx->drawring[(gx->drawring_at - k) & 31u];
+            fprintf(stderr, " %02X %u*%u=%u", (unsigned)(e >> 56),
+                    (unsigned)((e >> 40) & 0xFFFFu),
+                    (unsigned)((e >> 24) & 0xFFFFu),
+                    (unsigned)(e & 0xFFFFFFu));
+        }
+        fprintf(stderr, "\n");
+    }
+    {   /* THE LAST COMMANDS PARSED CLEANLY, opcode:length.
+         *
+         * The byte ring says where the stream stopped making sense; this says
+         * what we believed up to that point. A run of plausible commands ending
+         * in one whose length is wrong is what a sizing bug looks like; a clean
+         * run that simply stops is a pointer or buffer problem instead. */
+        unsigned k;
+        fprintf(stderr, "[gx] last commands (op:len):");
+        for (k = 24u; k > 0u; --k) {
+            uint32_t e = gx->cmdring[(gx->cmdring_at - k) & 127u];
+            fprintf(stderr, " %02X:%u", e >> 24, e & 0xFFFFFFu);
+        }
+        fprintf(stderr, "\n");
+    }
+    {   /* THE SIZE WE COMPUTE FOR EVERY FORMAT.
+         *
+         * A desync that lands on 0xFFFF is an INDEX16 attribute read as an
+         * opcode, which means the vertex was sized too small and the run
+         * ended early. The opcode in the report is the garbage byte, so its
+         * format is meaningless - print all eight. */
+        unsigned f;
+        fprintf(stderr, "[gx] vertex sizes by format:");
+        for (f = 0; f < 8u; ++f) {
+            MgsGxVertexFormat vf;
+            mgs_gx_vertex_format(gx, f, &vf);
+            fprintf(stderr, " %u:%u", f, mgs_gx_vertex_size(&vf));
+        }
+        fprintf(stderr, "  vcd=%08X/%08X\n", gx->vcd_lo, gx->vcd_hi);
+    }
     fprintf(stderr,
             "[gx] desync %llu: %s  op=0x%02X fmt=%u prim=%u detail=%u  "
             "vcd=%08X/%08X vat=%08X/%08X/%08X  cmds=%llu tris=%llu\n",
@@ -375,6 +425,9 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         bp_side_effect(gx, reg, val);
         return;
     }
+    gx->cmdring[gx->cmdring_at & 127u] = ((uint32_t)op << 24) | (len & 0xFFFFFFu);
+    ++gx->cmdring_at;
+
     if (op >= GX_OP_DRAW_FIRST) emit_primitive(gx, op, body, len);
     /* Index loads address transform-unit memory the renderer does not use
      * yet; counted, not acted on. */
@@ -388,6 +441,12 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
     unsigned i;
 
     for (i = 0; i < n; ++i) {
+        /* A ring of what the parser has just seen. A desync reports a byte
+         * that could not be an opcode, but the byte alone does not say
+         * whether the stream is padded, misaligned, or carrying data we
+         * mis-sized upstream - the bytes around it do. */
+        gx->recent[gx->recent_at++ & 63u] = data[i];
+
         if (!gx->want && !gx->have) {
             gx->opcode = data[i];
             if (gx->opcode == GX_OP_NOP || gx->opcode == GX_OP_INVL_VC) {
@@ -412,9 +471,23 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
             unsigned len = command_length(gx, gx->opcode, gx->buf, gx->have,
                                           &need_more);
             if (need_more) continue;
-            if (!len && gx->opcode >= GX_OP_DRAW_FIRST) {
-                /* Unsizable draw: the stream cannot be followed from here. */
-                desync(gx, "draw command cannot be sized", gx->opcode, gx->have);
+            if (!len) {
+                /* A LENGTH OF ZERO MEANS "I DO NOT KNOW THIS OPCODE".
+                 *
+                 * This used to report it only for opcodes at or above the
+                 * draw range, which let every unknown byte BELOW 0x80 pass as
+                 * a valid zero-length command. The parser then walked through
+                 * garbage one byte at a time, silently, until it happened to
+                 * land on a byte >= 0x80 it could not size - so the first
+                 * desync reported was never the first desync that happened,
+                 * and the trace pointed at a draw when the stream had already
+                 * been lost somewhere upstream. NOP and the vertex-cache
+                 * invalidate are the only legitimate zero-length commands and
+                 * both are consumed before this point. */
+                desync(gx, gx->opcode >= GX_OP_DRAW_FIRST
+                           ? "draw command cannot be sized"
+                           : "unknown opcode",
+                       gx->opcode, gx->have);
                 gx->have = gx->want = 0u;
                 continue;
             }
@@ -621,6 +694,14 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 
     mgs_gx_vertex_format(gx, op & 7u, &f);
     vsize = mgs_gx_vertex_size(&f);
+
+    /* The last draws, for the desync report: opcode, how many vertices the
+     * stream said, and how big we believed each one was. A body that is not a
+     * whole number of vertices is a sizing bug caught in the act. */
+    gx->drawring[gx->drawring_at & 31u] =
+        ((uint64_t)op << 56) | ((uint64_t)count << 40) |
+        ((uint64_t)vsize << 24) | (len & 0xFFFFFFu);
+    ++gx->drawring_at;
 
     if (gx->trace_draw && gx->primitives < gx->trace_draw) {
         unsigned k;

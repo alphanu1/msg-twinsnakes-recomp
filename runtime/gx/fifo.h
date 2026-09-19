@@ -203,6 +203,12 @@ typedef struct MgsGx {
     uint32_t copy_pending;       /* BP 0x52, the command, or 0 */
 
     uint64_t commands, primitives, vertices, triangles, desyncs;
+    uint8_t  recent[64];     /* the bytes just parsed, for desync reports */
+    unsigned recent_at;
+    uint32_t cmdring[128];   /* opcode<<24 | length, as parsed */
+    unsigned cmdring_at;
+    uint64_t drawring[32];   /* op<<56 | count<<40 | vsize<<24 | len */
+    unsigned drawring_at;
 } MgsGx;
 
 void mgs_gx_init(MgsGx* gx, GuestMemory* mem);

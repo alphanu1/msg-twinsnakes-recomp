@@ -21,18 +21,18 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 69.9%
+## PHASE 0 PROGRESS — 70.2%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 987 / 18,485 | 5.3% |
+| Functions named | 996 / 18,485 | 5.4% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 193 / 336 | 57.4% |
-| SDK call sites covered | 6,137 / 7,078 | 86.7% |
+| SDK entry points the engine calls, named | 197 / 336 | 58.6% |
+| SDK call sites covered | 6,142 / 7,078 | 86.8% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
-| **Average of the five** | | **69.9%** |
+| **Average of the five** | | **70.2%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
@@ -308,6 +308,14 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **A diagnostic that derives its context from the corrupt value (F158).**
+  The desync report printed the vertex format as `op & 7` where `op` was the
+  garbage byte it was complaining about. It described the corruption, not the
+  cause, and sent two hypotheses in the wrong direction.
+- **Treating "unknown" as "zero-length" (F158).** The parser accepted any
+  opcode it did not recognise below 0x80 as a valid empty command, which meant
+  it walked silently through garbage and reported the desync in the wrong
+  place entirely. An unknown opcode is a desync wherever it appears.
 - **Caching anything on an address alone (F156).** An address is not an
   identity. The texture cache matched on address/format/size and never read
   the bytes, so every dynamically updated texture - a video frame above all -
@@ -5613,6 +5621,72 @@ the thrash is gone. 40M steps headless in 60 seconds.
   64x64 format 0xC (still discarded, still a real gap), 20,957 EFB-to-XFB at
   512x448, and 56 of those with clear. The movie reaches the screen by the
   ordinary route, which is why the fault had to be in what it samples.
+
+
+### F157 — nine CARD symbols, by bracketing rather than resemblance
+
+Stage 5 aligned our boundaries against a published symbol map. This aligns
+against **source order**: the compiler emits a translation unit's functions in
+the order they are written, so a run of unnamed functions between two named
+ones must be that file's functions, in that order.
+
+What makes it evidence rather than resemblance is the **count**. A name is
+taken only where the gap is bracketed by two NAMED functions and the number of
+unnamed functions in it equals the number the source requires exactly:
+
+| bracket | expects | has | taken |
+|---|---|---|---|
+| `CARDMountAsync` .. `__CARDFormatRegionAsync` | 4 | 4 | yes |
+| `__CARDAccess` .. `__CARDIsReadable` | 1 | 1 | yes |
+| `CARDGetStatus` .. `CARDRenameAsync` | 2 | 2 | yes |
+| `__CARDFormatRegionAsync` .. `__CARDAccess` | 4 | **2** | **no** |
+| `__CARDIsReadable` .. `CreateCallbackFat` | 5 | **4** | **no** |
+
+**The two refusals matter as much as the three successes.** Both gaps are short
+by functions the linker stripped, and which one was dropped decides every name
+in the gap. A method that only ever succeeds is not being checked.
+
+Cross-checked independently by shape: the SDK's sync wrapper around an async
+call compiles to 0x48 bytes here. `CARDRename`, named earlier by a different
+route, is 0x48; the three wrappers named now - `CARDMount`, `CARDCreate`,
+`CARDSetStatus` - are each 0x48 and each sits immediately after a much larger
+`*Async`. Two independent signals agreeing.
+
+987 -> **996** named; SDK entry points 193 -> **197** of 336.
+
+### F158 — the FIFO parser hid its own desyncs
+
+The movie corrupts a few seconds in. It is not the decoder, not the scan-out
+geometry and not the texture format: the **command parser loses sync**, 388,247
+times in a run that reaches the video, against **0** in every run that does not.
+Once lost it stays lost, which is exactly "plays, then falls apart".
+
+Finding where it first went wrong took three instruments, and the first two
+pointed at the wrong thing:
+
+- A byte ring showed `FF FF` being read as an opcode. That looked like a vertex
+  sized too small, ending a run early and landing on an INDEX16 null. **It was
+  not:** decoding `vcd=0x1E1D/0x0F` by hand gives PosMatIdx 1 + three TexMatIdx
+  3 + Position INDEX16 2 + Normal INDEX16 2 + Tex0 2 + Tex1 2 = **12 bytes**,
+  which is exactly what the code computes.
+- The desync report printed `vat[op & 7]` where `op` was the garbage byte, so
+  it named format 7 while the real draws were format 3. A report that derives
+  its own context from the corrupt value describes the corruption, not the
+  cause.
+
+**The parser was hiding the evidence.** `command_length` returns 0 for an
+opcode it does not know, and the parser only reported that when the opcode was
+at or above the draw range. Every unknown byte **below 0x80 was silently
+accepted as a valid zero-length command**, so after the stream diverged the
+parser walked through garbage one byte at a time, reporting nothing, until it
+happened to land on a byte >= 0x80 it could not size. The first desync reported
+was never the first desync that happened. A command ring showed it plainly:
+`... 20:4 28:4 30:4 9B:50 1E:0 1E:0 03:0` - `0x1E` and `0x03` are not GX
+opcodes and were being consumed as no-ops.
+
+Unknown opcodes are now reported wherever they appear. Still open: what
+diverges the stream in the first place, with `83:42` - a draw whose 40-byte
+body is not a whole number of 12-byte vertices - the current lead.
 
 ---
 
