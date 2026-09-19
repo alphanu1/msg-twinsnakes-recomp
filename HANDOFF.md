@@ -151,9 +151,10 @@ indefinitely.
 
 ## NEXT, IN ORDER
 
-1. **The game's own panic, now located exactly** (F76): heap 2 allocation
-   returns NULL at `memory.c:1197`, REL offset `0x0F4DCC`. Read `fn_1_F4988`,
-   the allocator, and find what sized heap 2.
+1. **The game's own panic** (F76), with the memory architecture now mapped
+   (F78). Heap 2 is exhausted or its free list is corrupt; the big 17.8 MB
+   block it is carved from demonstrably succeeded. Three concrete next steps
+   are listed under F78.
 2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
    336. Ordered alignment is exhausted (F72); the live routes are the call
    graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
@@ -2381,6 +2382,54 @@ is recoverable and the name is not. It is still the difference between
 `mpegGCN.c` also closes an old question (F10): the MPEG video decoder is in
 the REL, at offset 0x149128, and is the game's own code rather than an SDK
 component.
+
+**F78 — the engine's memory architecture, read out of the binary.**
+Following F76's panic upward gives the whole shape, and it is worth having
+written down because every future out-of-memory question needs it.
+
+```
+libgv_cnf.c:94   fn_1_F7F94   if (heapSize == 0) heapSize = 0xDCF800   (~13.8 MB)
+                              total = heapSize + 0x400000              (~17.8 MB)
+                              block = alloc(total, MUST_SUCCEED, "libgv_cnf.c", 94)
+                              carve heap bases out of `block`
+
+                 fn_1_F43E0   HeapCreate(2, 0, base2, size2)   <- from bss+0x27738/0x27740
+                              HeapCreate(4, 0, base4, size4)
+
+                 fn_1_F48B8   heap->freeList = start; heap->size = heap->free = size
+                 fn_1_F4988   alloc(heap, flags, size, align) - walks the free list
+memory.c:1197    fn_1_F4DCC   p = alloc(2, 0, size, 32); if (!p) OSPanic(...)
+```
+
+The heap table is at REL `.bss+0x24AD8`, **44 bytes per heap**, with `freeList`
+at +0x08, `size` at +0x24 and `free` at +0x28. The DOL-side allocator is
+`fn_8004E7BC(size, mustSucceed, file, line)`, which calls a function pointer at
+`0x8020E158` and panics itself if that returns NULL and `mustSucceed` is set.
+
+**What this rules out.** The 17.8 MB block was requested with `mustSucceed`,
+and the panic we see is `memory.c:1197`, not `libgv_cnf.c:94` - so **the big
+allocation succeeded**. The arena is 0x80290700-0x81700000, about 20.4 MB, and
+17.8 MB fits. It is not a shim returning a wrong arena size, and it is not the
+framebuffer copies: after the stride fix those write 458 KB at 0x80066480 and
+0x8015A480, both below the arena.
+
+So heap 2 is genuinely being exhausted, or its free list is being corrupted
+after it is built.
+
+**What to do next, in order:**
+
+1. **Log the engine's own allocator.** `fn_1_F4988` is reached cross-module
+   rarely, but `fn_8004E7BC` is called from the REL and therefore passes
+   through `dolrecomp_dispatch_replacement` - logging `(size, file, line)`
+   there gives the allocation sequence without touching the game's code.
+2. **Dump heap 2's descriptor at the panic.** The REL's `.bss` address is
+   whatever `OSLink` was handed, which the host already sees; the table is at
+   `+0x24AD8` and heap 2 at `+0x58` into it.
+3. **Note that only ONE DVD read has happened** by this point - the overlay
+   itself. If the game expects to read a configuration file that sets
+   `heapSize` (the `bss+0x27740` global), it has not, and the 0xDCF800 default
+   applies. Whether that default is larger or smaller than the configured
+   value is the question that decides whether this is our bug at all.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
