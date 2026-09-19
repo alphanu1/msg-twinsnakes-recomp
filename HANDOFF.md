@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F144**. The two worth reading first are
+Findings from this session are **F90-F145**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -178,11 +178,15 @@ renderer.
    fills it, and says whether an asset load failed or a relocation step was
    skipped. All 2,964 texture refusals are this one texture, and F139/F140
    already rule out TMEM preload and our own BP decode.
-3. **Dump the render-to-texture contents (F144).** The text quads are full
-   width; the texture they sample is blank past a column. The glyphs are
-   rendered into the 64x64 RTT strip and copied out to
-   `0x81781BE0` / `0x81785C00` / `0x8178DC40`. Read those back and find where
-   they go blank. Superseded: (F143).
+3. **Implement EFB-to-texture copies (F145).** `mgs_efb_copy` returns without
+   writing anything unless the copy is to the external framebuffer, so all
+   1,883 render-to-texture copies in a boot discard their output — and
+   **3,860,150 of 3,873,706 triangles are drawn into that path**. Read the
+   EFB source rectangle, convert to the target copy format, write it tiled at
+   `copy_dest`/`copy_stride`. **GB8 (format 0xC)** first: it is what this game
+   uses, 64x64, and it is what the memory-card screen's text needs. The
+   texture cache already decodes these formats, so only the encoder is
+   missing.
 4. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
@@ -4971,6 +4975,57 @@ first version of this histogram was placed INSIDE the `if (tex_enabled)`
 branch, so "all triangles" and "textured triangles" were the same counter
 measuring the same thing. The two agreeing looked like a result and meant
 nothing. Moving it above the branch is what made the comparison real.
+
+---
+
+**F145 — EFB-to-texture copies are not implemented, which is why the text
+texture is blank.** Four findings chased the truncated text through the
+scissor, the depth buffer, display lists, textures, the viewport and the
+geometry. The answer is in `mgs_efb_copy`, in one condition:
+
+```c
+/* A copy to a texture stays on the graphics side: it never touches the
+ * external framebuffer... */
+if (to_xfb && efb->copy_dest && mem) {
+```
+
+**A copy that is not to the external framebuffer does nothing at all.** Every
+render-to-texture copy in the run — **1,883 of them** — writes no data. The
+engine renders its glyphs into the EFB, the copy that should capture them is
+a no-op, and the quad then samples a texture that was never written.
+
+That is the whole chain, and it explains every symptom that made no sense
+under a clipping theory: the cut is identical on every line because the
+*source texture* is identical, and unrelated to character count because the
+geometry was never the limit.
+
+**The copies, measured:**
+
+| command | size | to XFB? | format | count |
+|---|---|---|---|---|
+| `0x010063` | 64x64 | **no** | **0xC** | **1,883** |
+| `0x004403` | 512x448 | yes | 0x0 | 1,801 |
+| `0x004C03` | 512x448 | yes | 0x0 | 56 |
+
+Format `0xC` is **GB8** — green and blue stored as an 8-bit pair, two bytes
+per texel, tiled like IA8. That is what has to be produced.
+
+**This is a known hole, not a regression.** The design document lists "EFB
+copy emulation" under GX and rates that library "Very high" difficulty. The
+comment in the code is also wrong in its reasoning and should go with the
+fix: an EFB-to-texture copy is *supposed* to write guest memory at the copy
+destination — that is the entire point of it. What would corrupt the game's
+memory is writing the *wrong* thing, not writing at all.
+
+**Shape of the work:** read the EFB source rectangle, convert each pixel to
+the target copy format, and write it tiled at `copy_dest` with `copy_stride`.
+GB8 first, since it is what this game uses for its text, with the other
+formats following. The texture cache already decodes the formats, so the
+encoder is the missing half.
+
+**Scale to expect:** 3,860,150 of the run's 3,873,706 triangles are drawn into
+the render-to-texture strip (F143). Almost everything this game draws goes
+through the path that currently discards its output.
 
 ---
 

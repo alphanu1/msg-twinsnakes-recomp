@@ -602,12 +602,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       **Textured triangles 14,356 to 17,320, cache misses 2,977 to 14.**
       A general hazard of the second-window design, worth looking for
       elsewhere.
-- [ ] **The truncated text is a SEPARATE bug** (F142). Fixing the textures did
-      not move it: every line still stops at x=207-209. Ruled out by
-      measurement — the scissor box, display-list truncation, the texture
-      path, and the depth buffer. The glyphs past that point are never drawn
-      at all. Next: the viewport and projection the 2D pass sets, since the
-      white bars at x=442 use different transform state and are unaffected.
+- [ ] **EFB-to-texture copies** (F145). `mgs_efb_copy` writes nothing unless
+      the copy targets the external framebuffer, so all **1,883**
+      render-to-texture copies in a boot discard their output — and
+      **3,860,150 of 3,873,706 triangles** are drawn into that path. This is
+      what truncates the memory-card screen's text: the quads are full width
+      and the texture they sample was never written. Needs an encoder for the
+      copy formats, **GB8 (0xC)** first, writing tiled at
+      `copy_dest`/`copy_stride`. The truncation was chased through the
+      scissor, depth buffer, display lists, textures, viewport and geometry
+      first — all excluded by measurement (F139-F144).
 - [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
       million times in a long run. The probe does resolve — EXT is clear, so
       `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own

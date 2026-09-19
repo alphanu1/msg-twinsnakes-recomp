@@ -211,9 +211,10 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
                          stride << 5);
         if (getenv("MGS_TRACE_GX"))
             fprintf(stderr, "[gx] copy cmd=0x%06X dest=0x%08X stride=%u "
-                            "%ux%u xfb=%d clear=%d\n",
+                            "%ux%u xfb=%d clear=%d fmt=0x%X\n",
                     cmd, s_efb.copy_dest, s_efb.copy_stride, copy_w, copy_h,
-                    (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
+                    (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0,
+                    (cmd >> 3) & 0xFu);
         /* KEEP THE BEST FRAME THE RUN EVER PRODUCES, not whatever happens
          * to be in the buffer when the step limit hits.
          *
