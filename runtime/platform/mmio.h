@@ -24,6 +24,8 @@
 
 #include <stdint.h>
 
+#include "../dsp/aram.h"
+
 /* Hardware register blocks, as the SDK's own headers name them. */
 #define MMIO_BASE      0xCC000000u
 #define MMIO_CP        0xCC000000u   /* command processor */
@@ -63,6 +65,15 @@ typedef struct MgsMmio {
 
     /* MGS_TRACE_FIFOREG: writes to the CPU- and GP-side FIFO descriptions. */
     int      trace_fiforeg;
+
+    /* Audio RAM. The boot does not get past ARInit without it. */
+    MgsAram  aram;
+
+    /* Guest ticks seen, for the audio interface's sample counter. Kept as
+     * ticks rather than samples so the counter can be derived at whatever
+     * rate the control register currently selects, which is the thing
+     * __AI_SRC_INIT is trying to measure. */
+    uint64_t ai_ticks;
 
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
@@ -140,6 +151,23 @@ uint32_t mgs_mmio_gp_fifo_base(const MgsMmio* m);
 /* Non-zero when the pipe is feeding a display-list buffer rather than the
  * graphics processor - that is, when the two descriptions disagree. */
 int      mgs_mmio_recording(const MgsMmio* m);
+
+/* Give the DSP interface the memory its DMA moves data to and from. Until
+ * this is called the ARAM registers still read back sensibly, but a transfer
+ * does nothing - which is the right behaviour for a runtime test that has no
+ * guest memory to speak of. */
+void     mgs_mmio_attach_aram(MgsMmio* m, GuestMemory* mem);
+
+/* Tell the audio interface how much guest time has passed.
+ *
+ * `__AI_SRC_INIT` starts the interface, waits for the sample counter at
+ * 0xCC006C08 to change, and times how long that took with OSGetTime - it is
+ * CALIBRATING, so the counter has to advance in the right proportion to the
+ * guest's own clock, not merely advance. Driving it from the same tick
+ * source the timebase uses is what makes the ratio come out right; driving
+ * it from the frame tick would make the boot measure an audio clock about
+ * ten times too fast. */
+void     mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);

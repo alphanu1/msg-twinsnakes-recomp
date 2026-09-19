@@ -1397,6 +1397,113 @@ forever for a process that caught it and carried on.
 A second signal now calls `_exit(130)`. Anything that ignored the first is not
 going to answer the second. Long runs should also use `timeout -k`.
 
+## Stage 8f — Two parser faults, and how each was found · **DONE**
+
+The boot reaches the engine's own geometry and immediately loses the command
+stream. Two separate faults, and the instruments that found them differed
+because the first was visible in the parser's own accounting and the second
+was invisible to any instrument that trusted the parser.
+
+### The staging buffer, found by making the parser say WHY
+
+`MGS_TRACE_GXDESYNC=N` prints the first N lost-stream events with the opcode,
+the vertex descriptor and the attribute table - the state that decides a
+command's length. Only the first few can mean anything: after the stream is
+lost, every byte is read at the wrong offset and the rest are consequences.
+
+```sh
+MGS_TRACE_GXDESYNC=12 ./build/runtime/host/twin-snakes --headless \
+    --module build/phase1/module/gGGSPA4_recomp.so
+```
+
+```
+desync 1: vertex run longer than the staging buffer
+  op=0x9A fmt=2 prim=3 detail=1322   cmds=7235 tris=108
+```
+
+`cmds=7235 tris=108` is the exact moment the logo ends. `detail=1322` is
+`2 + 66 * 20`, and the buffer was **512 bytes**.
+
+**Dropping a draw does not lose a triangle, it loses the stream.** The garbage
+that follows eventually parses as a display-list call, and a display-list call
+is an arbitrary region of memory fed back through the parser - a region of
+zeroes being one NOP per byte.
+
+| | before | after |
+|---|---|---|
+| GX commands | 23,157,036,840 | 8,158 |
+| desyncs | 841,627,908 | 198 |
+| triangles | 490,471,344 | 556 |
+| clipped | 490,470,749 | 3 |
+
+Display lists are now also checked against what the hardware requires -
+32-byte alignment of address and size, which `GXCallDisplayList` asserts - so
+a call synthesised from misread vertex data is refused rather than executed.
+**That check is what stops one lost byte becoming twenty-three billion
+commands.**
+
+### The remaining 198, found by not trusting the parser at all
+
+Three instruments agreed and were all wrong:
+
+| instrument | said |
+|---|---|
+| `MGS_TRACE_GXDRAW` | the draw is 20 bytes a vertex |
+| tracing `GXSetVtxDesc` | the engine asks only for `GX_VA_POS` and `GX_VA_TEX0`, both direct, all boot |
+| tracing `__GXSetVCD` | flushes 55 times, writing `0x200`/`0x1` every time |
+
+So the descriptor says 20 and the parser is faithful to it. But
+`MGS_TRACE_GXBYTES=first,count` dumps the stream **before any
+interpretation**, and the distance between consecutive `9A 00 42` opcodes is
+1,587 bytes - 1,584 for 66 vertices, **exactly 24.0000 each**, no padding.
+
+Both readings were right. The bytes were never meant for the parser.
+
+### What it was
+
+`GXBeginDisplayList(ptr=0x81791C60, size=51200)`, called once. On hardware
+that points the CPU-side FIFO at a buffer in main memory and leaves the
+graphics processor's own FIFO alone: the game goes on storing to `0xCC008000`,
+but the data is written down rather than executed. A host that sends every
+write-gather-pipe write to the parser **executes the recording**, under
+whatever descriptor is live at record time rather than the one the list will
+be called under.
+
+`MGS_TRACE_FIFOREG` shows the redirection and its restoration:
+
+```
+0xCC00300C <- 0x01791C60   PI FIFO base  -> the buffer
+0xCC003010 <- 0x0179E45C   PI FIFO end   -> base + 51,196
+0xCC003014 <- 0x01791C60   PI write pointer
+       ... the sphere is recorded ...
+0xCC00300C <- 0x00450160   restored
+0xCC00003C/3E = 0x0045_0160  CP FIFO base, unchanged throughout
+```
+
+So the test is whether the two descriptions agree. **Desyncs 198 to 0**, with
+the logo unchanged at 55 frames and 7,235 commands.
+
+### The asymmetry in the write pointer, which is not a fudge
+
+It advances while recording and not while drawing. On hardware both pointers
+move and the SDK watches the distance between them to know how full the FIFO
+is. This host has no asynchronous graphics processor - a command is executed
+the moment it is written - so there is **no read pointer**. Advancing the
+write pointer alone describes a FIFO that only fills, and the SDK stops
+issuing: doing it took the boot from 55 frames and 8,158 commands to 2 and
+578. Recording is the opposite case, where nothing draining the buffer is the
+truth rather than an artefact.
+
+### What this says about instruments
+
+Every trace here except the byte dump reports what the parser made of the
+bytes, and when the parser's reading is the thing in doubt, that is circular.
+The same lesson arrived twice in one session: a phase marker that was only
+ever set and never cleared reported the last thing that had happened rather
+than the current one, and a heartbeat whose interval was not coprime to the
+run loop's tick sampled the same handler every time (F91). **A measurement
+that says something surprising is the first thing to check, not the last.**
+
 ## Stage 9 — Verify against the original · **PLANNED**
 
 **In:** the port and Dolphin. **Out:** a divergence report.

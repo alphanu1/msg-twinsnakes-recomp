@@ -88,6 +88,15 @@ void mgs_mmio_init(MgsMmio* m)
      * it expects rather than zeros it has to interpret. */
     m->regs[(MMIO_VI - MMIO_BASE) + VI_DISP_CFG + 1u] = 0x01u;  /* display enabled */
 
+    /* ARAM IS READY. `__ARChecksize` opens with
+     *   do {} while(!(__DSPRegs[11] & 1));
+     * which is a halfword read of 0xCC005016 testing bit 0, and with the
+     * register reading back zero the boot stops there for good - the last
+     * thing before it is the graphics work, so it looks like a rendering
+     * problem. The bit says the memory has finished coming up, which for a
+     * buffer we allocated is true before the guest asks. */
+    m->regs[(MMIO_DSP - MMIO_BASE) + 0x17u] = 0x01u;
+
     /* See the FIFO-register trace in mgs_mmio_write. */
     m->trace_fiforeg = getenv("MGS_TRACE_FIFOREG") != NULL;
 
@@ -300,6 +309,23 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     for (i = 0; i < size; ++i)
         p[i] = (uint8_t)(value >> (8u * (size - 1u - i)));
 
+    /* WRITING THE LOW HALF OF THE LENGTH STARTS AN ARAM TRANSFER. That is
+     * the SDK's own sequence: address, address, length-high with the
+     * direction bit, then length-low last. Everything before it is just
+     * loading registers. */
+    if (addr == MMIO_DSP + 0x2Au) {
+        mgs_aram_run_dma(&m->aram, &m->regs[MMIO_DSP - MMIO_BASE]);
+        /* The transfer is already done, so the busy bit is already clear.
+         * `__ARWaitForDMA` spins on it and would never leave if it were
+         * set and nothing cleared it. */
+        {
+            uint8_t* csr = &m->regs[(MMIO_DSP - MMIO_BASE) + 0x0Au];
+            uint32_t v = ((uint32_t)csr[0] << 8) | csr[1];
+            v &= ~0x200u;
+            csr[0] = (uint8_t)(v >> 8); csr[1] = (uint8_t)v;
+        }
+    }
+
     /* Acknowledging an interrupt AT THE DEVICE is what drops its line into
      * PI. Both of these are the guest's own handlers doing exactly that. */
     if (addr >= MMIO_VI + VI_DI0 && addr < MMIO_VI + VI_DI0 + VI_DI_COUNT * 4u)
@@ -486,4 +512,46 @@ int mgs_mmio_recording(const MgsMmio* m)
      * issued before the game ever records a list. */
     if (!cpu || !gp) return 0;
     return cpu != gp;
+}
+
+void mgs_mmio_attach_aram(MgsMmio* m, GuestMemory* mem)
+{
+    mgs_aram_init(&m->aram, mem);
+}
+
+/* ---- the audio interface's sample counter ------------------------------
+ *
+ * AICR (0xCC006C00) bit 0 runs the interface and bit 1 picks the rate:
+ * clear is 32 kHz, set is 48 kHz. AISCNT (0xCC006C08) counts samples since
+ * the interface was started, and `__AI_SRC_INIT` measures its rate against
+ * OSGetTime to work out which clock it is on.
+ *
+ * So the counter is DERIVED from guest ticks rather than incremented by some
+ * convenient amount per frame: the guest is timing it, and a counter that
+ * moves at the wrong rate answers the question wrongly rather than failing.
+ */
+#define AI_CONTROL  0x00u
+#define AI_SAMPLE_COUNT 0x08u
+#define AI_PLAYING  0x01u
+#define AI_48KHZ    0x02u
+
+void mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks)
+{
+    uint8_t* cr = &m->regs[(MMIO_AI - MMIO_BASE) + AI_CONTROL];
+    uint32_t control = ((uint32_t)cr[0] << 24) | ((uint32_t)cr[1] << 16) |
+                       ((uint32_t)cr[2] << 8) | (uint32_t)cr[3];
+    uint64_t samples;
+    uint8_t* sc;
+
+    if (!(control & AI_PLAYING)) return;
+
+    m->ai_ticks += ticks;
+
+    /* The Gekko timebase is the 162 MHz bus divided by four. */
+    samples = (m->ai_ticks * (uint64_t)((control & AI_48KHZ) ? 48000u : 32000u))
+            / 40500000ull;
+
+    sc = &m->regs[(MMIO_AI - MMIO_BASE) + AI_SAMPLE_COUNT];
+    sc[0] = (uint8_t)(samples >> 24); sc[1] = (uint8_t)(samples >> 16);
+    sc[2] = (uint8_t)(samples >> 8);  sc[3] = (uint8_t)samples;
 }

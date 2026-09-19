@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F103**. The two worth reading first are
+Findings from this session are **F90-F104**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3062,6 +3062,56 @@ because these coordinates wrap, so the naive reading is not the right one.
 box wrongly", because those look identical from the outside. **The scissor
 implementation (F100) should be treated as provisional until that A/B has
 been run against this pass.**
+
+---
+
+**F104 — the boot's next two walls were audio, and both were one register.**
+With the command stream clean the run stops cleanly and says where, which is
+what made these quick rather than hard.
+
+**`__ARChecksize+0x18`, spinning.** The SDK opens the ARAM probe with
+`do {} while(!(__DSPRegs[11] & 1))` - a halfword read of `0xCC005016` testing
+bit 0, waiting for audio RAM to finish coming up. The register read back zero
+and the boot stopped there for good. Because the last thing before it is the
+graphics work, it presented as a rendering problem.
+
+`runtime/dsp/aram.c` is the rest of it: 16 MB, and the DMA engine that is the
+only way the CPU reaches it. The register contract is the SDK's own, and the
+two details that matter are that **the low five bits of every address are not
+part of the address** (the hardware moves 32 bytes at a time, and the SDK
+masks them off), and that **bit 0x8000 of the length's high half is the
+direction**, not part of the length. The transfer completes before the write
+returns: `__ARWaitForDMA` polls a busy bit that is already clear, and nothing
+in the SDK's use of it can tell the difference.
+
+`__ARChecksize` deliberately addresses memory that may not be there - that is
+what a size probe is - so the ARAM address wraps rather than being clamped.
+Wrapping is what the hardware's address lines do, and it is what makes the
+probe terminate at 16 MB instead of running off the end of the allocation.
+
+**`__AI_SRC_INIT+0x74`, spinning.** It starts the audio interface, then waits
+for the sample counter at `0xCC006C08` to change, timing it against
+`OSGetTime`. **It is calibrating**, so a counter that merely advances is not
+enough - it has to advance in the right proportion to the guest's own clock,
+or the game measures an audio clock that does not exist. So the counter is
+derived from the same tick source as the timebase:
+`samples = ticks * rate / 40,500,000`, with the rate taken from AICR bit 1
+(clear 32 kHz, set 48 kHz) because which one it is on is precisely what the
+routine is trying to find out. Driving it from the frame tick instead would
+have made the game measure a clock about ten times too fast.
+
+**The result:** the boot now passes the whole audio stack -
+
+```
+[OSReport] << Dolphin SDK - AR   release build: Apr 17 2003 >>
+[OSReport] << Dolphin SDK - ARQ  release build: Apr 17 2003 >>
+[OSReport] << Dolphin SDK - AI   release build: Apr 17 2003 >>
+[OSReport] << Dolphin SDK - AX   release build: Jul 29 2003 >>
+[OSReport] << Dolphin SDK - DSP  release build: Apr 17 2003 >>
+```
+
+and runs 12,000,000 steps to its limit without spinning, with 0 desyncs. It
+had not passed 2.5 million before.
 
 ---
 

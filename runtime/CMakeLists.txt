@@ -9,6 +9,7 @@ add_library(mgs_runtime STATIC
   os/mem_shims.c
   os/os_time.c
   os/boot_info.c
+  dsp/aram.c
   gx/efb.c
   gx/fifo.c
   gx/vertex.c

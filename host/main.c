@@ -586,6 +586,10 @@ int main(int argc, char** argv)
                      * cleared of it in one run. */
                     if (!getenv("MGS_NO_DISPLAY")) {
                         mgs_display_init(&rt.mem);
+                        /* Audio RAM. ARInit probes it before anything else
+                         * can use it, and the boot stops in __ARChecksize
+                         * without it. */
+                        mgs_mmio_attach_aram(mgs_host_mmio(), &rt.mem);
                     s_display_mem = &rt.mem;
                     s_display_windowed = !headless;
                     mgs_module_set_display(display_pump);

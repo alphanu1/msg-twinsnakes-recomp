@@ -972,6 +972,9 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * forever, which is exactly what __OSInitAudioSystem was doing:
          * 13 million OSGetTick calls against a clock that never moved. */
         mgs_runtime_advance_ticks(mgs_runtime_from(NULL), 32u);
+        /* The audio interface's sample counter comes off the same clock,
+         * because __AI_SRC_INIT times one against the other. */
+        mgs_mmio_advance_ticks(mgs_host_mmio(), 32u);
 
         /* Advance the video beam on a cadence, so a guest polling for retrace
          * sees time pass at the rate the host runs rather than as fast as it

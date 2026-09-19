@@ -481,6 +481,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       host executed it, under whatever vertex descriptor was live rather
       than the one the list will be called under. Comparing the two FIFO
       descriptions says which is happening. **Desyncs 198 to 0.**
+- [x] **The audio stack initialises** (F104). AR, ARQ, AI, AX and DSP all
+      report in. Two walls, each one register: the ARAM ready bit at
+      `0xCC005016` bit 0, which `__ARChecksize` spins on, and the audio
+      interface's sample counter at `0xCC006C08`, which `__AI_SRC_INIT`
+      times against `OSGetTime` to work out which clock it is on. Audio RAM
+      and its DMA engine are in `runtime/dsp/aram.c` - 16 MB, which is what
+      phase 4 needs anyway. **No sound is produced yet**: this is the
+      hardware coming up, not a mixer.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written
