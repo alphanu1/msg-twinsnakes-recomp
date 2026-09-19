@@ -568,6 +568,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       whole volatile state must be preserved. **GX commands 177,806 to
       2,294,248, triangles 514,828 to 3,862,060, disc reads 64 to 271**, at
       the same 40,000,000 steps. Three runs byte-identical.
+- [x] **The boot reaches a live idle loop** (F135, F136). Frames now scale
+      with budget — 3,740 EFB copies at 40M steps, **28,311 at 200M** — so the
+      engine is alive rather than wedged, and the load has finished (disc
+      reads stop at 271 in both). The renderer is behaving: forcing the depth
+      test off gives ten times the lit pixels and does **not** change the best
+      frame, so the later frames are genuinely sparse rather than hidden.
+- [ ] **The memory card probe.** The two hottest MMIO reads in a 200M-step run
+      are EXI channel 0 and channel 1 status, **2.65 million each** — both
+      card slots. Nothing models the EXT "device present" bit, so the probe
+      may never resolve either way. "No card" is a valid answer the game must
+      handle, so the fix is to make the absence answerable, not to invent a
+      card.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

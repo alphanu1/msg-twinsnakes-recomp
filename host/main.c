@@ -1201,6 +1201,12 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->pixels_lit,
                                    (unsigned long long)rs->textured,
                                    (unsigned long long)rs->alpha_killed);
+                            printf("  coverage: %llu pixels inside a triangle, "
+                                   "%llu rejected by the depth test (%.1f%%)\n",
+                                   (unsigned long long)rs->covered,
+                                   (unsigned long long)rs->depth_failed,
+                                   rs->covered ? 100.0 * (double)rs->depth_failed
+                                                 / (double)rs->covered : 0.0);
                             {
                                 /* The two registers that decide whether
                                  * anything is textured at all, and whether

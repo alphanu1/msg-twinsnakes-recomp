@@ -43,6 +43,7 @@ typedef struct MgsGxRaster {
     int      trace;               /* MGS_TRACE_RASTER: explain rejections */
     unsigned trace_limit;         /* how many triangles to explain */
     int      no_scissor;          /* MGS_NO_SCISSOR: ignore the scissor box */
+    int      no_depth;            /* MGS_NO_DEPTH: force every pixel through */
 
     uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
     uint64_t pixels_lit;      /* of `pixels`, how many were not black */
@@ -62,6 +63,8 @@ typedef struct MgsGxRaster {
     uint64_t rascol_hits[16];
     unsigned rascol_n;
 
+    uint64_t covered;         /* pixels inside a triangle, before depth */
+    uint64_t depth_failed;    /* ...of those, rejected by the depth test */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */
 

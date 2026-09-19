@@ -27,6 +27,14 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
      * convention misread there clips everything rather than clipping
      * nothing - so the two readings have to be comparable from one binary. */
     r->no_scissor = getenv("MGS_NO_SCISSOR") != NULL;
+    /* MGS_NO_DEPTH forces every pixel past the depth test.
+     *
+     * Not a fix and not a rendering mode - a question. The game stops issuing
+     * clearing copies after the 59th, so the depth buffer holds one early
+     * frame's depths for the rest of the run and rejects 94.9% of everything
+     * drawn afterwards. Whether that is why nothing new appears is answerable
+     * in one run: turn the test off and see if the picture fills in. */
+    r->no_depth = getenv("MGS_NO_DEPTH") != NULL;
     {
         const char* e = getenv("MGS_TRACE_RASTER");
         r->trace = e != NULL;
@@ -214,6 +222,7 @@ static uint32_t lerp_color(uint32_t a, uint32_t b, uint32_t c,
 
 static int depth_passes(const MgsGxRaster* r, float z, float was)
 {
+    if (r->no_depth) return 1;
     if (!r->depth_test) return 1;
     switch (r->depth_func) {
         case 0: return 0;                 /* never */
@@ -458,7 +467,16 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
             z = w0 * sz[0] + w1 * sz[1] + w2 * sz[2];
             at = (unsigned)py * r->width + (unsigned)px;
-            if (!depth_passes(r, z, r->depth[at])) continue;
+            /* COUNTED. 3.3 million extra triangles reached this loop and
+             * produced not one pixel, and the totals were byte-identical to a
+             * run with a seventh of the geometry - so something rejects every
+             * candidate after the coverage test. Splitting "outside the
+             * triangle" from "failed the depth test" is the difference
+             * between a geometry fault and a stale depth buffer, and the
+             * depth buffer is only reset on a clearing copy: 56 of them in a
+             * boot, all early. */
+            ++r->covered;
+            if (!depth_passes(r, z, r->depth[at])) { ++r->depth_failed; continue; }
 
             /* Perspective-correct interpolation of the vertex colour: the
              * weights are in screen space, and dividing by the interpolated

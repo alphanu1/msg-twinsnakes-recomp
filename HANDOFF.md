@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F134**. The two worth reading first are
+Findings from this session are **F90-F136**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,11 +166,11 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The identical raster counters (F134).** `12,156,928 pixels, 1,167,715
-   lit` before AND after a change that multiplied triangles by 7.5 — exactly
-   53.0 screens of 512x448 in both, reproducible across three runs. Something
-   caps or short-circuits the pixel path. Not understood, and the most
-   interesting loose thread on the board.
+1. **The memory card probe (F136).** The load has finished (disc reads stop
+   at 271) and the engine renders continuously, but it polls EXI channel 0
+   and 1 status 2.65 million times — both card slots. Nothing models the EXT
+   "device present" bit. Make the absence of a card *answerable*; inventing a
+   card is probably the wrong fix, since the game must handle an empty slot.
 2. **The 6,317 GX desyncs.** Was 77 in 177,806 commands, now 6,317 in
    2,294,248 — the rate rose too (0.043% to 0.28%). Twenty times the traffic
    is reaching command shapes the parser has never seen.
@@ -4483,6 +4483,103 @@ repeat this session's most expensive habit.
 **Desyncs rose 77 to 6,317** — the rate as well as the count (0.043% to
 0.28%). Twenty times the command traffic is reaching a parser that has not
 seen most of it before.
+
+---
+
+**F135 — the identical raster counters explained, and it is not a fault.**
+F134 left an anomaly: after a change that multiplied triangles by 7.5, the
+raster counters were byte-identical — `12,156,928 pixels, 1,167,715 lit`
+before and after — and so was the best frame, at 22,034 lit pixels. Three
+measurements resolve it.
+
+**The pixels are being covered.** Splitting coverage from rejection:
+
+```
+coverage: 238,227,136 pixels inside a triangle,
+          226,070,208 rejected by the depth test (94.9%)
+```
+
+So the geometry reaches the screen; the depth test discards nearly all of it.
+`pixels` counts survivors, which is why it looked frozen.
+
+**Why the depth test rejects so much.** The depth buffer is only reset on a
+copy that asks for a clear, and the game stops asking:
+
+| copy command | count | clears? |
+|---|---|---|
+| `0x010063` (render-to-texture, 64x64) | 1,883 | no |
+| `0x004403` (to XFB, 512x448) | 1,801 | no |
+| `0x004C03` (to XFB, 512x448) | **56** | **yes** |
+
+All 56 clearing copies fall in the **first 59 copies of the run**. After that
+there are 3,681 more and not one clears, so the buffer holds one early
+frame's depths for ever.
+
+**But that is not what is hiding a picture.** Forcing every pixel through the
+depth test (`MGS_NO_DEPTH`) takes lit pixels from 1,167,715 to **12,239,203**
+— ten times as many — and leaves the best frame at **exactly 22,034 lit
+pixels, unchanged**. The extra light is spread thin: 12,239,203 across 3,740
+copies is about 3,272 lit pixels per frame, against the logo frame's 22,034.
+
+**So the later frames are genuinely sparse, and the renderer is not at
+fault.** The boot draws ~1,800 near-empty frames and 1,883 small
+render-to-texture passes while streaming from disc. That is what a **loading
+screen** looks like, and the fullest frame in the run stays the logo because
+nothing fuller has been drawn yet.
+
+**What this retires:** "the pixel path is capped" (F134's open question) was
+the wrong shape. Nothing caps it. The counters matched because the only
+frames with substantial content are the early ones, and those are identical
+in both runs by construction — the fix changed what happens *after* them.
+
+**What it leaves:** whether the load ever completes. That is a budget
+question, not a rendering one, and it is the next thing to measure.
+
+---
+
+**F136 — the boot now reaches a live idle loop, and it is polling for a
+memory card.** After F134 the boot no longer stops. Comparing 40,000,000 with
+200,000,000 steps:
+
+| | 40M | 200M |
+|---|---|---|
+| EFB copies | 3,740 | **28,311** |
+| GX commands | 2,294,248 | **21,299,798** |
+| triangles | 3,862,060 | **29,060,646** |
+| **disc reads** | **271** | **271** |
+| best frame | 22,034 lit | 22,034 lit |
+
+**Frames scale with budget** — the engine is alive and rendering continuously,
+not wedged. But **disc reads stop at 271**: the load finished. And the best
+frame never improves.
+
+**What it is doing instead.** The two hottest MMIO reads in the run are
+
+```
+0xCC006800  2,653,706 reads
+0xCC006814  2,653,696 reads
+```
+
+which are the **EXI channel 0 and channel 1 status registers** — the memory
+card bus (EXI base is 0xCC006800, channel stride 0x14). The game is polling
+both card slots 2.65 million times.
+
+That fits everything else: it has finished loading, it renders a near-empty
+screen every frame, and it asks about memory cards for ever. Twin Snakes
+shows a "checking memory card" screen at boot, and the CARD module named in
+F132's stage — `CARDGetStatus`, `CARDRename`, `__CARDIsReadable` — is
+exactly what would be running.
+
+**So the next wall is EXI, and it is a different kind of wall from the last
+three.** The boot is not stuck in the sense of frozen; it is in a legitimate
+idle loop waiting for an answer the runtime never gives. `runtime/platform/mmio.c`
+completes EXI transfers immediately by clearing the start bit, but nothing
+models the **EXT bit** — whether a device is present in the slot — so the
+card layer may be waiting on a probe that never resolves either way.
+
+**Note for whoever looks:** "no card present" is a perfectly good answer and
+the game must handle it, so the fix is probably not to invent a card. It is
+to make the absence *answerable*.
 
 ---
 
