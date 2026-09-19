@@ -400,6 +400,22 @@ static void trace_begin_dl(void* cpu, const uint32_t* gpr)
             gpr[3], gpr[4]);
 }
 
+/* The two callbacks on the task the boot waits for: `init_cb` at +0x28 of
+ * the DSPTaskInfo, which sets the flag the wait loop reads, and `done_cb` at
+ * +0x30. Tracing them answers whether the handler is reaching the right task
+ * at all, which nothing else here can. */
+static void trace_dsp_initcb(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu; (void)gpr;
+    fprintf(stderr, "[dsp] init_cb ran\n");
+}
+
+static void trace_dsp_donecb(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu; (void)gpr;
+    fprintf(stderr, "[dsp] done_cb ran\n");
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -617,6 +633,10 @@ int main(int argc, char** argv)
                          * tracking allocator, with the file and line it was
                          * called from - which is how an arena running out
                          * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_DSPCB")) {
+                            mgs_module_trace_calls(0x80032924u, trace_dsp_initcb);
+                            mgs_module_trace_calls2(0x80032988u, trace_dsp_donecb);
+                        }
                         if (getenv("MGS_TRACE_VTXDESC")) {
                             mgs_module_trace_calls(0x80040B4Cu, trace_setvtxdesc);
                             mgs_module_trace_calls2(0x80041040u, trace_setvcd);

@@ -149,6 +149,112 @@ int mgs_interrupt_dsp(const MgsModule* mod, void* cpu)
     return mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP);
 }
 
+/* Completing a DSP task, without a DSP.
+ *
+ * `__DSP_boot_task` uploads microcode and then the real coprocessor runs it
+ * and reports back through the mailbox. The SDK's `__DSPHandler` reads
+ * exactly one message per interrupt and dispatches on it:
+ *
+ *   0xDCD10000  the task has started   -> init_cb
+ *   0xDCD10001  it has resumed         -> res_cb
+ *   0xDCD10002  it has yielded
+ *   0xDCD10003  it has finished        -> done_cb
+ *
+ * The boot waits on a `done_cb` that sets one flag, so those two messages are
+ * the whole of what is needed to get past it.
+ *
+ * THIS IS NOT A DSP AND DOES NOT PRETEND TO BE. No microcode runs, nothing is
+ * mixed, and no sound comes out. What it models is the one fact the SDK is
+ * waiting to learn - that the task it submitted is over - which is true here
+ * the moment it is submitted, because nothing is going to run it.
+ *
+ * Two conditions guard it, and both matter. The message is posted only after
+ * the guest has READ the boot message, because `__DSPHandler` asserts that a
+ * current task exists and reading that message is what proves one does. And
+ * only once the guest has stopped sending, because the upload is a dozen
+ * sends in a row and interrupting it half way would have the handler consume
+ * a message the boot sequence was waiting to send.
+ */
+static uint64_t s_dsp_tasks;
+uint64_t mgs_interrupt_dsp_tasks(void);
+uint64_t mgs_interrupt_dsp_tasks(void) { return s_dsp_tasks; }
+
+int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
+int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
+{
+    static int phase;            /* 0 idle, 1 started posted, 2 done posted */
+    MgsMmio* m = mgs_host_mmio();
+
+    /* ON CHANGE, not on a cadence. Sampling every 4,096th call printed one
+     * line, taken at the first call - long before the DSP had come up - and
+     * the state it reported was true and useless. */
+    if (getenv("MGS_TRACE_DSP")) {
+        static int last = -1;
+        int now = (mgs_mmio_dsp_booted(m) ? 1 : 0)
+                | (mgs_mmio_dsp_mails_sent(m) ? 2 : 0)
+                | (mgs_mmio_dsp_mail_pending(m) ? 4 : 0)
+                | (phase << 3);
+        if (now != last) {
+            fprintf(stderr, "[dsp] booted=%d sent=%u pending=%d phase=%d\n",
+                    mgs_mmio_dsp_booted(m), mgs_mmio_dsp_mails_sent(m),
+                    mgs_mmio_dsp_mail_pending(m), phase);
+            last = now;
+        }
+    }
+    if (!mgs_mmio_dsp_booted(m)) return 0;
+    /* The guest has not read what is already there. */
+    if (mgs_mmio_dsp_mail_pending(m)) return 0;
+
+    /* AND THE UPLOAD HAS TO HAVE FINISHED.
+     *
+     * `__DSP_boot_task` sends a dozen messages in a row and only afterwards
+     * does the task it is booting become the current one. A task message
+     * posted in the middle of that arrives at a handler whose
+     * `__DSP_curr_task` is still NULL - which in a release build, with the
+     * assertions compiled out, is a store through a null pointer followed by
+     * a call through whatever is at offset 0x28 of it.
+     *
+     * Posting at `sent=6` did exactly that. Waiting for the sends to stop is
+     * the signal that the upload is over, and needs no count of how many
+     * messages the sequence happens to contain. */
+    /* ONLY WHEN STARTING A TASK. Once the start has been posted and read,
+     * the finish must follow regardless - and reading a message resets the
+     * count of sends, so requiring sends here left the sequence stuck half
+     * way through, with the start delivered and the finish never posted. */
+    if (phase == 0) {
+        static uint32_t last_sent;
+        static unsigned quiet;
+        uint32_t sent = mgs_mmio_dsp_mails_sent(m);
+        if (sent == 0u) return 0;
+        if (sent != last_sent) { last_sent = sent; quiet = 0u; return 0; }
+        if (++quiet < 8u) return 0;
+    }
+
+    {
+        uint32_t mail = phase == 0 ? 0xDCD10000u : 0xDCD10003u;
+
+        mgs_mmio_dsp_post_mail(m, mail);
+        if (!mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) {
+            /* NOT DELIVERED - the guest has interrupts off, or has not armed
+             * the DSP line yet. TAKE THE MESSAGE BACK OUT. Leaving it there
+             * means the next attempt sees a message already pending and
+             * declines, while the guest never reads it because no interrupt
+             * ever arrived: a deadlock of this code's own making, and one
+             * that presents as the boot never getting its callback. */
+            mgs_mmio_dsp_post_mail(m, 0u);
+            mgs_mmio_dsp_clear_mail(m);
+            return 0;
+        }
+        if (mail == 0xDCD10000u) { phase = 1; return 1; }
+        phase = 0;                                    /* ready for the next */
+        ++s_dsp_tasks;
+        if (getenv("MGS_TRACE_DSP"))
+            fprintf(stderr, "[dsp] task %llu completed\n",
+                    (unsigned long long)s_dsp_tasks);
+        return 1;
+    }
+}
+
 /* The graphics processor's "I have retired everything you sent me" signal.
  *
  * GXDrawDone writes a draw-done token into the FIFO and then SLEEPS until

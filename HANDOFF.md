@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F108**. The two worth reading first are
+Findings from this session are **F90-F109**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,13 +166,12 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **Decide how to get past the DSP task wall (F107).** The boot waits for a
-   `done_cb` that only a DSP task completion fires. The protocol is known and
-   written down: post `0xDCD10000` then `0xDCD10003` with a DSP interrupt for
-   each, and not before the guest has booted a task. **This puts phase-4 work
-   on phase 2's critical path**, which is a decision to take deliberately -
-   either a stand-in that completes tasks, or the real voice mixer earlier
-   than planned.
+1. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+   task messages are posted and read, and neither callback runs - so a reader
+   other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
+   the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
+   `fn_80037F28` loops on it; that is the first place to look. The boot waits
+   on **`init_cb`** (task+0x28), not `done_cb`.
 2. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
@@ -3250,6 +3249,66 @@ calls, recovered from the REL's cross-module calls, and the phase 3
 specification. Against it the row reads **81 / 81 — all of them**. The
 headline average went *down*, from 68.7% to 68.5%, which is what an honest
 denominator does.
+
+---
+
+**F109 — the DSP interrupt now routes, the mails are consumed, and the
+callbacks still do not run.** PARTIAL. What works is committed; the open
+question is one step and is written down here rather than rediscovered.
+
+**What was wrong and is now right.** `DSPCR`'s ARAM completion flags were
+forced set on every *read* - a stand-in from before ARAM was modelled. Those
+are the *status* bits the operating system's dispatcher reads to decide which
+of the DSP line's three sources fired: audio-interface DMA, ARAM, or the DSP
+itself. Held permanently set, **the ARAM source always looked pending, so the
+dispatcher never reached the DSP handler.** They are raised now where the
+transfer actually happens, which ARAM being real makes both possible and
+accurate.
+
+The three status bits are also **write-one-to-clear**, which a flat register
+store is not. `__DSPHandler` acknowledges with
+`tmp = (tmp & ~0x28) | 0x80; __DSPRegs[5] = tmp;` - under a plain store that
+*sets* the DSP bit and leaves the line asserted for ever.
+
+**Three mistakes of my own on the way, all worth knowing.**
+
+- The task check was chained onto the graphics one with `else if`. The
+  graphics check runs every 64 steps, so **every interval sharing a factor
+  with 64 was unreachable** - written as `steps % 4096` it never ran once.
+- A post whose interrupt could not be delivered left the message sitting in
+  the mailbox, so every retry saw one pending and declined while the guest
+  never read it. The message is taken back out now.
+- Requiring "the guest has sent something" before posting is right for
+  *starting* a task and wrong afterwards: reading a message resets that
+  count, so the sequence stuck half way, start delivered and finish never
+  posted.
+
+And the task must not be started mid-upload. `__DSP_boot_task` sends a dozen
+messages before the task becomes current, and a message posted during that
+reaches a handler whose `__DSP_curr_task` is still NULL - in a release build,
+with the assertions compiled out, that is a store through a null pointer and
+a call through whatever is at +0x28 of it. Waiting for the sends to stop is
+the signal, and needs no count of how many the sequence contains.
+
+**Where it stands.** A full cycle now runs: `0xDCD10000` posted, delivered,
+read; `0xDCD10003` posted, delivered, read. **And neither callback fires.**
+Hooking them directly - `init_cb` at task+0x28, which is the three-instruction
+flag-setter the boot waits on, and `done_cb` at +0x30 - shows both at zero
+while the mails are demonstrably consumed.
+
+So **something other than `__DSPHandler` is reading the mailbox**, or
+`__DSP_curr_task` is not the task whose callbacks were hooked. That is the
+next question and it is answerable: find the reader. `fn_800376E4` is
+`DSPReadMailFromDSP` and `fn_80037F28` loops on it, so the boot-task path is
+the first suspect.
+
+**The struct layout is confirmed from the SDK's own header**, not inferred:
+`+0x28 init_cb`, `+0x2C res_cb`, `+0x30 done_cb`, `+0x34 req_cb`. The boot
+waits on **`init_cb`**, not `done_cb` - I had that the wrong way round at
+first and it changes which mail matters.
+
+**No regression:** 0 desyncs, the logo unchanged at 55 frames and 7,235
+commands, 13/13 tests.
 
 ---
 

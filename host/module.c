@@ -1006,6 +1006,20 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         else if ((r.steps % 64ull) == 0ull)
             mgs_interrupt_pe_finish(mod, cpu);
 
+        /* Submitted DSP tasks report themselves finished.
+         *
+         * NOT CHAINED ONTO THE ABOVE. The graphics check runs every 64 steps
+         * and this one every 4,099; chaining them with `else if` made this
+         * branch unreachable for every interval that shares a factor with
+         * 64, which is most of them - written as `else if (steps % 4096)` it
+         * never ran once, because 4,096 is a multiple of 64.
+         *
+         * The interval is prime for the same reason the profiler's is: the
+         * run loop is full of periodic work, and anything sharing a factor
+         * with it samples a fraction of the program. */
+        if ((r.steps % 4099ull) == 0ull)
+            mgs_interrupt_dsp_task(mod, cpu);
+
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */

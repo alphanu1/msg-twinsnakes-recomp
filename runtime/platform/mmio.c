@@ -119,28 +119,20 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
     ++m->reads;
     if (!p) return 0u;
 
-    /* DSPCR's completion flags read as set.
+    /* DSPCR's completion flags are NO LONGER FORCED SET ON READ.
      *
-     * A STAND-IN, and deliberately marked as one. This runtime has no DSP:
-     * ARAM is host memory, so every transfer the guest starts has already
-     * finished before it can look. The SDK's audio init clears these flags and
-     * then waits for hardware to raise them asynchronously - which nothing
-     * here will ever do, so the wait cannot complete however carefully the
-     * write side is modelled.
+     * They used to be, because nothing raised them: ARAM was not modelled and
+     * the SDK's audio init waits on flags that hardware would set. ARAM is
+     * real now and its DMA raises them where the transfer happens, which is
+     * both accurate and enough.
      *
-     * Reporting "already done" is accurate for the transfers and wrong for
-     * anything that depends on DSP timing. That is an acceptable trade only
-     * because audio is phase 4: nothing between here and a picture on screen
-     * needs the DSP to behave like a coprocessor. Phase 4 replaces this with
-     * a real voice mixer, and this comment is the reminder.
+     * Forcing them had become actively harmful. These are the *status* bits
+     * the operating system's dispatcher reads to decide WHICH of the DSP
+     * line's three sources fired - audio-interface DMA, ARAM, or the DSP
+     * itself. Held permanently set, the ARAM source always looked pending,
+     * so the dispatcher never reached the DSP handler and a task's mail was
+     * posted, delivered, and never read.
      */
-    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
-        uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
-        uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
-        v |= (uint16_t)(DSP_CR_ARINT | DSP_CR_ARDMA_DONE);
-        cr[0] = (uint8_t)(v >> 8);
-        cr[1] = (uint8_t)v;
-    }
 
     /* READING THE LOW HALF OF THE DSP's MAILBOX EMPTIES IT.
      *
@@ -153,6 +145,10 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
         addr < MMIO_DSP + DSP_MAIL_FROM_LO + 2u) {
         uint8_t* hi = at(m, MMIO_DSP + DSP_MAIL_FROM_HI);
         hi[0] = (uint8_t)(hi[0] & 0x7Fu);
+        /* Reading a message means the guest is past the point of having a
+         * current task, and resets the count of sends since. */
+        m->dsp_booted = 1;
+        m->dsp_mails_sent = 0u;
     }
 
     /* The half-line counter is the one register that must MOVE. The SDK's
@@ -334,6 +330,26 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         addr < MMIO_DSP + DSP_MAIL_TO_LO + 2u) {
         uint8_t* hi = &m->regs[(MMIO_DSP + DSP_MAIL_TO_HI) - MMIO_BASE];
         hi[0] = (uint8_t)(hi[0] & 0x7Fu);
+        ++m->dsp_mails_sent;
+    }
+
+    /* THE THREE STATUS BITS ARE WRITE-ONE-TO-CLEAR.
+     *
+     * `__DSPHandler` acknowledges its interrupt with
+     *     tmp = (tmp & ~0x28) | 0x80;  __DSPRegs[5] = tmp;
+     * which under a plain store would SET the DSP status bit and leave the
+     * line asserted for ever. On hardware writing a one clears it, and that
+     * difference is the whole meaning of the write.
+     */
+    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
+        const uint16_t status = (uint16_t)(0x0008u | 0x0020u | 0x0080u);
+        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        uint16_t written = (uint16_t)((cr[0] << 8) | cr[1]);
+        uint16_t kept = (uint16_t)(m->dsp_status & ~written);
+        uint16_t v = (uint16_t)((written & ~status) | (kept & status));
+        cr[0] = (uint8_t)(v >> 8);
+        cr[1] = (uint8_t)v;
+        m->dsp_status = (uint16_t)(v & status);
     }
 
     /* UNHALTING THE DSP MAKES IT ANNOUNCE ITSELF.
@@ -414,6 +430,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 v |= (uint16_t)(DSP_CR_ARINT | DSP_CR_ARDMA_DONE);
                 cr[0] = (uint8_t)(v >> 8);
                 cr[1] = (uint8_t)v;
+                m->dsp_status |= (uint16_t)DSP_CR_ARINT;
             }
         }
 
@@ -604,4 +621,43 @@ void mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks)
     sc = &m->regs[(MMIO_AI - MMIO_BASE) + AI_SAMPLE_COUNT];
     sc[0] = (uint8_t)(samples >> 24); sc[1] = (uint8_t)(samples >> 16);
     sc[2] = (uint8_t)(samples >> 8);  sc[3] = (uint8_t)samples;
+}
+
+int mgs_mmio_dsp_booted(const MgsMmio* m) { return m->dsp_booted; }
+
+uint32_t mgs_mmio_dsp_mails_sent(const MgsMmio* m) { return m->dsp_mails_sent; }
+
+int mgs_mmio_dsp_mail_pending(const MgsMmio* m)
+{
+    return (m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE] & 0x80u) != 0;
+}
+
+void mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail)
+{
+    uint8_t* mb = &m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE];
+    /* Assert the DSP's own status bit. The line is shared with the audio
+     * interface and ARAM, and this is what tells the dispatcher which of the
+     * three it is - without it the message is delivered to nobody. */
+    {
+        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) | 0x0080u);
+        cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
+        m->dsp_status |= 0x0080u;
+    }
+    mb[0] = (uint8_t)((mail >> 24) | 0x80u);   /* top bit: mail waiting */
+    mb[1] = (uint8_t)(mail >> 16);
+    mb[2] = (uint8_t)(mail >> 8);
+    mb[3] = (uint8_t)mail;
+}
+
+void mgs_mmio_dsp_clear_mail(MgsMmio* m)
+{
+    uint8_t* mb = &m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE];
+    {
+        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) & ~0x0080u);
+        cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
+        m->dsp_status &= (uint16_t)~0x0080u;
+    }
+    mb[0] = mb[1] = mb[2] = mb[3] = 0u;
 }

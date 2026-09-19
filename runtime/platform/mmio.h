@@ -86,6 +86,21 @@ typedef struct MgsMmio {
      * unhalted, at which point it posts its boot message. */
     int      dsp_booting;
 
+    /* Set once the guest has READ the boot message. That is the signal that
+     * `__DSP_boot_task` is running and therefore that a current task exists -
+     * which matters, because the SDK's interrupt handler asserts on there
+     * being one and would fire that assert if a task mail arrived first. */
+    int      dsp_booted;
+
+    /* Messages the CPU has sent since it last received one. The boot
+     * handshake is a dozen sends in a row, and the task lifecycle should not
+     * begin in the middle of it. */
+    uint32_t dsp_mails_sent;
+
+    /* The DSP line's three status bits, held separately because they are
+     * write-one-to-clear and the flat register store is not. */
+    uint16_t dsp_status;
+
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
      * all you have is a total - and "33 million reads" was the only signal
@@ -179,6 +194,24 @@ void     mgs_mmio_attach_aram(MgsMmio* m, GuestMemory* mem);
  * it from the frame tick would make the boot measure an audio clock about
  * ten times too fast. */
 void     mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks);
+
+/* ---- the DSP's side of the mailbox ------------------------------------- */
+
+/* Non-zero once the guest has read the boot message, i.e. a task exists. */
+int      mgs_mmio_dsp_booted(const MgsMmio* m);
+
+/* How many messages the CPU has sent since the last one it received. */
+uint32_t mgs_mmio_dsp_mails_sent(const MgsMmio* m);
+
+/* Non-zero while a message from the DSP is still waiting to be read. */
+int      mgs_mmio_dsp_mail_pending(const MgsMmio* m);
+
+/* Put a message in the DSP's mailbox for the guest to read. */
+void     mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail);
+
+/* Take a message back out, for a post whose interrupt could not be
+ * delivered. Without it the message sits there unread forever. */
+void     mgs_mmio_dsp_clear_mail(MgsMmio* m);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);
