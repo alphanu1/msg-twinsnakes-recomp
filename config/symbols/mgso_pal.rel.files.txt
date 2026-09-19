@@ -1,0 +1,26 @@
+# mgso_pal.rel — engine source-file attribution (GGSPA4, PAL)
+#
+# NOT names. These are functions whose SOURCE FILE is established from the
+# binary itself: each hands its own `__FILE__` and `__LINE__` to an error or
+# allocation routine, so the file it was compiled from — and the exact line
+# the call sits on — are in its instruction stream.
+#
+# Produced by tools/attribute-by-strings.py; see docs/decompilation-process.md
+# stage 5e. The engine is Konami's own code and no public decompilation of it
+# exists, so a NAME cannot be recovered this way — but the file can, and that
+# is what turns "fn_1_F4DCC" into "the allocator wrapper in memory.c".
+#
+# Addresses are offsets into the REL's .text. At runtime the module loads at
+# 0x7F008000 and .text begins at 0x7F0080EC, so runtime = offset + 0x7F0080EC.
+#
+# <offset> <size> <source file> <line numbers compiled into it>
+0x0F4DCC 0x60 memory.c 1197
+0x0F7F94 0x130 libgv_cnf.c 1,94
+0x12051C 0x214 gcn_dgd.c 1,1717,1722,1728,1733
+0x1225C0 0x168 gcn_dgd.c 1,4136
+0x122728 0x6C gcn_dgd.c 4,16,4158
+0x1228E8 0x68 gcn_dgd.c 1,4293
+0x125C04 0xEC gcn_spheremap.c 1,160
+0x125CF0 0x50C gcn_spheremap.c 1,299
+0x1286A4 0x578 GCN_prim2.c 1,1246,1326,4096,9024
+0x149128 0x5CC mpegGCN.c 905,910

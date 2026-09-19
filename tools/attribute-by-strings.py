@@ -34,6 +34,54 @@ import re, sys, os, struct, argparse, collections
 
 FILE_STRING = re.compile(rb'^[A-Za-z0-9_./\-]+\.(?:c|cpp|cc|h)$')
 
+def rel_sections(path, asm_files=None):
+    """A REL's sections as (file offset, key, size), keyed the way dtk names them.
+
+    A REL is relocatable and EVERY SECTION IS BASED AT ZERO, so an address
+    alone does not identify a location - .text offset 0x1000 and .data offset
+    0x1000 are different places. dtk's labels say so: `lbl_1_data_D5F8` names
+    module 1, section .data, offset 0xD5F8. Matching on the bare number
+    instead would attribute a function to whatever string happened to sit at
+    the same offset in a different section.
+
+    Section names follow the image's own layout: the executable one is .text,
+    the first non-executable one with contents is .rodata, the next is .data,
+    and a section with contents but no file offset is .bss.
+    """
+    d = open(path, 'rb').read()
+    u32 = lambda o: struct.unpack('>I', d[o:o + 4])[0]
+    count, info = u32(0x0C), u32(0x10)
+
+    # Section names come from the DISASSEMBLER'S OWN OUTPUT, matched by size,
+    # not from guessing at the order. This REL has two four-byte sections
+    # before .rodata - constructor and destructor tables - and any
+    # ordinal-based rule puts every later section one or two names out, which
+    # then silently attributes functions to strings in the wrong section.
+    by_size = {}
+    for f in asm_files or ():
+        m = re.match(r'.*_([a-z]+)\.s$', os.path.basename(f))
+        if not m:
+            continue
+        try:
+            head = open(f, errors='replace').read(400)
+        except OSError:
+            continue
+        mm = re.search(r'size:\s*0x([0-9A-Fa-f]+)', head)
+        if mm:
+            by_size.setdefault(int(mm.group(1), 16), m.group(1))
+
+    secs = []
+    for i in range(count):
+        raw = u32(info + i * 8)
+        off, size = raw & ~3, u32(info + i * 8 + 4)
+        if not size or not off:
+            continue
+        name = by_size.get(size)
+        if not name:
+            name = 'text' if (raw & 1) else f'sec{i}'
+        secs.append((off, name, size))
+    return d, secs
+
 def dol_sections(path):
     d = open(path, 'rb').read()
     u32 = lambda o: struct.unpack('>I', d[o:o + 4])[0]
@@ -44,15 +92,21 @@ def dol_sections(path):
             secs.append((off, addr, size))
     return d, secs
 
-def to_vaddr(secs, off):
+def to_vaddr(secs, off, is_rel):
+    """A key the disassembly's labels can be compared against.
+
+    For the DOL that is a virtual address. For a REL it is the section name
+    and the offset within it, because the REL has no single address space.
+    """
     for o, a, s in secs:
         if o <= off < o + s:
-            return a + (off - o)
+            return (a, off - o) if is_rel else a + (off - o)
     return None
 
-def find_file_strings(path):
-    """virtual address -> source file name, for every file name in the DOL."""
-    d, secs = dol_sections(path)
+def find_file_strings(path, is_rel=False, asm_files=None):
+    """virtual address -> source file name, for every file name in the image."""
+    d, secs = (rel_sections(path, asm_files) if is_rel
+               else dol_sections(path))
     out = {}
     start = None
     for i, b in enumerate(d):
@@ -63,7 +117,7 @@ def find_file_strings(path):
             if start is not None and b == 0 and i - start >= 4:
                 tok = d[start:i]
                 if FILE_STRING.match(tok):
-                    va = to_vaddr(secs, start)
+                    va = to_vaddr(secs, start, is_rel)
                     if va:
                         out[va] = tok.decode()
             start = None
@@ -97,8 +151,12 @@ def function_references(asm_paths):
     """
     refs = collections.defaultdict(set)
     imms = collections.defaultdict(set)
-    fn_start = re.compile(r'^\s*\.fn\s+(?:fn_)?[0-9A-Za-z_]*?(8[0-9A-Fa-f]{7})\b')
-    sym_ref = re.compile(r'\b(?:lbl|data|rodata|jumptable|fn)_(8[0-9A-Fa-f]{7})@(?:ha|l|sda21)')
+    # A REL's symbols are `fn_1_XXXX` and its addresses are short, so both
+    # patterns have to accept an image base of zero as well as 0x8-something.
+    fn_start = re.compile(r'^\s*\.fn\s+(?:fn_)?(?:\d+_)?([0-9A-Fa-f]{2,8})\s*,')
+    sym_ref = re.compile(
+        r'\b(?:lbl|jumptable|data|rodata)_\d+_([a-z]+)_([0-9A-Fa-f]+)@(?:ha|l|sda21)'
+        r'|\b(?:lbl|data|rodata|jumptable|fn)_(8[0-9A-Fa-f]{7})@(?:ha|l|sda21)')
     li_imm = re.compile(r'\bli\s+r\d+,\s*(-?0x[0-9A-Fa-f]+|-?\d+)\s*$')
     cur = None
 
@@ -122,7 +180,13 @@ def function_references(asm_paths):
             if cur is None:
                 continue
 
-            syms = [int(mm.group(1), 16) for mm in sym_ref.finditer(line)]
+            syms = []
+            for mm in sym_ref.finditer(line):
+                if mm.group(3):
+                    syms.append(int(mm.group(3), 16))          # DOL: an address
+                else:
+                    syms.append((mm.group(1), int(mm.group(2), 16)))  # REL
+
             for a2 in syms:
                 refs[cur].add(a2)
 
@@ -148,16 +212,23 @@ def function_references(asm_paths):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--dol', required=True)
+    ap.add_argument('--dol', required=True, help='main.dol, or a REL with --rel')
+    ap.add_argument('--rel', action='store_true',
+                    help='the image is a REL: sections are self-relative, and '
+                         'dtk disassembles it at zero, so strings and code '
+                         'share one coordinate system')
     ap.add_argument('--asm', nargs='+', required=True)
     ap.add_argument('--symbols')
     ap.add_argument('--out')
     a = ap.parse_args()
 
-    strings = find_file_strings(a.dol)
+    strings = find_file_strings(a.dol, a.rel, a.asm)
     print(f"source file names in the binary: {len(strings)}")
-    for va, name in sorted(strings.items()):
-        print(f"  0x{va:08X}  {name}")
+    def show(va):
+        return (f"{va[0]}+0x{va[1]:06X}" if isinstance(va, tuple)
+                else f"0x{va:08X}")
+    for va, name in sorted(strings.items(), key=lambda kv: str(kv[0])):
+        print(f"  {show(va):<18} {name}")
 
     refs, grouped = function_references(a.asm)
     # Immediates that shared an argument setup with a file-name string.

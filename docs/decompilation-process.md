@@ -393,6 +393,50 @@ that mattered more than the count: `res012.c`, `floor0.c`, `sharedbook.c`,
 `framing.c` — **this game embeds Tremor**, Xiph's fixed-point Vorbis decoder.
 `res012.c` is decisive; stock libvorbis renamed that file years earlier.
 
+## Stage 5e-REL — Attribute the engine to its source files · **DONE**
+
+**In:** `mgso_pal.rel` + its disassembly. **Out:** 10 functions placed, and
+the boot blocker located.
+
+```sh
+python3 tools/attribute-by-strings.py --rel \
+    --dol discs/GGSPA4/disc1/files/shared/mgso_pal.rel \
+    --asm build/phase0/out/mgso_pal/asm/*.s \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --out config/symbols/mgso_pal.rel.files.txt
+```
+
+A REL is relocatable and **every section is based at zero**, so an address
+alone is not a location — `.text+0x1000` and `.data+0x1000` are different
+places. dtk's labels say which (`lbl_1_data_D5F8`), and the section names are
+read from the disassembler's own output **matched by size**, not by ordinal:
+this REL has two four-byte sections before `.rodata`, and an ordinal rule puts
+every later section one or two names out.
+
+| file | functions |
+|---|---|
+| `gcn_dgd.c` | 4 |
+| `gcn_spheremap.c` | 2 |
+| `memory.c`, `libgv_cnf.c`, `GCN_prim2.c`, `mpegGCN.c` | 1 each |
+
+These are **attributions, not names**. The engine is Konami's own code and no
+public decompilation of it exists, so the file is recoverable and the name is
+not — which is still the difference between `fn_1_F4DCC` and "the allocator
+wrapper in memory.c".
+
+### Checked against the running game
+
+The port panics at `"memory.c" on line 1197`. Two independent routes agree on
+which function that is:
+
+| route | evidence |
+|---|---|
+| runtime | the panic's stack dump gives return address `0x7F0FCF00`, so its caller starts at `0x7F0FCEB8` |
+| static | REL offset `0x0F4DCC` holds a pointer to `"memory.c"` and the immediate `0x4AD` = 1197; it loads at **`0x7F0FCEB8`** |
+
+That also settles a phase-0 open question: `mpegGCN.c` is in the REL, so the
+MPEG video decoder is the game's own code and not an SDK component (F10).
+
 ## Stage 5f — Name by exact source line · **DONE**
 
 **In:** stage 5e's file and line pairs. **Out:** 29 names.

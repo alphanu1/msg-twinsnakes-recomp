@@ -134,6 +134,12 @@ more.
 - [x] **The game embeds Tremor** (F73) — Xiph's fixed-point Vorbis decoder,
       established from `res012.c` in the binary's own strings. Phase 4 needs
       a software Vorbis path, not only a DSP voice mixer.
+- [x] **The REL attributes to source files as well** (F77) — six file names,
+      ten functions, in `config/symbols/mgso_pal.rel.files.txt`. Attributions
+      rather than names: the engine is Konami's own code and no public
+      decompilation exists, so the file is recoverable and the name is not.
+      It located the boot blocker exactly (F76) and placed the MPEG decoder,
+      closing a phase-0 question (F10).
 - [ ] Name the last 6 GX functions and the 176 remaining SDK entry points the
       engine calls. The biggest untapped source is the REL: 17,000 functions,
       with its own file-name strings.

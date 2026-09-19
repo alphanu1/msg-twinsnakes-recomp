@@ -151,9 +151,9 @@ indefinitely.
 
 ## NEXT, IN ORDER
 
-1. **The game's own panic.** It reaches `"memory.c" on line 1197` inside the
-   overlay and suspends its main thread. That is now the thing between here
-   and the title screen.
+1. **The game's own panic, now located exactly** (F76): heap 2 allocation
+   returns NULL at `memory.c:1197`, REL offset `0x0F4DCC`. Read `fn_1_F4988`,
+   the allocator, and find what sized heap 2.
 2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
    336. Ordered alignment is exhausted (F72); the live routes are the call
    graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
@@ -2323,6 +2323,64 @@ SDK, which is the community's own work and what rule 9 admits. It carries no
 licence file, so `THIRD_PARTY.md` now says that plainly and states the two
 practices that follow: nothing is copied from it, and names taken from it
 carry an origin so they can be withdrawn per symbol if that ever changes.
+
+**F76 — the boot blocker is an allocation failure, and it is now located
+exactly.**
+The game reaches `"memory.c" on line 1197` and suspends its main thread. Two
+independent routes agree on which function that is, which is what makes the
+identification solid rather than probable:
+
+- **At runtime**, the panic's own stack dump named `0x7F0FCF00` as a return
+  address, so the caller starts at `0x7F0FCEB8`.
+- **Statically**, `tools/attribute-by-strings.py` found one REL function
+  holding a pointer to the string `memory.c` together with the immediate
+  `0x4AD` - 1197. It is at REL offset `0x0F4DCC`, which loads at
+  **`0x7F0FCEB8`**.
+
+The function itself is four instructions of substance:
+
+```
+    li   r3, 2          ; heap 2
+    li   r4, 0          ; flags
+    mr   r5, <size>
+    li   r6, 0x20       ; 32-byte alignment
+    bl   fn_1_F4988     ; the allocator
+    mr.  r31, r3
+    bne  done           ; non-NULL: return it
+    ... OSPanic("memory.c", 1197, ...)
+```
+
+So: **an allocation from the engine's heap 2, 32-byte aligned, returned NULL.**
+That is the game running out of one of its own heaps, not a crash and not a
+fault in translated code. The arena it was given is 0x80290700-0x81700000,
+about 20 MB, so the question is what heap 2 was sized from and what has
+already been taken out of it - most likely something our shims allocate
+differently, or a free that never happens because the DVD or audio path that
+would trigger it is stubbed.
+
+**Where to start:** `fn_1_F4988` is the allocator. Its heap table, and what
+sized heap 2, is the thing to read next.
+
+**F77 — the REL can be attributed to source files too, and it names its own
+error sites.**
+`tools/attribute-by-strings.py` now handles RELs. That needed one thing the
+DOL did not: a REL is relocatable and **every section is based at zero**, so
+an address alone is not a location - `.text+0x1000` and `.data+0x1000` are
+different places. dtk's labels say which (`lbl_1_data_D5F8`), and the section
+names are taken from the disassembler's own output matched by size rather
+than by ordinal, because this REL has two four-byte sections before `.rodata`
+and any ordinal rule puts every later section one or two names out.
+
+Six file names, ten functions: `memory.c`, `libgv_cnf.c`, `gcn_dgd.c`,
+`gcn_spheremap.c`, `GCN_prim2.c`, `mpegGCN.c`. Recorded in
+`config/symbols/mgso_pal.rel.files.txt` as attributions, **not names** - the
+engine is Konami's own code and no public decompilation exists, so the file
+is recoverable and the name is not. It is still the difference between
+`fn_1_F4DCC` and "the allocator wrapper in memory.c".
+
+`mpegGCN.c` also closes an old question (F10): the MPEG video decoder is in
+the REL, at offset 0x149128, and is the game's own code rather than an SDK
+component.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
