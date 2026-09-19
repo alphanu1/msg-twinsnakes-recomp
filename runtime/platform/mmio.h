@@ -229,6 +229,7 @@ void     mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail);
 void     mgs_mmio_dsp_clear_mail(MgsMmio* m);
 
 /* Take the pending ARAM-transfer interrupt, if there is one. */
+void     mgs_mmio_dsp_assert_aram(MgsMmio* m);
 int      mgs_mmio_take_aram_irq(MgsMmio* m);
 void     mgs_mmio_put_aram_irq(MgsMmio* m);
 

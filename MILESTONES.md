@@ -543,9 +543,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       177,805, 24,716 triangles to 514,828, 75 EFB copies to 474**, and the
       boot now stops inside the engine's own code rather than the SDK's idle
       spin. Three runs byte-identical, so F110's determinism survives it.
-- [ ] **The second livelock.** 200,000,000 steps still equal 40,000,000. The
-      DSP line is stuck asserted (`PI cause 0x40` at every exit, 871,157
-      re-offers spent on it) and that is the next wall.
+- [x] **The stuck DSP line: an interrupt raised for no device** (F128). PI's
+      DSP bit serves three sources and the SDK's dispatcher reads the DSP's
+      own status register to tell them apart; ARAM completions were asserting
+      the line and setting no status bit, so no handler could be chosen and
+      nothing could clear it. The line now mirrors the device, as VI's always
+      has. **`PI cause 0x40` stuck to `0x00000000`, 871,157 re-offers to
+      1,122, 55 disc reads to 64**, determinism intact.
+- [ ] **The third livelock.** 200,000,000 steps still equal 40,000,000 at
+      177,806 commands — but nothing is pending at exit now, so it is not an
+      interrupt that went missing. A different search.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

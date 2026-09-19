@@ -227,6 +227,7 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
 
 /* Processor interface interrupt status, and the two bits this models. */
 #define PI_INTSR_OFF    0x00u
+#define PI_DSP          (1u << 6)   /* shared: audio interface, ARAM, DSP */
 #define PI_VI           (1u << 8)
 #define PI_PE_TOKEN     (1u << 9)
 #define PI_PE_FINISH    (1u << 10)
@@ -268,6 +269,38 @@ static void vi_refresh_line(MgsMmio* m)
         if (vi_di(m, i) & VI_DI_INT) { pi_set_cause(m, cause | PI_VI); return; }
     }
     pi_set_cause(m, cause & ~PI_VI);
+}
+
+/* PI's DSP bit follows the DSP's three status bits, for the same reason PI's
+ * VI bit follows the display interrupts: it is a shared line, not a latch.
+ *
+ * ONE LINE, THREE SOURCES - the audio interface (0x08), ARAM (0x20) and the
+ * DSP itself (0x80). The SDK's __OSDispatchInterrupt reads this register to
+ * decide WHICH of the three it is, and if none of the bits is set it builds
+ * an empty cause, runs no handler and returns. PI's bit is then asserted with
+ * nothing behind it: an interrupt nobody can claim, and nobody can clear.
+ *
+ * That is not merely untidy. Now that pending interrupts are re-offered while
+ * the line is asserted (mgs_interrupt_pending), a line stuck high is re-taken
+ * for ever - 871,157 times in a 40,000,000-step boot, each one entering the
+ * dispatcher to do nothing. Before that change it was invisible, which is why
+ * it survived so long.
+ *
+ * Mirrored on the STATUS bits alone, not gated by the mask bits beside them
+ * (0x10, 0x40, 0x100). Hardware does gate, but the SDK's dispatcher tests
+ * status only, so status is the condition that decides whether a handler can
+ * run - and matching the test that matters beats matching a test nothing
+ * reads. The distinction is moot in this boot anyway: the guest has all three
+ * mask bits set.
+ */
+static void dsp_refresh_line(MgsMmio* m)
+{
+    const uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+    uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
+    uint32_t cause = pi_cause(m);
+
+    if (v & (0x0008u | 0x0020u | 0x0080u)) pi_set_cause(m, cause | PI_DSP);
+    else                                   pi_set_cause(m, cause & ~PI_DSP);
 }
 
 void mgs_mmio_assert_retrace(MgsMmio* m)
@@ -357,6 +390,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         cr[0] = (uint8_t)(v >> 8);
         cr[1] = (uint8_t)v;
         m->dsp_status = (uint16_t)(v & status);
+        dsp_refresh_line(m);       /* the guest may have just dropped it */
     }
 
     /* UNHALTING THE DSP MAKES IT ANNOUNCE ITSELF.
@@ -461,6 +495,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 cr[0] = (uint8_t)(v >> 8);
                 cr[1] = (uint8_t)v;
                 m->dsp_status |= (uint16_t)DSP_CR_ARINT;
+                dsp_refresh_line(m);
                 /* A completed transfer also RAISES A LINE. Setting the
                  * status bit only says which source it was; without the
                  * interrupt the operating system's handler never runs, so
@@ -684,6 +719,7 @@ void mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail)
         uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) | 0x0080u);
         cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
         m->dsp_status |= 0x0080u;
+        dsp_refresh_line(m);
     }
     mb[0] = (uint8_t)((mail >> 24) | 0x80u);   /* top bit: mail waiting */
     mb[1] = (uint8_t)(mail >> 16);
@@ -699,8 +735,31 @@ void mgs_mmio_dsp_clear_mail(MgsMmio* m)
         uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) & ~0x0080u);
         cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
         m->dsp_status &= (uint16_t)~0x0080u;
+        dsp_refresh_line(m);
     }
     mb[0] = mb[1] = mb[2] = mb[3] = 0u;
+}
+
+/* A completion is a DEVICE event before it is a line.
+ *
+ * ARAM's completion used to be announced by setting PI's DSP bit and nothing
+ * else. The SDK's dispatcher reads the DSP's own status register to decide
+ * which of the three sources on that shared line it is, finds none of them
+ * set, builds an empty cause and returns - so the completion was delivered to
+ * nobody, and the bit it set could never be cleared by anybody. That is the
+ * line that was found stuck (PI cause 0x40, DSP control 0x0D50: all three
+ * masks enabled, no status bit set at all).
+ *
+ * So the status bit is set here and PI's bit follows it, which is the order
+ * hardware works in. */
+void mgs_mmio_dsp_assert_aram(MgsMmio* m);
+void mgs_mmio_dsp_assert_aram(MgsMmio* m)
+{
+    uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+    uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) | DSP_CR_ARINT);
+    cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
+    m->dsp_status |= (uint16_t)DSP_CR_ARINT;
+    dsp_refresh_line(m);
 }
 
 int mgs_mmio_take_aram_irq(MgsMmio* m)

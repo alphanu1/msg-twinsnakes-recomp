@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F127**. The two worth reading first are
+Findings from this session are **F90-F128**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,14 +166,11 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The DSP interrupt line is stuck asserted (F126, and F109 restated).**
-   Every run now exits with `PI cause 0x00000040` and burns 871,157
-   re-offers on it. Something raises the DSP line and nothing ever clears
-   it. Since PI's DSP bit is a mirror of `__DSPRegs[5]` bits 0x08/0x20/0x80
-   — which is how the SDK's dispatcher decides *which* DSP interrupt it is —
-   the question is which of those three is set with no handler willing to
-   clear it. This is the second wall, and it is the reason the boot still
-   livelocks after F126.
+1. **The third wall, and it is not an interrupt (F128).** 200,000,000 steps
+   still equal 40,000,000 at 177,806 GX commands, but nothing is pending at
+   exit and re-offers are down to 1,912. The two interrupt faults are fixed;
+   whatever holds the boot now is something else, and the search should start
+   from a fresh thread dump and profile rather than from the interrupt path.
 2. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
    177,805 — the rate rose, so it is not simply more traffic. With 20x the
    geometry flowing, the parser is meeting command shapes it never reached
@@ -236,6 +233,15 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **Raising a shared interrupt line without setting the device's status bit
+  (F128).** PI's DSP bit serves three sources and the SDK's dispatcher reads
+  `__DSPRegs[5]` to tell them apart. A line asserted with no status bit is an
+  interrupt no handler can be chosen for, and therefore one nothing can ever
+  clear.
+- **Fixing one half of an inconsistent pair (F128).** Making PI's DSP bit
+  mirror the device — strictly more accurate — cost 12x the boot on its own,
+  because the other half was still poking PI directly. Accuracy applied
+  halfway is worse than leaving both wrong.
 - **Treating the external interrupt as edge-triggered (F126).** PI's line is
   level-driven and the SDK's dispatcher services ONE source per entry, so
   anything still pending must be re-taken. Raising only on new events loses
@@ -4051,6 +4057,69 @@ picture, rather than anything upstream of it.
    of unrelated memory, which looked exactly like a real image and was not.
    A plausible picture is not evidence; the colour histogram of a known-black
    buffer is.
+
+---
+
+**F128 — the stuck DSP line was an interrupt raised on behalf of no device.**
+F126 left PI's DSP bit asserted at every exit, costing 871,157 re-offers. The
+measurement that settled it took one line in the run report:
+
+```
+PI cause 0x00000040   <- the DSP line is asserted
+DSP control 0x0D50    <- and NO status bit is set (0x0D50 & 0xA8 == 0)
+```
+
+`0x0D50` is the three interrupt **mask** bits enabled (`0x10|0x40|0x100`) with
+every **status** bit clear. That combination cannot happen on hardware, and
+the SDK's dispatcher is built on the assumption that it cannot:
+
+```c
+if (intsr & 0x00000040) {         /* PI's DSP bit - ONE line, THREE sources */
+    reg = __DSPRegs[5];           /* so read the device to tell them apart */
+    if (reg & 0x8)  cause |= OS_INTERRUPTMASK_DSP_AI;
+    if (reg & 0x20) cause |= OS_INTERRUPTMASK_DSP_ARAM;
+    if (reg & 0x80) cause |= OS_INTERRUPTMASK_DSP_DSP;
+}
+```
+
+With no status bit set, `cause` stays empty, no handler runs, and **nothing
+can ever clear the bit** — because the thing that clears it is the handler
+that could not be chosen. `mgs_interrupt_aram` was asserting PI's bit and
+setting no status bit at all, so every ARAM completion was announced to
+nobody and left the line high.
+
+**The fix is one word of ordering: tell the device, then let the line
+follow.** `mgs_mmio_dsp_assert_aram` sets ARAM's status bit, and a new
+`dsp_refresh_line` — the exact counterpart of the existing `vi_refresh_line`
+— makes PI's DSP bit a mirror of the three status bits rather than a latch.
+
+| | before | after |
+|---|---|---|
+| PI cause at exit | `0x00000040`, stuck | **`0x00000000`** |
+| interrupts re-offered | 871,157 | **1,122** |
+| DVD reads completed | 55 | **64** |
+| GX commands | 177,805 | 177,806 |
+
+Three runs byte-identical, so determinism survives it.
+
+**THE HALF-FIX THAT MADE IT 12x WORSE, and it is worth the space.** The mirror
+was written *first*, on its own, without setting the status bit. It is strictly
+more hardware-accurate than what it replaced, and it took the boot from
+**177,805 GX commands to 14,324** and 514,828 triangles to 6,260.
+
+The reason is the whole lesson: the host had two ways of announcing a DSP
+event — the device model, and `mgs_interrupt_aram` reaching past it to poke PI
+directly. A mirror makes PI follow the device, so it *correctly* dropped a
+line the device had no reason to assert, and every ARAM completion raised that
+way was lost. **Applying accuracy to one half of an inconsistent pair makes
+things worse than leaving both wrong**, and the fix was not to revert the
+mirror but to make the other half honest.
+
+**The boot still livelocks**, now for a third time: 200,000,000 steps again
+equal 40,000,000 at 177,806 commands. But the character has changed — nothing
+is pending at exit and re-offers are down to 1,912 across five times the
+steps, so whatever holds it now is **not** an interrupt that went missing.
+That is a different search.
 
 ---
 

@@ -1038,9 +1038,20 @@ int main(int argc, char** argv)
                             MgsMmio* mm = mgs_host_mmio();
                             uint32_t sr = mgs_mmio_read(mm, 0xCC003000u, 4);
                             uint32_t mr = mgs_mmio_read(mm, 0xCC003004u, 4);
+                            uint32_t csr = mgs_mmio_read(mm, 0xCC00500Au, 2);
                             printf("PI cause 0x%08X  mask 0x%08X  "
                                    "still pending and armed: 0x%08X\n",
                                    sr, mr, sr & mr);
+                            /* PI's DSP bit is shared by three sources, and
+                             * the SDK's dispatcher reads THIS register to
+                             * decide which. A PI bit set with no status bit
+                             * here is an interrupt nobody can claim. */
+                            printf("DSP control 0x%04X  status bits set: "
+                                   "%s%s%s%s\n", csr,
+                                   (csr & 0x08u) ? "AI " : "",
+                                   (csr & 0x20u) ? "ARAM " : "",
+                                   (csr & 0x80u) ? "DSP " : "",
+                                   (csr & 0xA8u) ? "" : "(none)");
                         }
                         overlay_line("IRQ: %llu DELIVERED  %llu MASKED",
                                (unsigned long long)mgs_interrupt_delivered(),

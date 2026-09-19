@@ -257,6 +257,10 @@ int mgs_interrupt_aram(const MgsModule* mod, void* cpu)
 {
     MgsMmio* m = mgs_host_mmio();
     if (!mgs_mmio_take_aram_irq(m)) return 0;
+    /* Tell the DEVICE first. PI's DSP bit is shared by three sources and the
+     * guest's dispatcher reads the DSP's status register to tell them apart;
+     * raising the line without it delivers the completion to nobody. */
+    mgs_mmio_dsp_assert_aram(m);
     if (mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) { ++s_aram_raised; return 1; }
     /* Not delivered - put it back rather than losing it. A transfer whose
      * completion is dropped is a callback that never runs. */

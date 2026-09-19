@@ -1675,6 +1675,68 @@ same 177,805 commands — so a second livelock follows this one. The DSP line
 is stuck asserted (`PI cause 0x40` at every exit, and 871,157 re-offers spent
 on it), and that is the next thing.
 
+### An interrupt raised on behalf of no device
+
+The level-triggered fix above left PI's DSP bit asserted at every exit, and
+made the cost visible: 871,157 re-offers in a 40,000,000-step boot, each one
+entering the dispatcher to do nothing. Before that change the same fault was
+free, which is why it had survived.
+
+One line added to the run report settled it:
+
+```
+PI cause 0x00000040   <- the DSP line is asserted
+DSP control 0x0D50    <- and no status bit is set (0x0D50 & 0xA8 == 0)
+```
+
+`0x0D50` is the three interrupt **mask** bits enabled with every **status**
+bit clear. That cannot happen on hardware, and the SDK is built on its not
+happening — PI's DSP bit is ONE line shared by the audio interface, ARAM and
+the DSP, so `__OSDispatchInterrupt` reads the device to tell them apart:
+
+```c
+if (intsr & 0x00000040) {
+    reg = __DSPRegs[5];
+    if (reg & 0x8)  cause |= OS_INTERRUPTMASK_DSP_AI;
+    if (reg & 0x20) cause |= OS_INTERRUPTMASK_DSP_ARAM;
+    if (reg & 0x80) cause |= OS_INTERRUPTMASK_DSP_DSP;
+}
+```
+
+With no status bit, `cause` stays empty, no handler is chosen, and **nothing
+can clear the bit** — because the thing that would clear it is the handler
+that could not be chosen. `mgs_interrupt_aram` was asserting PI's bit and
+setting no status bit at all, so every ARAM completion was announced to
+nobody.
+
+The fix is ordering: tell the device, and let the line follow it.
+`mgs_mmio_dsp_assert_aram` sets ARAM's status bit, and `dsp_refresh_line` —
+the exact counterpart of the `vi_refresh_line` that was already there for the
+video interface — makes PI's DSP bit a mirror rather than a latch.
+
+| | before | after |
+|---|---|---|
+| PI cause at exit | `0x00000040`, stuck | **`0x00000000`** |
+| interrupts re-offered | 871,157 | **1,122** |
+| DVD reads completed | 55 | **64** |
+| GX commands | 177,805 | 177,806 |
+
+Three runs byte-identical.
+
+**The half-fix, which made it twelve times worse.** The mirror was written
+first and alone, without setting the status bit. It is strictly more accurate
+than what it replaced, and it took the boot from **177,805 GX commands to
+14,324**, and 514,828 triangles to 6,260.
+
+The host had two ways of announcing a DSP event: the device model, and
+`mgs_interrupt_aram` reaching past it to poke PI directly. A mirror makes PI
+follow the device, so it correctly dropped a line the device had no reason to
+assert — and every completion announced the other way was lost. **Applying
+accuracy to one half of an inconsistent pair is worse than leaving both
+wrong.** The answer was not to revert the mirror but to make the other half
+honest, and the regression is recorded because the wrong conclusion here
+("the mirror is bad, revert it") is the attractive one.
+
 ## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.
