@@ -283,8 +283,24 @@ static void wgpipe_scan(MgsMmio* m, uint32_t value, unsigned size)
                  * interrupt. GXSetDrawSync uses register 0x47 and goes to
                  * the TOKEN interrupt instead, which is a different wakeup
                  * - so the register number is checked, not just the bit. */
-                if ((m->bp_partial >> 24) == 0x45u && (m->bp_partial & 0x2u))
-                    ++m->draw_done_tokens;
+                {
+                    uint32_t reg = m->bp_partial >> 24;
+                    uint32_t val = m->bp_partial & 0x00FFFFFFu;
+
+                    if (reg == 0x45u && (val & 0x2u))
+                        ++m->draw_done_tokens;
+
+                    /* The pixel engine's copy registers. Addresses in the
+                     * command stream are stored in 32-byte units, which is
+                     * why they fit in 24 bits at all - using the raw value
+                     * as an address lands 32 times too low. */
+                    else if (reg == 0x4Bu) m->bp_copy_dest = val << 5;
+                    else if (reg == 0x4Eu) m->bp_copy_stride = val << 5;
+                    else if (reg == 0x4Fu) m->bp_clear_ar = val;
+                    else if (reg == 0x50u) m->bp_clear_gb = val;
+                    else if (reg == 0x52u) { m->bp_copy_cmd = val | 0x80000000u;
+                                             ++m->bp_copies; }
+                }
                 m->bp_opcode_pending = 0u;
                 m->bp_have = 0u;
                 m->bp_partial = 0u;
@@ -312,6 +328,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     if (addr >= MMIO_WGPIPE && addr < MMIO_WGPIPE + 0x20u) {
         m->wgpipe_bytes += size;
         wgpipe_scan(m, value, size);
+        if (m->fifo_sink) m->fifo_sink(m->fifo_user, value, size);
         return;
     }
 
@@ -416,4 +433,42 @@ void mgs_mmio_report_hot(const MgsMmio* m, unsigned top)
         ++shown;
     }
     if (!shown) printf("  (none)\n");
+}
+
+int mgs_mmio_take_copy(MgsMmio* m, uint32_t* cmd)
+{
+    if (!m || !(m->bp_copy_cmd & 0x80000000u)) return 0;
+    if (cmd) *cmd = m->bp_copy_cmd & 0x00FFFFFFu;
+    m->bp_copy_cmd = 0u;
+    return 1;
+}
+
+/* The video interface's top-field base, VI_TFBL at 0xCC00201C.
+ *
+ * Not simply the register's value. The SDK's setFbbRegs stores the address
+ * in 32-byte units and sets bit 28 to say so whenever it does not fit in 24
+ * bits - which for anything above 16 MB it never does. Reading the register
+ * as a plain address gives a location 32 times too low, in the middle of the
+ * game's own data. */
+uint32_t mgs_mmio_xfb_address(const MgsMmio* m)
+{
+    const uint8_t* p;
+    uint32_t reg, addr;
+
+    if (!m) return 0u;
+    p = &m->regs[(MMIO_VI - MMIO_BASE) + 0x1Cu];
+    reg = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+          ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+
+    addr = reg & 0x00FFFFFFu;
+    if (reg & 0x10000000u) addr <<= 5;
+    if (!addr) return 0u;
+    return 0x80000000u | (addr & 0x03FFFFFFu);   /* physical to cached */
+}
+
+void mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user)
+{
+    if (!m) return;
+    m->fifo_sink = sink;
+    m->fifo_user = user;
 }

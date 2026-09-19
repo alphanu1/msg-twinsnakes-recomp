@@ -118,7 +118,11 @@ def main():
     ap.add_argument('--dol', required=True)
     ap.add_argument('--rel-generated', required=True)
     ap.add_argument('--rel', required=True)
-    ap.add_argument('--rel-base', default='0x80500000')
+    # The address the GAME loads its overlay at, not one we pick. See the
+    # comment on REL_BASE in CMakeLists.txt: this must match the --rel-base
+    # the overlay was recompiled with, or every data address in the generated
+    # code points somewhere the data is not.
+    ap.add_argument('--rel-base', default='0x7F008000')
     ap.add_argument('--out', required=True)
     # REL metadata, from `dtk rel info`. Declared rather than re-parsed so the
     # values in the module are the ones a human checked.

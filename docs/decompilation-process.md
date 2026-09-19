@@ -693,6 +693,42 @@ label_8001D184:
 Idempotent, 36 guards across 5 files, re-run whenever the generated code or
 `config/sdk-implemented.txt` changes. It needs no change to DolRecomp.
 
+## Stage 8d — The renderer · **IN PROGRESS**
+
+**In:** the write-gather pipe's byte stream. **Out:** pixels.
+
+```
+MMIO 0xCC008000  ->  runtime/gx/fifo.c    command parser, CP/XF state
+                 ->  runtime/gx/vertex.c  one host vertex, any input format
+                 ->  runtime/gx/raster.c  transform, project, viewport, fill
+                 ->  runtime/gx/efb.c     GXCopyDisp, BT.601, YUV 4:2:2
+                 ->  video interface      scan-out, back to RGB, the window
+```
+
+**The stream is bytes, not API calls.** `GXBegin` and the vertex writes that
+follow arrive as an opcode, a count, and packed attribute data whose layout is
+*not in the stream* - it is in registers set earlier. So a draw command's
+length is a function of state set arbitrarily far back, and one wrong length
+does not lose one command: it desynchronises everything after it.
+
+That property drives the design. The parser refuses to size a command it
+cannot size, counts the refusal, and resynchronises, rather than guessing.
+
+**Every vertex format collapses to one.** The hardware allows, per attribute,
+a choice of component count, numeric type, fractional shift, and direct or
+8/16-bit indexed addressing. All of it becomes a single `MgsGxVertex` in
+`vertex.c`, so the rasteriser has exactly one layout to be correct about.
+
+**Tested without the game**, in `tests/test_gx.c` and `tests/test_efb.c`,
+because these failures are invisible in a running game - a vertex sized one
+byte short presents as "the game is not drawing", which is indistinguishable
+from fifty other causes. The tests assert sizes directly for direct, indexed
+and fixed-point formats, then drive raw command bytes end to end and check a
+known pixel.
+
+Not done: textures, the texture environment stages, lighting, and near-plane
+clipping. Untextured geometry in the right place proves every stage before it.
+
 ## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.

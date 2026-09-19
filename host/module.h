@@ -46,6 +46,18 @@ void mgs_module_set_pump(MgsPump pump, void* user);
 
 uint32_t mgs_module_call_fail_pc(void);
 void mgs_host_set_vmem(uint8_t* vmem);
+
+/* The display path: GX's copy out, and the video interface's scan-out.
+ * Declared here so the run loop can drive them without including the GX
+ * headers. */
+struct MgsMmio;
+struct GuestMemory;
+void mgs_display_init(struct GuestMemory* mem);
+void mgs_module_set_display(void (*fn)(void));
+void mgs_module_set_frame(void (*fn)(void));
+void mgs_display_service(struct MgsMmio* mmio, struct GuestMemory* mem, unsigned height);
+int  mgs_display_present(struct MgsMmio* mmio, const struct GuestMemory* mem);
+uint64_t mgs_display_frames(void);
 uint64_t mgs_host_vmem_reads(void);
 uint64_t mgs_host_vmem_writes(void);
 uint32_t mgs_host_vmem_lo(void);

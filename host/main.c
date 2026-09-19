@@ -16,15 +16,40 @@
 #include "module.h"
 #include "platform/sdl_video.h"
 #include "platform/mmio.h"
+#include "gx/efb.h"
+#include "gx/raster.h"
 #include <SDL3/SDL.h>
 
 void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
 uint64_t mgs_dvd_completed(void);
 uint64_t mgs_dvd_callbacks(void);
+const MgsEfb* mgs_display_efb(void);
+const MgsGx* mgs_display_gx(void);
+const MgsGxRaster* mgs_display_raster(void);
 
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
+}
+
+/* The run loop drives the graphics copy and the presentation; both need guest
+ * memory, which lives in main's frame. Bound once at startup. */
+static GuestMemory* s_display_mem;
+static int          s_display_windowed;
+
+static void display_pump(void)
+{
+    mgs_display_service(mgs_host_mmio(), s_display_mem, MGS_XFB_HEIGHT);
+}
+
+/* One retrace. Present what the video interface is scanning; if there is
+ * nothing there yet, leave the boot overlay up rather than replace it with a
+ * black rectangle that says less. */
+static void frame_pump(void)
+{
+    if (!s_display_windowed) return;
+    if (mgs_display_present(mgs_host_mmio(), s_display_mem))
+        mgs_video_present();
 }
 
 
@@ -334,6 +359,14 @@ int main(int argc, char** argv)
                      * already completed. */
                     mgs_module_set_pump(dvd_pump, &dvd);
 
+                    /* The display path: GX's copy out to the external
+                     * framebuffer, and the video interface's scan-out of it. */
+                    mgs_display_init(&rt.mem);
+                    s_display_mem = &rt.mem;
+                    s_display_windowed = !headless;
+                    mgs_module_set_display(display_pump);
+                    mgs_module_set_frame(frame_pump);
+
                     /* Tell the interrupt layer where the guest's own
                      * dispatcher is. Taken from the symbol map rather than
                      * hard-coded: it is a PAL-specific address, and the map is
@@ -401,6 +434,32 @@ int main(int argc, char** argv)
                         }
                         overlay_line("STEPS: %llu", (unsigned long long)r.steps);
                         overlay_line("STOP: %s", why[r.stop]);
+                        {
+                            const MgsEfb* e = mgs_display_efb();
+                            printf("display: %llu EFB copies (%llu with clear), "
+                                   "%llu frames presented, XFB 0x%08X\n",
+                                   (unsigned long long)e->copies,
+                                   (unsigned long long)e->clears,
+                                   (unsigned long long)mgs_display_frames(),
+                                   mgs_mmio_xfb_address(mgs_host_mmio()));
+                        }
+                        {
+                            const MgsGx* g = mgs_display_gx();
+                            const MgsGxRaster* rs = mgs_display_raster();
+                            printf("GX: %llu commands, %llu primitives, "
+                                   "%llu vertices, %llu triangles (%llu desync)\n",
+                                   (unsigned long long)g->commands,
+                                   (unsigned long long)g->primitives,
+                                   (unsigned long long)g->vertices,
+                                   (unsigned long long)g->triangles,
+                                   (unsigned long long)g->desyncs);
+                            printf("raster: %llu submitted, %llu clipped, "
+                                   "%llu drawn, %llu pixels\n",
+                                   (unsigned long long)rs->submitted,
+                                   (unsigned long long)rs->clipped,
+                                   (unsigned long long)rs->drawn,
+                                   (unsigned long long)rs->pixels);
+                        }
                         printf("GX draw-done tokens: %llu  PE finish delivered: %llu\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),
                                (unsigned long long)mgs_interrupt_pe_sent());

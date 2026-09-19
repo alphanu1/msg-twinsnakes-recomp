@@ -8,6 +8,10 @@ add_library(mgs_runtime STATIC
   os/os_report.c
   os/os_time.c
   os/boot_info.c
+  gx/efb.c
+  gx/fifo.c
+  gx/vertex.c
+  gx/raster.c
   os/os_thread.c
   os/cpu_seam.c
   os/ppc_shims.c

@@ -2184,5 +2184,31 @@ a debug board. `runtime/os/boot_info.c` now writes the disc ID, the boot magic,
 24 MB, retail hardware, the 162/486 MHz clocks and the TV standard implied by
 the game ID's region letter.
 
+**F70 — the renderer's first half exists, and it is tested without the game.**
+`runtime/gx/` now holds a FIFO parser, a vertex decoder, transform/projection/
+viewport, and a scanline rasteriser with a depth buffer; `runtime/gx/efb.c`
+holds the embedded framebuffer and the copy out to the external one.
+`tests/test_gx.c` drives raw command bytes through all of it and checks a known
+pixel; `tests/test_efb.c` checks the copy and the colour conversion both ways.
+
+**Why test it without the game.** The failures that matter here are invisible
+in a running game. A vertex size computed one byte short does not draw a
+slightly wrong triangle - it desynchronises the byte stream, and every command
+after it is nonsense. That presents as "the game is not drawing", which is
+indistinguishable from fifty other causes. So the sizes are asserted directly,
+for direct and indexed attributes, for fixed-point formats where the shift
+changes the value and must not change the size, and for the matrix index that
+comes first and is easy to place last.
+
+**The design decision worth keeping:** every vertex format the hardware allows
+is collapsed to ONE host vertex before anything downstream sees it. The
+rasteriser has a single layout to be correct about, and every format bug is in
+one file.
+
+**What is missing:** textures, the texture environment stages, lighting, and
+near-plane clipping (a triangle straddling the camera is dropped whole rather
+than split). Untextured geometry in the right place proves every stage before
+it, which is why it came first.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

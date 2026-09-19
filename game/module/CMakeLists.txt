@@ -15,6 +15,14 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Where the overlay is recompiled to live. NOT a free choice: DolRecomp's
+# --rel-base fixes every absolute address in the generated code, and the game
+# loads its overlay at a hard-coded 0x7F008000. Recompiling at any other
+# address leaves the code branching correctly and reading its data from the
+# wrong place, which nothing downstream can fix. It must match the
+# --rel-base the overlay was generated with.
+set(REL_BASE "0x7F008000" CACHE STRING "Virtual load address of the overlay")
+
 foreach(V DOL_GENERATED REL_GENERATED GXRUNTIME_DIR)
   if(NOT ${V})
     message(FATAL_ERROR "set -D${V}=<path>")
@@ -71,6 +79,7 @@ add_custom_command(
   COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/gen_combined_tables.py"
           --dol-generated "${DOL_GENERATED}" --dol "${DOL_FILE}"
           --rel-generated "${REL_GENERATED}" --rel "${REL_FILE}"
+          --rel-base "${REL_BASE}"
           --out "${TABLES}"
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gen_combined_tables.py"
           "${DOL_GENERATED}/generated.h" "${REL_GENERATED}/generated.h"

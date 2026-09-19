@@ -39,6 +39,8 @@
 #define MMIO_WGPIPE    0xCC008000u   /* write-gather pipe: the GX FIFO */
 #define MMIO_END       0xCC009000u
 
+typedef void (*MgsFifoSink)(void* user, uint32_t value, unsigned size);
+
 typedef struct MgsMmio {
     /* One flat store for the whole region. Modelled registers are special
      * cased on access; everything else reads back what was written. */
@@ -69,6 +71,20 @@ typedef struct MgsMmio {
     uint32_t bp_partial;          /* register bytes gathered so far */
     unsigned bp_have;             /* how many of those four are in hand */
     uint64_t draw_done_tokens;    /* tokens seen, for the run report */
+
+    /* Pixel-engine state gathered from the same command stream. These are
+     * the registers that decide what reaches the screen: where the copy
+     * goes, how wide a line is, what colour the buffer is cleared to, and
+     * the command that performs it. */
+    uint32_t bp_copy_dest;        /* 0x4B, already shifted to an address */
+    uint32_t bp_copy_stride;      /* 0x4E, bytes per line */
+    uint32_t bp_clear_ar;         /* 0x4F */
+    uint32_t bp_clear_gb;         /* 0x50 */
+    uint32_t bp_copy_cmd;         /* 0x52, the last copy executed */
+    uint64_t bp_copies;           /* copy commands seen */
+
+    MgsFifoSink fifo_sink;
+    void*       fifo_user;
 
     uint64_t reads, writes;
 
@@ -110,6 +126,21 @@ int      mgs_mmio_take_draw_done(MgsMmio* m);
  * which is what makes the SDK's handler take its retrace path rather than
  * its position-callback path. */
 void     mgs_mmio_assert_retrace(MgsMmio* m);
+
+/* Where the command stream goes. The MMIO layer recognises the handful of
+ * registers it must ACT on and forwards every byte to this, which is the
+ * graphics side's business. Set it before the guest starts drawing; left
+ * unset, the stream is counted and discarded, which is what happened before
+ * there was a renderer. */
+void     mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user);
+
+/* Take the pending copy command, if there is one. Returns 0 when the game
+ * has not asked for a copy since the last call. */
+int      mgs_mmio_take_copy(MgsMmio* m, uint32_t* cmd);
+
+/* Where the video interface is scanning from, as a guest address, or 0 if
+ * the game has not programmed it yet. */
+uint32_t mgs_mmio_xfb_address(const MgsMmio* m);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);

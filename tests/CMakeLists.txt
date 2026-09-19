@@ -40,3 +40,11 @@ if(SDL3_FOUND)
   add_executable(pad_probe ${CMAKE_SOURCE_DIR}/tools/probes/pad_probe.c)
   target_link_libraries(pad_probe PRIVATE mgs_runtime m)
 endif()
+
+add_executable(test_efb test_efb.c)
+target_link_libraries(test_efb PRIVATE mgs_runtime)
+add_test(NAME efb COMMAND test_efb)
+
+add_executable(test_gx test_gx.c)
+target_link_libraries(test_gx PRIVATE mgs_runtime)
+add_test(NAME gx COMMAND test_gx)

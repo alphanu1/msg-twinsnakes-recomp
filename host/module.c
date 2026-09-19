@@ -570,6 +570,19 @@ static int service_vector(void* cpu, uint32_t pc,
 static MgsPump s_pump;
 static void*   s_pump_user;
 
+/* Called from the run loop to drain the graphics command stream. Held as a
+ * bare callback so this file needs no GX header. */
+static void (*s_display)(void);
+
+static void (*s_frame)(void);
+
+void mgs_module_set_display(void (*fn)(void));
+void mgs_module_set_display(void (*fn)(void)) { s_display = fn; }
+
+/* Called once per retrace, to put the external framebuffer on the screen. */
+void mgs_module_set_frame(void (*fn)(void));
+void mgs_module_set_frame(void (*fn)(void)) { s_frame = fn; }
+
 void mgs_module_set_pump(MgsPump pump, void* user)
 {
     s_pump = pump; s_pump_user = user;
@@ -649,6 +662,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         if ((r.steps % 2000ull) == 0ull) {
             mgs_mmio_tick_frame(mgs_host_mmio());
             mgs_interrupt_vi(mod, cpu);
+            if (s_frame) s_frame();
             ++r.frames;
         }
 
@@ -664,6 +678,12 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * read. */
         if ((r.steps % 512ull) == 0ull && s_pump)
             s_pump(mod, cpu, s_pump_user);
+
+        /* Execute any framebuffer copy the game has put in the command
+         * stream. Checked often: the copy is what makes a frame exist, and
+         * deferring it to the next retrace would show every frame late. */
+        if ((r.steps % 256ull) == 0ull && s_display)
+            s_display();
 
         pc = mgs_module_pc(cpu);
         recent[recent_n % RECENT] = pc;

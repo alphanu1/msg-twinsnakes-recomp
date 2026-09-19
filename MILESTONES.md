@@ -321,11 +321,33 @@ which contains the game's own graphics data.
 
 This is the project. ~200 functions and the widest error bars in the plan.
 
-- [ ] **Vertex converter** — one converter turning any GX vertex stream
-      (direct/8-bit/16-bit indexed, s8/s16/f32 with fractional shift) into a
-      single fixed host layout, so the host renderer sees exactly one format.
-- [ ] **FIFO command parser** — games write raw FIFO commands, not just API
-      calls.
+- [x] **Vertex converter** — `runtime/gx/vertex.c`. Direct and 8/16-bit
+      indexed, u8/s8/u16/s16/f32 with the attribute table's fractional shift,
+      every colour format including the 24-bit 6666, arrays read through the
+      CP base/stride registers. Everything becomes one `MgsGxVertex`, so the
+      rasteriser has one layout to be correct about.
+- [x] **FIFO command parser** — `runtime/gx/fifo.c`. The stream is bytes, not
+      calls: a draw command's LENGTH depends on registers set arbitrarily far
+      back, so the parser carries CP/XF state forward and refuses to guess a
+      size it cannot compute. One wrong length desynchronises everything
+      after it, so a refusal is counted and recovered from rather than
+      papered over. Nested display lists execute inline with their own parser
+      state; strips, fans and quads expand to triangles with the winding the
+      hardware uses.
+- [x] **Transform, projection and viewport** — position matrices selected per
+      vertex from XF memory, the packed 6-float projection with its separate
+      orthographic flag, and the viewport's 342-pixel bias.
+- [x] **Scanline rasteriser** — `runtime/gx/raster.c`. Edge-function fill,
+      depth buffer with the full comparison set, back-face culling by area
+      sign, perspective-correct Gouraud interpolation. Tested end to end from
+      raw command bytes to a known pixel (`tests/test_gx.c`).
+- [x] **The route to the screen** — an EFB that GX clears, `GXCopyDisp`
+      executed for real from the pixel engine's copy registers, BT.601
+      conversion to YUV 4:2:2 at the address the game programmed, and
+      scan-out from the video interface's own register (`tests/test_efb.c`).
+- [ ] **Textures** — the decoder, the cache, and the texture environment
+      stages. The largest remaining piece, and what stands between untextured
+      geometry and a recognisable frame.
 - [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine
       calls `GXSetTevIndirect`, `GXSetIndTexMtx`, `GXSetIndTexOrder`,
       `GXSetIndTexCoordScale` and `GXSetNumIndStages`. The design document
