@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F138**. The two worth reading first are
+Findings from this session are **F90-F139**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -171,9 +171,12 @@ renderer.
    and 1 status 2.65 million times — both card slots. Nothing models the EXT
    "device present" bit. Make the absence of a card *answerable*; inventing a
    card is probably the wrong fix, since the game must handle an empty slot.
-2. **The texture cache refuses 2,964 of 17,320 lookups (F137).** Each refusal
-   is a surface drawn untextured. Find which formats or sizes it will not
-   take — `textures: 13 decoded, 14343 hits, 2977 misses, 2964 refused`.
+2. **The font texture at `0x835006C0` (F139).** 2,622 of the 2,964 refusals
+   are ONE texture: format 0x6 (RGBA8) 8x8, at an address past MEM1's 24 MB.
+   Either the BP texture address is mis-derived, or the glyphs are preloaded
+   into TMEM and the register holds a TMEM offset. This is what truncates
+   every line of text on the memory-card screen, and it is the whole visible
+   gap.
 3. **Re-measure the texture-enable claim (F129, suspect after F137).** "Only
    778 of 514,826 triangles want a texture" was measured while a display list
    was being dropped every frame and the stream desynced 6,317 times. It is
@@ -4674,6 +4677,59 @@ not attach them to issues, do not upload them.
 17,320 lookups is now clearly the thing between this and more of the screen:
 the cube in this logo IS textured, so the path works and the refusals are
 formats or sizes it will not take.
+
+---
+
+**F139 — the memory-card warning screen renders, with its text cut off, and
+the cause is one texture.** The boot now reaches an interactive menu: the
+game's *"Warning — No Memory Card in Slot B. Please insert into Slot A or
+Slot B"* screen, with **Retry** and **Continue without saving**. It sits there
+because that is what the game does without a card or a button press.
+
+Every text line is truncated mid-word — "No Memory Car", "Slot B. Please i",
+"into Slot A or S", "Continue with". Measured in EFB coordinates the cut is at
+**x = 207-209 on 60 rows**, while "Warning" reaches 271 and the white bars
+reach 442, so it is not a global clip.
+
+**Two explanations tested and killed:**
+
+1. **Display-list truncation.** The command processor fetches in 32-byte
+   units, so running exactly `size` bytes of an 83-byte list looked like it
+   would drop the tail. Rounding up to 96 took the boot from **0 desyncs to
+   231** with no change to the geometry: the bytes past the game's length are
+   padding, and the parser reads them as commands. Reverted. *Do not try this
+   again* — it is recorded in `run_dl`'s comment.
+2. **The scissor box.** `MGS_NO_SCISSOR=1` leaves the cut at **exactly
+   x=207/208/209**, identical. Not clipping; those glyphs are never drawn.
+
+**What it actually is.** Splitting the texture cache's single `refused`
+counter into its five reasons (they had all shared one, which made "2,964
+refused" unactionable) gives:
+
+```
+texture refusals: 0 size, 0 texels, 0 palette, 0 alloc, 2622 decode
+[tex] refused DECODE: format=0x6 8x8 addr=0x835006C0     (x2622, one address)
+```
+
+**One texture, 2,622 times.** Format 0x6 is RGBA8, 8x8 — the font glyphs. The
+decoder implements RGBA8 correctly (two 32-byte halves, alpha+red then
+green+blue); it never gets that far, because `guest_ptr` refuses the address.
+
+**`0x835006C0` is not in MEM1.** With 24 MB, MEM1 ends at `0x81800000`. The
+address is the same every single time, so it is not garbage from a lost
+stream — it is a real value we are interpreting wrongly. Two candidates, and
+they want different work:
+
+- the BP texture-address register is being reconstructed wrongly (it holds a
+  physical address in 32-byte units, so `(reg << 5) | 0x80000000`, and
+  `0x835006C0` implies `reg = 0x1A8036`, past the 24 MB machine); or
+- the glyphs are **preloaded into TMEM** by `GXLoadTexObjPreLoaded` /
+  `GXPreLoadEntireTexture`, in which case the register holds a TMEM offset
+  and main memory is the wrong place to look entirely.
+
+**Why this is the whole visible gap.** The logo's cube IS textured, so the
+path works; 14,356 triangles sample successfully. It is this one font texture
+that fails, and the text it draws is most of what a menu screen is.
 
 ---
 

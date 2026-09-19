@@ -589,10 +589,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       person would recognise rather than a pixel count. Frames are written
       outside the repository and are never committed (rule 8: the artwork is
       the game's, whoever's code drew it).
-- [ ] **The texture cache refuses 2,964 of 17,320 lookups.** Each refusal is a
-      surface drawn untextured. The logo's cube IS textured, so the path
-      works — these are formats or sizes the cache will not take. Now the
-      most visible gap.
+- [x] **The boot reaches an interactive menu** (F139). The game's "Warning —
+      No Memory Card" screen, with Retry and Continue without saving. It waits
+      there because that is what the game does with no card and no input.
+- [ ] **The font texture at `0x835006C0`** (F139). 2,622 of 2,964 texture
+      refusals are ONE texture — format 0x6 (RGBA8) 8x8 — at an address past
+      MEM1's 24 MB. It truncates every line of text on that screen
+      mid-word. Either the BP texture address is reconstructed wrongly, or the
+      glyphs are preloaded into TMEM and the register holds a TMEM offset.
+      The scissor and display-list truncation were both tested and are not
+      the cause. This is the whole visible gap.
 - [ ] **The memory card probe.** EXI channel 0 and 1 status are polled 2.65
       million times in a long run. The probe does resolve — EXT is clear, so
       `CARDProbeEx` returns `CARD_RESULT_NOCARD` — so this is the game's own

@@ -497,6 +497,14 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
         return;
     }
 
+    /* EXACTLY `size` BYTES, NOT ROUNDED UP TO THE FETCH UNIT.
+     *
+     * The command processor fetches in 32-byte units, so rounding a size of
+     * 83 up to 96 looks like the faithful thing to do. It is not: doing it
+     * took this boot from 0 desyncs to 231, because the 13 bytes past the
+     * game's own length are padding and the parser reads them as commands.
+     * Tried, measured, reverted - and recorded so it is not tried again. */
+
     p = guest_ptr(gx->mem, addr, size);
     if (!p) {
         desync(gx, "display list is not in mapped memory", GX_OP_CALL_DL, size);

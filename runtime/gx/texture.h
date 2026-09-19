@@ -44,6 +44,13 @@ typedef struct MgsTexCache {
     MgsTexture entry[MGS_TEX_CACHE_ENTRIES];
     uint64_t   clock;
     uint64_t   hits, misses, decodes, evictions, refused;
+    /* Why a lookup was refused, split out: a size we will not take, a texel
+     * count past the cap, a palette that is not mapped, a failed
+     * allocation, or a format the decoder does not implement. */
+    uint64_t refused_size, refused_texels, refused_palette;
+    uint64_t refused_alloc, refused_decode;
+    int      trace_refusals;   /* MGS_TRACE_TEXREFUSE */
+
 } MgsTexCache;
 
 void mgs_tex_cache_init(MgsTexCache* c);

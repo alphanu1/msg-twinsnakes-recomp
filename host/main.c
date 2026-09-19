@@ -1258,6 +1258,13 @@ int main(int argc, char** argv)
                                                (unsigned long long)rs->rascol_hits[k]);
                                 }
                             }
+                            printf("  texture refusals: %llu size, %llu texels, "
+                                   "%llu palette, %llu alloc, %llu decode\n",
+                                   (unsigned long long)rs->tex.refused_size,
+                                   (unsigned long long)rs->tex.refused_texels,
+                                   (unsigned long long)rs->tex.refused_palette,
+                                   (unsigned long long)rs->tex.refused_alloc,
+                                   (unsigned long long)rs->tex.refused_decode);
                             printf("textures: %llu decoded, %llu hits, "
                                    "%llu misses, %llu refused, %llu evicted\n",
                                    (unsigned long long)rs->tex.decodes,

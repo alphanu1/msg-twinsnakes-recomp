@@ -1,5 +1,7 @@
 #include "texture.h"
 
+#include <stdio.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -233,7 +235,11 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
 
 /* ---- the cache --------------------------------------------------------- */
 
-void mgs_tex_cache_init(MgsTexCache* c) { memset(c, 0, sizeof *c); }
+void mgs_tex_cache_init(MgsTexCache* c)
+{
+    memset(c, 0, sizeof *c);
+    c->trace_refusals = getenv("MGS_TRACE_TEXREFUSE") != NULL;
+}
 
 void mgs_tex_cache_free(MgsTexCache* c)
 {
@@ -279,8 +285,19 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     uint16_t* palette = NULL;
     uint16_t palette_copy[16384];
 
-    if (!width || !height || width > 1024u || height > 1024u) { ++c->refused; return NULL; }
-    if (width * height > MGS_TEX_MAX_TEXELS) { ++c->refused; return NULL; }
+    /* FIVE DIFFERENT REFUSALS SHARED ONE COUNTER, which made "2,964 refused"
+     * unactionable: a bad size, an unmapped palette and a format the decoder
+     * does not know are three different jobs. Split. */
+    if (!width || !height || width > 1024u || height > 1024u) {
+        ++c->refused; ++c->refused_size;
+        if (c->trace_refusals)
+            fprintf(stderr, "[tex] refused SIZE: %ux%u format=0x%X\n",
+                    width, height, format);
+        return NULL;
+    }
+    if (width * height > MGS_TEX_MAX_TEXELS) {
+        ++c->refused; ++c->refused_texels; return NULL;
+    }
 
     for (i = 0; i < MGS_TEX_CACHE_ENTRIES; ++i) {
         MgsTexture* e = &c->entry[i];
@@ -300,20 +317,23 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     if (format == 0x8u || format == 0x9u || format == 0xAu) {
         unsigned entries = (format == 0x8u) ? 16u : (format == 0x9u) ? 256u : 16384u;
         const uint8_t* p = guest_ptr(mem, tlut_addr, entries * 2u);
-        if (!p) { ++c->refused; return NULL; }
+        if (!p) { ++c->refused; ++c->refused_palette; return NULL; }
         for (i = 0; i < entries; ++i) palette_copy[i] = be16(p + i * 2u);
         palette = palette_copy;
     }
 
     t = find_slot(c);
     t->texels = (uint32_t*)malloc((size_t)width * height * sizeof(uint32_t));
-    if (!t->texels) { ++c->refused; return NULL; }
+    if (!t->texels) { ++c->refused; ++c->refused_alloc; return NULL; }
 
     if (!mgs_tex_decode(mem, addr, format, width, height,
                         palette, tlut_format, t->texels)) {
         free(t->texels);
         t->texels = NULL;
-        ++c->refused;
+        ++c->refused; ++c->refused_decode;
+        if (c->trace_refusals)
+            fprintf(stderr, "[tex] refused DECODE: format=0x%X %ux%u addr=0x%08X\n",
+                    format, width, height, addr);
         return NULL;
     }
 
