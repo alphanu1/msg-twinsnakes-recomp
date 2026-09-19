@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F125**. The two worth reading first are
+Findings from this session are **F90-F126**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,25 +166,30 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **Watch which source `__OSDispatchInterrupt` picks on the 62nd completion
-   (F124).** The deadlock is now one event: 62 completions delivered, 62
-   acknowledged by the guest, 61 with the ring flag set, 60 signalled. The
-   62nd is the first to arrive with a VI interrupt already pending (`cause
-   0x140`, where 59-61 all read `0x40`), and the run ends with PE **and** DSP
-   still pending and armed. If PE is being left set behind a VI it lost to,
-   that is the fault and it is a small one.
-2. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
+1. **The DSP interrupt line is stuck asserted (F126, and F109 restated).**
+   Every run now exits with `PI cause 0x00000040` and burns 871,157
+   re-offers on it. Something raises the DSP line and nothing ever clears
+   it. Since PI's DSP bit is a mirror of `__DSPRegs[5]` bits 0x08/0x20/0x80
+   — which is how the SDK's dispatcher decides *which* DSP interrupt it is —
+   the question is which of those three is set with no handler willing to
+   clear it. This is the second wall, and it is the reason the boot still
+   livelocks after F126.
+2. **The 77 GX desyncs (F126).** Was 2 in 20,429 commands, now 77 in
+   177,805 — the rate rose, so it is not simply more traffic. With 20x the
+   geometry flowing, the parser is meeting command shapes it never reached
+   before. `MGS_TRACE_GXDESYNC` names them.
+3. **Find who is eating the DSP mailbox (F109).** The interrupt routes, both
    task messages are posted and read, and neither callback runs - so a reader
    other than `__DSPHandler` is consuming them, or `__DSP_curr_task` is not
    the task being watched. `fn_800376E4` is `DSPReadMailFromDSP` and
    `fn_80037F28` loops on it; that is the first place to look. The boot waits
    on **`init_cb`** (task+0x28), not `done_cb`.
-3. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+4. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
    per-frame work is reached through a function pointer at `+0x04` of a node
    in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
    `+0x40` and per-node flag bits 12..15. That table says directly which tasks
    exist and which are gated off; the call graph cannot.
-4. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
+5. **Name the remaining 143 SDK entry points the engine calls.** 193 of 336
    are named and they cover 86.7% of call sites. Ordered alignment is
    exhausted (F72); the live routes are the call graph, the `__FILE__`/
    `__LINE__` pairs, inline-assembly matching (F90), and — the one that paid
@@ -195,21 +200,21 @@ renderer.
 
    Aim it using the region split in **F116**, not the raw count: only about a
    quarter of the remaining call sites are in code with any public reference.
-5. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+6. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
    (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
    Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
    source is in `extern/tremor`, but Konami edited it and the line numbers do
    not match, so ordinal alignment would produce names with no valid origin.
-6. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+7. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-7. **The second window is the performance floor.** The whole engine runs at
+8. **The second window is the performance floor.** The whole engine runs at
    `0x7E000000`, so every load and store goes through `external_read`/
    `external_write` rather than the generated code's fast path. The `memcpy`
    shim removed the largest single consumer; the rest of the engine still pays
    it on every access.
-8. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+9. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
-9. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+10. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
    decoder is in `main.dol` and runs on the CPU.
 
 ---
@@ -231,6 +236,11 @@ renderer.
   quarters of what is left is in Konami's own sound, Tremor and CR_System
   code, where no reference binary and no upstream source exist. Sort the
   remainder by region before aiming at it.
+- **Treating the external interrupt as edge-triggered (F126).** PI's line is
+  level-driven and the SDK's dispatcher services ONE source per entry, so
+  anything still pending must be re-taken. Raising only on new events loses
+  every event that arrives behind a higher-priority source. This cost the
+  boot 20x its geometry.
 - **"The boot is just slow" (F122).** 200 million steps produce byte-identical
   output to 40 million. It is a livelock. A change that only moves the step
   count has changed nothing.
@@ -3909,6 +3919,88 @@ whenever `steps % 16000 == 0` (lcm of 2,000 and 64). It is harmless today —
 the token is put back and retried 64 steps later — but it is the same shape as
 the bug that made the DSP branch unreachable, and the comment warning about
 that sits directly beneath it.
+
+---
+
+**F126 — THE BOOT'S LIVELOCK WAS ONE MISSING WORD IN THE INTERRUPT MODEL:
+the external interrupt is LEVEL-triggered, and we were treating it as
+edge-triggered.**
+
+The processor interface asserts its line while **any** armed cause bit is
+set. The CPU does not take one interrupt per event — it takes one whenever
+that line is high and `MSR[EE]` is on. So a source still pending when a
+handler returns is taken **again**, immediately, as `rfi` restores EE.
+
+That matters because of how the SDK's dispatcher works. `__OSDispatchInterrupt`
+services **exactly one source per entry**: it builds the pending set, picks
+the highest priority from `InterruptPrioTable`, calls that one handler, and
+returns through `OSLoadContext`. Everything else stays pending and *relies on
+being re-taken*.
+
+`host/interrupt.c` only ever entered the dispatcher when it raised a new
+event. So every completion that arrived while a higher-priority source was
+pending was serviced as the other source and **never seen again**.
+
+**The evidence, in the order it arrived:**
+
+- `OS_INTERRUPTMASK_PI_VI` sits directly above `OS_INTERRUPTMASK_PI_PE` in
+  `InterruptPrioTable`. VI beats PE.
+- The trace shows pe #59, #60 and #61 arriving with `cause 0x40` — DSP
+  pending, which PE outranks — and all three signalled.
+- pe #62 arrives with `cause 0x140`: **VI pending too**. VI wins, PE is left
+  set, and no acknowledgement follows it. That is the 61st signal that never
+  came, and the entire boot.
+- The run ends with `PI cause 0x440` — PE *and* DSP still pending and armed
+  after 5,284 further interrupts. Both had been lost the same way.
+
+**The fix** is `mgs_interrupt_pending()`, called from the run loop on a prime
+interval: if `cause & mask` is non-zero and `MSR[EE]` is on, re-enter the
+dispatcher. It invents no event and sets no cause bit — it only re-takes an
+exception the hardware would have taken. A masked source is not re-offered,
+because the SDK keeps PI's mask in step with its software mask
+(`__OSMaskInterrupts` writes `__PIRegs[1]`), which makes `cause & mask` the
+honest test for "still asserted".
+
+**The result, at the same 40,000,000 steps:**
+
+| | before | after |
+|---|---|---|
+| GX commands | 20,429 | **177,805** |
+| primitives | 454 | **8,422** |
+| triangles | 24,716 | **514,828** |
+| EFB copies | 75 | **474** |
+| frame completions | 62 | **223** |
+| DVD reads | 55 | **90** |
+| PE still pending at exit | yes (`0x440`) | **no** (`0x040`, DSP only) |
+| stopped at | `0x8001FCCC`, the SDK's idle spin | **`0x7F0F6AF0`, the engine's own code** |
+
+The last row is the one that matters. The boot was ending inside
+`OSDisableInterrupts` with the idle graphics thread holding every step
+(F123); it now ends inside the overlay, running the game.
+
+**Determinism is preserved** — three consecutive runs byte-identical, checked
+because a change to interrupt timing is exactly the kind that breaks F110.
+
+**Known regression to look at:** GX desyncs went 2 → 77. The rate rose as
+well as the count (0.010% of commands to 0.043%), so this is not merely "more
+commands". With 20x the geometry now flowing, the parser is meeting
+command shapes it never reached before; treat it as newly-exposed rather
+than newly-broken, but it is real and it is next after the DSP line.
+
+**THE BOOT STILL LIVELOCKS, FURTHER ON.** This is not a fixed boot, it is a
+boot that got 20x further and hit a second wall. `MGS_STEPS=200000000` again
+produces output identical to 40,000,000 — same 177,805 commands, same
+514,828 triangles, same 223 completions — with only the re-offer count
+growing, 165,521 to 871,157. The F122 test still says livelock; it now says
+it about a different place.
+
+**Still asserted at exit: DSP (`0x40`)**, and that is where to look. Almost
+every one of those 871,157 re-offers is the same stuck line being taken
+again, which is what a permanently-asserted source costs once the model is
+honest about levels. The DSP interrupt is never cleared — the same class of
+fault this finding fixes for PE, but at the device rather than in the model.
+F109's question now has a sharper form: **the line is stuck, not the
+mailbox**, and the run's own `PI cause` line says so on every exit.
 
 ---
 

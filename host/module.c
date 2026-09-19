@@ -1020,6 +1020,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         if ((r.steps % 4099ull) == 0ull)
             mgs_interrupt_dsp_task(mod, cpu);
 
+        /* Anything left asserted is offered again.
+         *
+         * NOT CHAINED, and not conditional on an event. The processor
+         * interface's line is level-triggered, and the SDK's dispatcher
+         * services one source per entry - so a source that loses to a
+         * higher-priority one stays pending and must be re-taken. See
+         * mgs_interrupt_pending for why dropping it cost the whole boot.
+         *
+         * The interval is prime, for the reason every interval in this loop
+         * is: 64, 2,000 and 4,099 are the periods interrupts are raised on,
+         * and anything sharing a factor with them samples a fraction of the
+         * program. This must not be one of them, because the case it exists
+         * to catch is precisely the one where two of those coincide. */
+        if ((r.steps % 211ull) == 0ull)
+            mgs_interrupt_pending(mod, cpu);
+
         /* Far more often than a task: a transfer finishes as soon as it is
          * started here, and the audio manager waits on each one. */
         if ((r.steps % 127ull) == 0ull)

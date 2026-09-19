@@ -99,6 +99,7 @@ void mgs_mmio_init(MgsMmio* m)
 
     /* See the FIFO-register trace in mgs_mmio_write. */
     m->trace_fiforeg = getenv("MGS_TRACE_FIFOREG") != NULL;
+    m->trace_pi      = getenv("MGS_TRACE_PI") != NULL;
 
 }
 
@@ -423,9 +424,14 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
          * difference between the two counts is the number of completions the
          * guest was told about and never processed, which is a thing no
          * host-side counter can see on its own. */
+        uint32_t before = cause;
         if (value & PE_ACK_FINISH) { cause &= ~PI_PE_FINISH; ++m->pe_finish_acks; }
         if (value & PE_ACK_TOKEN)  { cause &= ~PI_PE_TOKEN;  ++m->pe_token_acks; }
         pi_set_cause(m, cause);
+        if (m->trace_pi)
+            fprintf(stderr, "[pi] PE ack #%llu wrote 0x%04X: cause 0x%08X -> 0x%08X\n",
+                    (unsigned long long)m->pe_finish_acks,
+                    (unsigned)value, before, cause);
     }
 
     /* Transfers that hardware would complete asynchronously complete here

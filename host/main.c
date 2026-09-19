@@ -1014,6 +1014,9 @@ int main(int argc, char** argv)
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
                         printf("system calls serviced: %llu\n",
                                (unsigned long long)r.syscalls);
+                        printf("interrupts re-offered because they were still "
+                               "asserted: %llu\n",
+                               (unsigned long long)mgs_interrupt_redelivered());
                         printf("retrace ticks: %llu   interrupts delivered: %llu  "
                                "(refused while masked: %llu, handler failed: %llu)\n",
                                (unsigned long long)r.frames,

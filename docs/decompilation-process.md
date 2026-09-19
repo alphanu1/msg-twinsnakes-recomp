@@ -1593,6 +1593,88 @@ reached inside a chunk so the host never sees its address — **the stack does**
 and walking the PowerPC frame chain named the subsystem behind each arena
 allocation.
 
+### The interrupt model was edge-triggered, and the hardware is not
+
+This is the single largest correctness fault found in the runtime so far, and
+it is one sentence: **the processor interface's interrupt line is level-driven,
+not edge-driven.** PI asserts it while *any* armed cause bit is set, and the
+CPU takes an external interrupt whenever that line is high and `MSR[EE]` is
+on — not once per event.
+
+`host/interrupt.c` entered the guest's dispatcher only when it raised a new
+event. That is an edge model, and it is wrong in a way that only shows up in
+combination with how the SDK dispatches:
+
+```c
+/* dolsdk2004, OSInterrupt.c, __OSDispatchInterrupt */
+unmasked = cause & ~(mask_0xC4 | mask_0xC8);
+if (unmasked) {
+    for (prio = InterruptPrioTable;; ++prio)      /* ONE source, by priority */
+        if (unmasked & *prio) { interrupt = __cntlzw(unmasked & *prio); break; }
+    handler(interrupt, context);
+    ...
+    OSLoadContext(context);                        /* and return */
+}
+```
+
+**One source per entry.** Everything else stays pending and relies on the line
+still being asserted when `rfi` restores EE. Under an edge model nothing
+re-enters, so every interrupt that arrives while a higher-priority source is
+pending is serviced as that other source and lost for ever.
+
+`InterruptPrioTable` puts `OS_INTERRUPTMASK_PI_VI` directly above
+`OS_INTERRUPTMASK_PI_PE`. So a graphics completion landing in the same window
+as a retrace is silently discarded — which is exactly what the boot was doing.
+
+**How it was found, and it was not by reading this code.** The boot stopped
+with the engine's main loop asleep on a semaphore. Tracing that semaphore and
+the frame ring behind it gave sixty clean wait/signal cycles and then two
+waits in a row (HANDOFF F124). Three candidate explanations were eliminated by
+measurement — the submitter's `mode` argument, a missed delivery, a completion
+race — which left "delivered, and the handler never ran". The acknowledgement
+trace then showed the acks running one *behind* the deliveries, so the
+apparent "62 delivered, 62 acknowledged" was an off-by-one and not a match,
+and the 62nd completion had no acknowledgement at all. Its cause word was
+`0x140` where the three before it read `0x40`: a retrace pending, and nothing
+else different.
+
+```sh
+MGS_TRACE_PI=1 MGS_TRACE_RING=1 MGS_TRACE_SEM=1 \
+    ./build/runtime/host/twin-snakes --headless --module <module>
+```
+
+**The fix** is `mgs_interrupt_pending()`, on a prime interval in the run loop:
+if `cause & mask` is non-zero and `MSR[EE]` is on, re-enter the dispatcher. It
+sets no cause bit and invents no event — it re-takes an exception the hardware
+would have taken. A masked source is not re-offered, because the SDK keeps
+PI's mask in step with its software mask (`__OSMaskInterrupts` writes
+`__PIRegs[1]`), which makes `cause & mask` the honest test for "still
+asserted".
+
+**Measured, at the same 40,000,000 steps:**
+
+| | before | after |
+|---|---|---|
+| GX commands | 20,429 | **177,805** |
+| primitives | 454 | **8,422** |
+| triangles | 24,716 | **514,828** |
+| EFB copies | 75 | **474** |
+| frame completions | 62 | **223** |
+| DVD reads | 55 | **90** |
+| PE pending at exit | yes (`0x440`) | **no** (`0x040`) |
+| stopped at | `0x8001FCCC`, the SDK's idle spin | **`0x7F0F6AF0`, the engine** |
+
+**Checked two ways.** Three consecutive runs are byte-identical, because a
+change to interrupt timing is precisely the kind that breaks determinism. And
+the budget test that diagnosed the livelock was re-run: it now reports a
+*different* wall rather than the same one, which is the result a real fix
+should produce.
+
+**It is not a fixed boot.** 200,000,000 steps still equal 40,000,000 — the
+same 177,805 commands — so a second livelock follows this one. The DSP line
+is stuck asserted (`PI cause 0x40` at every exit, and 871,157 re-offers spent
+on it), and that is the next thing.
+
 ## Stage 8c — Compile and link natively · **PLANNED**
 
 **In:** generated C + `runtime/` + `patches/`. **Out:** the native binary.

@@ -532,6 +532,20 @@ This is the project. ~200 functions and the widest error bars in the plan.
       set, 60 signalled**, and the main loop's 62nd wait sleeps on a
       semaphore nothing tops up. Three explanations were ruled out by
       measurement rather than argument - see F124.
+- [x] **The first livelock is broken: the external interrupt is
+      level-triggered** (F126). PI asserts its line while any armed cause bit
+      is set, and the SDK's `__OSDispatchInterrupt` services exactly one
+      source per entry — so anything still pending must be re-taken.
+      `host/interrupt.c` raised only on new events, so every completion
+      arriving behind a higher-priority source was lost. `PI_VI` outranks
+      `PI_PE`, and the 62nd frame completion was the first to land with a
+      retrace pending. At the same 40,000,000 steps: **20,429 GX commands to
+      177,805, 24,716 triangles to 514,828, 75 EFB copies to 474**, and the
+      boot now stops inside the engine's own code rather than the SDK's idle
+      spin. Three runs byte-identical, so F110's determinism survives it.
+- [ ] **The second livelock.** 200,000,000 steps still equal 40,000,000. The
+      DSP line is stuck asserted (`PI cause 0x40` at every exit, 871,157
+      re-offers spent on it) and that is the next wall.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

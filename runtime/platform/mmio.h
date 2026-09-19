@@ -120,6 +120,7 @@ typedef struct MgsMmio {
      * so a run can compare completions DELIVERED with completions the guest
      * actually serviced. See mgs_interrupt_pe_finish. */
     uint64_t pe_finish_acks, pe_token_acks;
+    int trace_pi;            /* MGS_TRACE_PI: log PE interrupt acknowledgements */
 
 } MgsMmio;
 

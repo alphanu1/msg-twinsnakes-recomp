@@ -136,6 +136,62 @@ int mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit)
     return 1;
 }
 
+/* THE EXTERNAL INTERRUPT IS LEVEL-TRIGGERED, AND THAT IS NOT A DETAIL.
+ *
+ * The processor interface asserts its line while ANY armed cause bit is set.
+ * The CPU does not take one interrupt per event - it takes one whenever that
+ * line is high and MSR[EE] is on. So a source that is still pending after a
+ * handler returns is taken AGAIN, immediately, as `rfi` restores EE.
+ *
+ * That matters because the SDK's __OSDispatchInterrupt services exactly ONE
+ * source per entry: it builds the pending set, picks the highest priority
+ * from InterruptPrioTable, calls that one handler and returns through
+ * OSLoadContext. Everything else stays pending and relies on being re-taken.
+ *
+ * Raising only on new events, as this file did, quietly loses every
+ * completion that arrives while a higher-priority source is pending. VI
+ * outranks PE in that table, so a draw-done landing in the same window as a
+ * retrace was serviced as the retrace and never seen again - the engine's
+ * 62nd frame completion, the one whose signal never came, and the boot's
+ * whole livelock (HANDOFF F126). The DSP line was being lost the same way.
+ *
+ * So pending interrupts are re-offered rather than dropped. This does not
+ * invent an event: it only re-enters the dispatcher while the guest's own
+ * cause and mask registers say the line is still asserted, which is what the
+ * hardware does. A source the guest has masked is not re-offered, because the
+ * SDK keeps PI's mask in step with its software mask (__OSMaskInterrupts
+ * writes __PIRegs[1]), so `cause & mask` is the honest test for "still
+ * asserted".
+ */
+static uint64_t s_redelivered;
+uint64_t mgs_interrupt_redelivered(void);
+uint64_t mgs_interrupt_redelivered(void) { return s_redelivered; }
+
+int mgs_interrupt_pending(const MgsModule* mod, void* cpu);
+int mgs_interrupt_pending(const MgsModule* mod, void* cpu)
+{
+    MgsMmio* mmio = mgs_host_mmio();
+    uint32_t cause, mask;
+
+    (void)mod;
+    if (!s_dispatch_addr) return 0;
+    if (!(mgs_module_msr(cpu) & 0x8000u)) return 0;   /* the guest has EE off */
+
+    cause = mgs_mmio_read(mmio, MMIO_PI + PI_INTSR, 4);
+    mask  = mgs_mmio_read(mmio, MMIO_PI + PI_INTMR, 4);
+    if (!(cause & mask)) return 0;                    /* line is not asserted */
+
+    /* No cause bit is set here. The line is already high; this is only the
+     * CPU taking the exception it would have taken anyway. */
+    if (!mgs_module_take_exception(cpu, s_dispatch_addr,
+                                   OS_EXCEPTION_EXTERNAL_INTERRUPT))
+        return 0;
+
+    ++s_delivered;
+    ++s_redelivered;
+    return 1;
+}
+
 int mgs_interrupt_vi(const MgsModule* mod, void* cpu)
 {
     /* Assert the display interrupts first: PI's VI bit is a mirror of them,
