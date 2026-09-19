@@ -207,6 +207,45 @@ int mgs_display_save_ppm(const char* path, const GuestMemory* mem)
     uint32_t xfb = mgs_mmio_xfb_address(mgs_host_mmio());
     FILE* f;
 
+    /* MGS_SAVE_FROM picks which buffer to read.
+     *
+     * "copy" reads the last EFB copy destination rather than what the video
+     * interface is scanning, and the two are NOT the same address: the game
+     * double-buffers, so VI points at the buffer finished last frame while
+     * the copy just filled the other one. A hex address reads that address.
+     * Without this the only view of the frame is whichever buffer VI happens
+     * to name, which cannot distinguish "we drew nothing" from "we are
+     * looking at the wrong buffer". */
+    {
+        const char* from = getenv("MGS_SAVE_FROM");
+        if (from) {
+            /* "efb" writes the embedded framebuffer itself, before any copy.
+             * That is the one view that separates "the rasteriser drew
+             * nothing" from "the copy out is losing it", and the two need
+             * opposite fixes. It is written here rather than converted
+             * through YUV, because the EFB is already in the host's layout. */
+            if (!strcmp(from, "efb")) {
+                unsigned ex, ey;
+                f = fopen(path, "wb");
+                if (!f) return 0;
+                fprintf(f, "P6\n%u %u\n255\n", w, h);
+                for (ey = 0; ey < h; ++ey)
+                    for (ex = 0; ex < w; ++ex) {
+                        uint32_t v = s_efb.pixels[ey * MGS_EFB_WIDTH + ex];
+                        uint8_t px[3];
+                        px[0] = (uint8_t)((v >> 16) & 0xFFu);
+                        px[1] = (uint8_t)((v >> 8) & 0xFFu);
+                        px[2] = (uint8_t)(v & 0xFFu);
+                        fwrite(px, 1, 3, f);
+                    }
+                fclose(f);
+                return 1;
+            }
+            if (!strcmp(from, "copy")) xfb = s_efb.copy_dest;
+            else xfb = (uint32_t)strtoul(from, NULL, 0);
+        }
+    }
+
     if (!w || !h || !xfb) return 0;
     if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, buf)) return 0;
 

@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F126**. The two worth reading first are
+Findings from this session are **F90-F127**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -4001,6 +4001,56 @@ honest about levels. The DSP interrupt is never cleared — the same class of
 fault this finding fixes for PE, but at the device rather than in the model.
 F109's question now has a sharper form: **the line is stuck, not the
 mailbox**, and the run's own `PI cause` line says so on every exit.
+
+---
+
+**F127 — why there is still nothing to look at, even with half a million
+triangles.** The obvious question after F126 is: if the geometry is flowing,
+can we see it? No, and the reason is now measured rather than guessed.
+
+Both external framebuffers are **pure black**, and so is the embedded one:
+
+| buffer | content |
+|---|---|
+| XFB `0x80066480` (112 copies) | 100% black, 1 distinct colour |
+| XFB `0x8015A480` (111 copies) | 100% black, 1 distinct colour |
+| the EFB itself, at exit | 100% black, 1 distinct colour |
+
+That rules out the copy-out path and the video interface in one step: there
+is nothing in the EFB to copy. `MGS_SAVE_FROM=efb` writes the embedded buffer
+directly for exactly this reason — it is the one view that separates "the
+rasteriser drew nothing" from "the copy out lost it", and those need opposite
+fixes.
+
+**But the rasteriser is not drawing nothing.** Of 12,156,928 pixels written,
+**1,167,715 are lit** — 9.6%. So colour is being produced; roughly nine in
+ten written pixels are black, and by the final frame none of the lit ones
+survive. Across 474 copies that is about 2,460 lit pixels per frame out of
+229,376, which is under 1% of the screen.
+
+The number that explains it: **778 textured, out of 514,826 triangles.**
+Essentially no texturing is happening. The geometry, transform, viewport,
+scissor, depth test and rasterisation are all evidently working — a triangle
+count that large with only 2 clipped says so — and what is missing is the
+shading. That is the renderer gap list (indirect textures, lighting, fog,
+blending, TEV stages), and it is now the thing standing between this and a
+picture, rather than anything upstream of it.
+
+**Three measurement traps hit while establishing this, all recorded:**
+
+1. `0 frames presented` in a headless run **means nothing**. `mgs_video_framebuffer()`
+   is NULL without a window, so `mgs_display_present` returns early by
+   design. It is not evidence about pixels.
+2. The VI scan address is **not** the last copy destination. The game double
+   buffers, so VI names the buffer finished *last* frame, and it is offset a
+   further `0x400` — one line at stride 1024 — for the interlaced field.
+   Three different addresses are all legitimately "the framebuffer".
+3. `MGS_SAVE_FROM=copy` read `s_efb.copy_dest`, which at exit was a **64x64
+   render-to-texture target**, not the XFB — the last copy of the run is an
+   RTT, not a frame. Reading 512x448 from it produced 15,840 distinct colours
+   of unrelated memory, which looked exactly like a real image and was not.
+   A plausible picture is not evidence; the colour histogram of a known-black
+   buffer is.
 
 ---
 

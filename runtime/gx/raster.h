@@ -45,6 +45,7 @@ typedef struct MgsGxRaster {
     int      no_scissor;          /* MGS_NO_SCISSOR: ignore the scissor box */
 
     uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
+    uint64_t pixels_lit;      /* of `pixels`, how many were not black */
 
     /* Returns non-zero when drawing should stop - the host has been asked to
      * quit and is waiting for this call to come back. Optional; NULL means

@@ -883,12 +883,13 @@ int main(int argc, char** argv)
                                    (unsigned long long)g->triangles,
                                    (unsigned long long)g->desyncs);
                             printf("raster: %llu submitted, %llu clipped, "
-                                   "%llu drawn, %llu pixels "
+                                   "%llu drawn, %llu pixels, %llu of them lit "
                                    "(%llu textured, %llu alpha-killed)\n",
                                    (unsigned long long)rs->submitted,
                                    (unsigned long long)rs->clipped,
                                    (unsigned long long)rs->drawn,
                                    (unsigned long long)rs->pixels,
+                                   (unsigned long long)rs->pixels_lit,
                                    (unsigned long long)rs->textured,
                                    (unsigned long long)rs->alpha_killed);
                             printf("textures: %llu decoded, %llu hits, "

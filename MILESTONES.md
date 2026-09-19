@@ -551,7 +551,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       within the step budgets run so far, so the playback path is written
       but not exercised against it.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
-      registers this reads but does not yet act on.
+      registers this reads but does not yet act on. **This is now what
+      stands between the port and a picture** (F127): with the geometry
+      flowing, 514,826 triangles rasterise and 12,156,928 pixels are written,
+      but only **1,167,715 are lit** and only **778 are textured**. Both
+      external framebuffers and the EFB itself measure 100% black. Nothing
+      upstream of shading is at fault — 2 triangles clipped out of 514,828
+      says the transform and viewport are right.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently
       dropped whole rather than split.
 - [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine

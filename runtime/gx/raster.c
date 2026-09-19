@@ -450,6 +450,12 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                     continue;
                 }
 
+                /* COUNTED SEPARATELY FROM `pixels`, because "12 million
+                 * pixels written" and "12 million BLACK pixels written" look
+                 * identical in a tally and mean opposite things. One says the
+                 * rasteriser works; the other says every stage upstream of
+                 * the colour is working and the colour is not. */
+                if (pixel & 0x00FFFFFFu) ++r->pixels_lit;
                 r->efb->pixels[at] = pixel;
             }
 
