@@ -2501,5 +2501,43 @@ graph has a hard ceiling here and it has been reached. What names a leaf is
 its instruction sequence (F80) or a string it references (F77), and those are
 the two routes with room left.
 
+**F82 — a function that prints its own name in its own message names itself,
+and this build kept 15 such messages.**
+`tools/name-by-messages.py` (stage 5g). The SDK's error paths say who they
+are - `"VIConfigure(): Tried to change mode..."`,
+`"OSCheckHeap: Failed 0 <= heap && heap < NumHeaps in %d"`,
+`"__DSP_boot_task()  : IRAM MMEM ADDR: 0x%08X"` - and a function holding a
+pointer to a string that opens with its own name is that function.
+
+Two checks, because a message is not proof: the name must exist in the SDK
+decomp, which is what distinguishes a real symbol from prose that happens to
+parse as an identifier; and exactly one function may reference the string,
+because a message referenced from two places is evidence about neither.
+
+**Yield: one.** `OSCheckHeap` at `0x8001CC74`. Most of the fifteen messages
+are already referenced by named functions. It is worth keeping anyway for two
+reasons - it costs nothing to re-run as the map grows, and the one it found is
+in the path that is currently blocking the boot: `OSCheckHeap` is what
+`fn_8004E7BC` calls when an allocation fails with MUST_SUCCEED (F78), so the
+memory analysis now has that function named rather than numbered.
+
+**Nothing on the REL side.** Its strings are asset names - textures, areas -
+not diagnostics, and it references no function-naming message at all.
+
+**F83 — the engine cannot be named by any automated route available, and that
+is worth stating rather than rediscovering.**
+`main.dol` embeds Tremor and Ogg (F73), which are public. The REL embeds
+nothing: a scan for copyright notices, version strings and the markers of
+zlib, libpng, FreeType, Lua and Bink finds none. All 16,667 of its functions
+are Konami's own code with no public decompilation.
+
+So "Functions named — 946 / 18,485 — 5.1%" will not move much by automation,
+and the average that includes it understates the project's position. The
+measures that mean something for a recompilation are the two about what the
+engine actually calls: **SDK entry points named, 167/336**, and **SDK call
+sites covered, 5,061/7,078 (71.5%)**. `tools/progress.py` already says the
+average is "a headline, not a statistic"; F80 is the demonstration - three
+names moved call-site coverage 32 points and function coverage by 0.02.
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

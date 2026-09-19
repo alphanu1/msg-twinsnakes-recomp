@@ -378,6 +378,43 @@ callers at all**. Stage 5d has a hard ceiling and has reached it. A leaf is
 named by its instruction sequence (this stage) or by a string it references
 (stage 5e), and those are the two with room left.
 
+## Stage 5g — Name from a function's own diagnostic message · **DONE**
+
+**In:** `main.dol` + our disassembly. **Out:** 1 name.
+
+```sh
+python3 tools/name-by-messages.py --image discs/GGSPA4/disc1/sys/main.dol \
+    --asm build/phase0/out/asm/*text*.s \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --sdk-src extern/dolsdk2004/src extern/tremor extern/ogg/src
+```
+
+The SDK's error paths say who they are, and this build kept 15 of them:
+
+```
+"VIConfigure(): Tried to change mode from (%d) to (%d), which is forbidden"
+"OSCheckHeap: Failed 0 <= heap && heap < NumHeaps in %d"
+"__DSP_boot_task()  : IRAM MMEM ADDR: 0x%08X"
+```
+
+Two checks: the name must exist in the SDK decomp — which distinguishes a real
+symbol from prose that parses as an identifier — and exactly one function may
+reference the string, because a message referenced twice is evidence about
+neither.
+
+| | |
+|---|---|
+| messages opening with a known SDK name | 15 |
+| referenced from exactly one function | 1 |
+| **named** | **1** — `OSCheckHeap` at `0x8001CC74` |
+
+A small yield kept for two reasons: it costs nothing to re-run as the map
+grows, and the one it found is in the path currently blocking the boot —
+`OSCheckHeap` is what the allocator calls when a MUST_SUCCEED allocation fails.
+
+**Nothing on the REL.** Its strings are asset names, not diagnostics.
+
 ## Stage 5d — Name by call graph · **DONE**
 
 **In:** our disassembly + `doldecomp/dolsdk2004`. **Out:** 24 names.

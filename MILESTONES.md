@@ -152,8 +152,15 @@ more.
       call sites. **SDK call sites covered 39.1% → 71.5%; phase 0 average
       57.9% → 64.6%.** Nine further matches confirmed names run alignment had
       already produced, independently.
+- [x] **Naming from diagnostic messages** (F82) — `tools/name-by-messages.py`.
+      One name, `OSCheckHeap`, and it is in the path currently blocking the
+      boot. Nothing on the REL side: its strings are asset names.
+- [x] **Established that the engine cannot be named automatically** (F83) —
+      the REL embeds no public library, so its 16,667 functions have no public
+      source to draw names from. The measures that mean something here are
+      SDK entry points named and call sites covered, not the function count.
 - [ ] Name the last 6 GX functions and the 169 remaining SDK entry points the
-      engine calls. The call graph has reached its ceiling (F81): 50 of them
+      engine calls — 50 of them are leaves the call graph cannot reach (F81). The call graph has reached its ceiling (F81): 50 of them
       have no callers and no callees at all, so instruction-sequence matching
       and string references are the routes with room left. The biggest untapped source is the REL: 17,000 functions,
       with its own file-name strings.
