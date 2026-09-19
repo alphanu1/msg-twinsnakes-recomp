@@ -465,8 +465,20 @@ static void trace_recv(void* cpu, const uint32_t* gpr)
 
 static void trace_send(void* cpu, const uint32_t* gpr)
 {
-    fprintf(stderr, "[msg] send 0x%08X msg=0x%08X from 0x%08X\n",
-            gpr[3], gpr[4], mgs_module_lr(cpu));
+    /* The link register here is the poster's own return address, which is
+     * the same for every event and says nothing. What identifies the event
+     * is the poster's CALLER, and `fn_1_888` saves it at +0x14 of the frame
+     * it just built - so one read of the guest stack turns "an event was
+     * posted" into "this one was". */
+    uint32_t caller = mgs_module_guest_read32(cpu, gpr[1] + 0x14u);
+    /* And one frame further. The poster is reached through a parameterised
+     * wrapper, so its caller is always the wrapper and says nothing; the
+     * wrapper's own caller is the event's actual source. Both frames are
+     * 0x10 bytes with the return address at +0x14, so the grandparent's is
+     * at +0x24. */
+    uint32_t origin = mgs_module_guest_read32(cpu, gpr[1] + 0x24u);
+    fprintf(stderr, "[msg] send 0x%08X msg=0x%08X caller 0x%08X origin 0x%08X\n",
+            gpr[3], gpr[4], caller, origin);
 }
 
 static void usage(const char* argv0)

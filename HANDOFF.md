@@ -3424,11 +3424,38 @@ calls `OSSendMessage`. It has **17 call sites**, almost all in one cluster
 between REL 0x88B7C and 0x893AC - a block of small, similar functions that
 look like completion callbacks.
 
-So the question is which of those seventeen should have fired fourth. That is
-the next thing to chase, and the traces to do it with are in place:
-`MGS_TRACE_MSG` prints every send and receive with its queue, message and
-caller, and `MGS_TRACE_QUEUES` does the same for `OSSleepThread` and
-`OSWakeupThread`.
+Walking the guest stack two frames at the send names the three that did fire.
+`fn_1_888` saves its caller at +0x14 of the frame it builds and the wrapper
+above it does the same, so +0x14 and +0x24 give the poster and its origin:
+
+| # | origin | function |
+|---|---|---|
+| 1 | REL 0x13117C | `fn_1_13111C` |
+| 2 | REL 0x130AA4 | `fn_1_130A54` |
+| 3 | REL 0x130AA4 | `fn_1_130A54` |
+
+`fn_1_130A54(buffer, x, size)` waits for readiness, flushes the buffer's
+cache range, and posts a request carrying a completion callback
+(`fn_1_130A28`). So these are **requests**, and the thread blocked in
+`fn_1_264` is the **server**: that function is a bare
+`OSReceiveMessage` that returns the message's first field, called in a loop.
+
+**So nothing is deadlocked on a missing wakeup - the whole system is idle.**
+The server waits for a request; the three engine workers wait for jobs on
+queues nothing sends to; the boot thread is parked by design. And the
+engine's own per-frame task scheduler, `fn_1_F394C`, **does not appear in the
+profile at all** - 29 of 30 sampled addresses are in the DOL, and the single
+engine address is a byte-copy loop at 0.2%.
+
+**The question is therefore not "who forgot to send the fourth event" but
+"what should be driving the engine's main loop, and why is it not running on
+any thread".** `fn_1_88`'s loop ran earlier in the boot; no thread is in it
+now. Worth checking whether it was expected to continue on the boot thread
+that `fn_8004A658` parks, or on one of the spawned threads.
+
+The traces for this are in place: `MGS_TRACE_MSG` prints every send and
+receive with queue, message, poster and origin, and `MGS_TRACE_QUEUES` does
+the same for `OSSleepThread` and `OSWakeupThread`.
 
 **Also observed, and deliberately not acted on:** `__DVDThreadQueue`
 (0x8027DD00) is slept on 52 times and never woken. That is expected rather
