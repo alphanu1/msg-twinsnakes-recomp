@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F112**. The two worth reading first are
+Findings from this session are **F90-F113**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3462,6 +3462,56 @@ the same for `OSSleepThread` and `OSWakeupThread`.
 than wrong - the DVD reads are served natively by the patch table, so the
 SDK's own DVD thread has nothing to do. Worth knowing before someone
 "fixes" it.
+
+---
+
+**F113 — the engine's main loop runs four scheduler passes and then its
+thread blocks.** This is the wall, stated as precisely as it can be without
+fixing it.
+
+`fn_1_88` is an endless loop: clear a flag, run the per-frame task scheduler,
+repeat. A thread that enters it never leaves. Tracing both:
+
+```
+[eng] main loop entered (#1), lr 0x8004A46C
+[eng] task scheduler run #1
+[eng] task scheduler run #2
+[eng] task scheduler run #3
+[eng] task scheduler run #4
+```
+
+Four, and then nothing, for the remaining 25 million steps. **So the loop did
+not fail to start and was not preempted away - a task it dispatched blocked,
+and took the main loop with it.** The scheduler reaches every task through a
+`bctrl`, so a task that waits is indistinguishable from the scheduler
+stopping.
+
+**Everything else checks out**, which is what makes this precise rather than
+a guess:
+
+- **The task table is healthy.** Four tasks on level 0, two on level 1, more
+  on 5 and 6, all with real function pointers. The global mask is
+  `0x00000000`, so `gate & mask` is zero everywhere and **no level is
+  skipped**; no node carries a flag in the skip mask either.
+- **The heaps are healthy** - heap 2 has 14,079,520 bytes free in 25 blocks,
+  against the zero that caused the `memory.c:1197` panic.
+- **Mutexes are balanced** - two locks, two unlocks, one mutex.
+- **The event traffic is consistent** - three requests posted, three
+  received, the server waiting for a fourth that its own clients would have
+  sent.
+
+So the next step is to find **which task blocks**. The scheduler's dispatch is
+a `bctrl` through the node's `+0x04`, and the table above lists them:
+`0x7F128218`, `0x7F0FC588`, `0x7F0B2108`, `0x7F018390` on level 0 alone.
+Logging the target of that indirect call, rather than trying to hook each
+candidate, is the way in.
+
+**A limitation of the instruments to know about first:** the call traces
+(`MGS_TRACE_MSG`, `MGS_TRACE_QUEUES`, `MGS_TRACE_MUTEX`) compare the pc the
+run loop samples, so they see cross-module calls reliably and can MISS a call
+made from one part of the DOL to another within a single dispatch. The thread
+waiting on queue `0x8020B95C` never appeared in any of them for that reason.
+Absence in those traces is not evidence.
 
 ---
 

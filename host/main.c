@@ -481,6 +481,48 @@ static void trace_send(void* cpu, const uint32_t* gpr)
             gpr[3], gpr[4], caller, origin);
 }
 
+/* Did the engine's main loop ever start, and does it still run?
+ *
+ * `fn_1_88` is an endless loop - it clears a flag and runs the per-frame
+ * task scheduler, for ever - so a thread that enters it never leaves. No
+ * thread is in it now and the scheduler is absent from the profile, which
+ * leaves two possibilities that look identical from outside: it was entered
+ * and its thread was stopped, or it was never entered at all. */
+static void trace_mainloop(void* cpu, const uint32_t* gpr)
+{
+    static unsigned n;
+    (void)gpr;
+    if (n++ < 8u)
+        fprintf(stderr, "[eng] main loop entered (#%u), lr 0x%08X\n",
+                n, mgs_module_lr(cpu));
+}
+
+static void trace_sched(void* cpu, const uint32_t* gpr)
+{
+    static unsigned n;
+    (void)cpu; (void)gpr;
+    if (++n <= 4u || (n % 1000u) == 0u)
+        fprintf(stderr, "[eng] task scheduler run #%u\n", n);
+}
+
+/* Mutexes, which is the third way a thread can block.
+ *
+ * The engine's main-loop thread is waiting with a queue pointer that appears
+ * in neither the sleep trace nor the message trace, so it is on a mutex's
+ * queue. A lock with no matching unlock is a held mutex, and the caller says
+ * who is holding it. */
+static void trace_lock(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[mtx] lock   0x%08X from 0x%08X\n",
+            gpr[3], mgs_module_lr(cpu));
+}
+
+static void trace_unlock(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[mtx] unlock 0x%08X from 0x%08X\n",
+            gpr[3], mgs_module_lr(cpu));
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -698,6 +740,16 @@ int main(int argc, char** argv)
                          * tracking allocator, with the file and line it was
                          * called from - which is how an arena running out
                          * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_MUTEX")) {
+                            mgs_module_trace_calls(0x80021028u, trace_lock);
+                            mgs_module_trace_calls2(0x80021104u, trace_unlock);
+                        }
+                        if (getenv("MGS_TRACE_ENGINE")) {
+                            /* REL offsets 0x88 and 0xF394C, at the overlay's
+                             * load address. */
+                            mgs_module_trace_calls(0x7F008174u, trace_mainloop);
+                            mgs_module_trace_calls2(0x7F0FBA38u, trace_sched);
+                        }
                         if (getenv("MGS_TRACE_MSG")) {
                             mgs_module_trace_calls(0x80020C3Cu, trace_recv);
                             mgs_module_trace_calls2(0x80020B74u, trace_send);
@@ -903,7 +955,19 @@ int main(int argc, char** argv)
                              * this is what the panic at memory.c:1197 is
                              * about. */
                             uint32_t mod_, bss_;
-                            if (mgs_module_watch_result(&mod_, &bss_)) {
+                            /* The overlay's load address is reported by
+                             * OSLink, but that watch is a pc comparison and
+                             * can be missed. It is also a constant of the
+                             * build, so fall back on it rather than printing
+                             * nothing: a dump that never appears taught me
+                             * nothing for several runs. */
+                            if (!mgs_module_watch_result(&mod_, &bss_)) {
+                                mod_ = 0x7F008000u;
+                                bss_ = 0u;
+                                printf("OSLink not observed; assuming the "
+                                       "overlay at 0x%08X\n", mod_);
+                            }
+                            {
                                 printf("OSLink saw: module 0x%08X  bss 0x%08X\n",
                                        mod_, bss_);
                                 /* The RECOMPILED overlay's globals, which is
