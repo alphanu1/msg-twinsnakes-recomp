@@ -101,6 +101,9 @@ typedef struct MgsMmio {
      * write-one-to-clear and the flat register store is not. */
     uint16_t dsp_status;
 
+    /* The control register's last value, for edge detection on the reset. */
+    uint16_t dsp_control_prev;
+
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
      * all you have is a total - and "33 million reads" was the only signal

@@ -766,6 +766,24 @@ int main(int argc, char** argv)
                          * last because it is the longest, and only when
                          * asked for. */
                         mgs_module_profile_dump(stdout, 30u);
+                        {
+                            /* MGS_DUMP_ADDR=0x... prints guest words at exit.
+                             *
+                             * A trace hook on a function compares the pc the
+                             * RUN LOOP sees, and a three-instruction function
+                             * reached by a goto inside one dispatch call is
+                             * never sampled - so "the callback did not run"
+                             * and "the hook cannot see it" look identical.
+                             * Reading what the callback would have written
+                             * tells them apart. */
+                            const char* d = getenv("MGS_DUMP_ADDR");
+                            while (d && *d) {
+                                uint32_t a = (uint32_t)strtoul(d, (char**)&d, 0);
+                                printf("guest 0x%08X = 0x%08X\n",
+                                       a, guest_read32(&rt.mem, a));
+                                while (*d == ',' || *d == ' ') ++d;
+                            }
+                        }
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",

@@ -144,6 +144,12 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
     if (addr >= MMIO_DSP + DSP_MAIL_FROM_LO &&
         addr < MMIO_DSP + DSP_MAIL_FROM_LO + 2u) {
         uint8_t* hi = at(m, MMIO_DSP + DSP_MAIL_FROM_HI);
+        /* WHAT THE GUEST ACTUALLY RECEIVES, logged where it cannot be
+         * missed. A trace on the reading function compares a pc the run loop
+         * may never sample; this is the byte-level truth. */
+        if (m->trace_fiforeg)
+            fprintf(stderr, "[dsp] guest reads mail 0x%02X%02X%02X%02X\n",
+                    hi[0], hi[1], hi[2], hi[3]);
         hi[0] = (uint8_t)(hi[0] & 0x7Fu);
         /* Reading a message means the guest is past the point of having a
          * current task, and resets the count of sends since. */
@@ -366,7 +372,19 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
         uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
         uint32_t v = ((uint32_t)cr[0] << 8) | cr[1];
-        if (v & 0x800u) m->dsp_booting = 1;
+
+        /* ON THE RISING EDGE OF 0x800, NOT ON ITS PRESENCE.
+         *
+         * `DSPInit` sets that bit and it STAYS set, so arming on "the bit is
+         * set" armed on every later write to this register - including
+         * `__DSPHandler`'s own acknowledgement, which preserves it. Each one
+         * re-posted the boot message over whatever was already in the
+         * mailbox, so the guest read 0x8071FEED three times and never saw a
+         * single task message. The DSP announces itself once per reset,
+         * which is what an edge is. */
+        if ((v & 0x800u) && !(m->dsp_control_prev & 0x800u)) m->dsp_booting = 1;
+        m->dsp_control_prev = (uint16_t)v;
+
         if (m->dsp_booting && !(v & 0x4u)) {
             uint8_t* mb = &m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE];
             mb[0] = 0x80u; mb[1] = 0x71u;   /* 0x8071, top bit = mail waiting */
@@ -635,6 +653,9 @@ int mgs_mmio_dsp_mail_pending(const MgsMmio* m)
 void mgs_mmio_dsp_post_mail(MgsMmio* m, uint32_t mail)
 {
     uint8_t* mb = &m->regs[(MMIO_DSP + DSP_MAIL_FROM_HI) - MMIO_BASE];
+    /* Never over-write a message the guest has not taken. One mailbox, one
+     * message; the caller checks first, and this is the backstop. */
+    if (mail && (mb[0] & 0x80u)) return;
     /* Assert the DSP's own status bit. The line is shared with the audio
      * interface and ARAM, and this is what tells the dispatcher which of the
      * three it is - without it the message is delivered to nobody. */
