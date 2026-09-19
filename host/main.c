@@ -361,6 +361,45 @@ static void on_interrupt(int sig)
     mgs_module_interrupted = 1;
 }
 
+/* GXSetVtxDesc(attr, type) and __GXSetVCD(), traced together.
+ *
+ * The parser holds a vertex descriptor of POS + TEX0, which makes the
+ * engine's sphere 20 bytes a vertex; the bytes the engine actually writes
+ * repeat every 24. Both cannot be right, and the command stream shows no
+ * descriptor write between the two draws - so the question is whether the
+ * game asked for a different descriptor and the flush did not happen, or
+ * whether it never asked. Tracing the setter and the flush separately is
+ * what tells those apart. */
+static void trace_setvtxdesc(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu;
+    fprintf(stderr, "[gx] GXSetVtxDesc(attr=%u, type=%u)\n", gpr[3], gpr[4]);
+}
+
+static void trace_setvcd(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu; (void)gpr;
+    fprintf(stderr, "[gx] __GXSetVCD() flushing\n");
+}
+
+/* GXBeginDisplayList(ptr, size).
+ *
+ * On hardware this REDIRECTS the write-gather pipe into a memory buffer:
+ * the address the game stores to does not change, but the data is recorded
+ * rather than executed. A host that routes every pipe write to the parser
+ * executes the recording instead - with whatever vertex descriptor happens
+ * to be live, rather than the one the list will be called under.
+ *
+ * That would explain a draw whose bytes measure 24 a vertex against a
+ * descriptor that declares 20, which is where the boot currently loses the
+ * stream. */
+static void trace_begin_dl(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu;
+    fprintf(stderr, "[gx] GXBeginDisplayList(ptr=0x%08X, size=%u)\n",
+            gpr[3], gpr[4]);
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -574,6 +613,11 @@ int main(int argc, char** argv)
                          * tracking allocator, with the file and line it was
                          * called from - which is how an arena running out
                          * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_VTXDESC")) {
+                            mgs_module_trace_calls(0x80040B4Cu, trace_setvtxdesc);
+                            mgs_module_trace_calls2(0x80041040u, trace_setvcd);
+                            mgs_module_trace_calls3(0x80045B84u, trace_begin_dl);
+                        }
                         if (getenv("MGS_TRACE_ALLOC")) {
                             mgs_module_trace_calls(0x8004E7BCu, trace_alloc);
                             mgs_module_trace_calls2(0x8004E830u, trace_free);

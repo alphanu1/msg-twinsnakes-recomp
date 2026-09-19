@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F101**. The two worth reading first are
+Findings from this session are **F90-F103**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -2957,6 +2957,111 @@ as a zero offset shifts the box 342 pixels and clips away nearly everything.
 
 Checked by disabling the feature and confirming the test fails: it reports a
 leak at exactly (320,120), the first pixel past the box's right edge.
+
+---
+
+**F102 — RECORDING A DISPLAY LIST IS NOT DRAWING, and we were executing the
+recording.** RESOLVED. The route to it is kept because the wrong answer was
+available at every step and looked right.
+
+With the staging buffer fixed the boot reaches the sphere-map pass, and the
+first draw after the logo still loses the stream. What is established:
+
+- **The draw is sized 20 bytes a vertex, and the parser is faithful to the
+  descriptor in doing so.** `GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT2, 66)`, and
+  the descriptor in force is `vcd_lo=0x200 vcd_hi=0x1` - position direct and
+  texture-coordinate-0 direct - with `vat_a[2]=0x41377009`: position 3 x f32
+  (12 bytes) and texcoord 2 x f32 (8). 2 + 66 * 20 = 1,322.
+- **The engine asks for exactly that.** Tracing `GXSetVtxDesc` shows only
+  `(attr=9, type=1)` and `(attr=13, type=1)` - `GX_VA_POS` and `GX_VA_TEX0`,
+  both `GX_DIRECT` - for the whole boot. `__GXSetVCD` flushes 55 times and
+  writes `0x200`/`0x1` every time.
+- **But the bytes repeat every 24.** The stream at the sphere's first draw is
+  `(-1, -1, -2)`, `(-1, -1, 0)`, `(-0.9375, -1, -2)`, `(-0.9375, -1, 0)`:
+  a flat grid at z = -2 whose x steps by 1/16, and a second triple that is
+  `sqrt(1 - x*x - y*y)` clamped at zero - a position and a sphere normal.
+  Read as 20-byte vertices the z jumps from -2 to -1 between consecutive
+  vertices, which a flat grid does not do; read as 24 it is consistent.
+- **The code writes six floats a vertex.** `gcn_emit_sphere_strips` calls two
+  helpers per vertex, and both are `lis r3, 0xcc01 ; stfs f1, -0x8000(r3)`
+  three times over - both to `0xCC008000`, the write-gather pipe.
+
+The stride was then measured from the UNDECODED stream - the distance between
+consecutive `9A 00 42` opcodes - and it is 1,587 bytes: 1,584 for 66 vertices,
+**exactly 24.0000 a vertex**, with no padding. So the bytes were right and the
+descriptor reading was right, and they still disagreed.
+
+**The answer is that those bytes were never meant for the parser.**
+`GXBeginDisplayList(ptr=0x81791C60, size=51200)` is called once, and after it
+the game is RECORDING. On hardware that call points the CPU-side FIFO at a
+buffer in main memory and leaves the graphics processor's own FIFO alone: the
+game keeps storing to 0xCC008000, but the data is written down rather than
+executed. Our host sent every write-gather-pipe write to the parser, so we
+executed the recording - under the descriptor that was live at record time
+rather than the one the list will be called under.
+
+The two FIFO descriptions are visible in the registers, and the redirection
+and its restoration are unmistakable:
+
+```
+0xCC00300C <- 0x01791C60   PI  FIFO base  -> the display-list buffer
+0xCC003010 <- 0x0179E45C   PI  FIFO end   -> base + 51,196
+0xCC003014 <- 0x01791C60   PI  write pointer
+       ... the sphere is recorded here ...
+0xCC00300C <- 0x00450160   PI  FIFO base  -> restored
+0xCC00003C/3E = 0x0045_0160   CP FIFO base, unchanged throughout
+```
+
+So the test is simply whether the two agree. `mgs_mmio_recording()` says they
+do not, and the sink writes the bytes into the buffer instead of parsing them.
+
+| | before | after |
+|---|---|---|
+| desyncs | 198 | **0** |
+| GX commands | 8,158 | 7,235 |
+| triangles drawn | 553 | 106 |
+| frames | 55 | 55 |
+
+**The write pointer advances while RECORDING and not while drawing**, and that
+asymmetry is not a fudge. On hardware both pointers move and the SDK watches
+the distance between them to know how full the FIFO is. This host has no
+asynchronous graphics processor - a command is executed the moment it is
+written - so there is no read pointer. Advancing the write pointer alone
+describes a FIFO that only fills, and the SDK stops issuing: it took the boot
+from 55 frames and 8,158 commands to 2 and 578. Recording is the opposite
+case, where nothing draining the buffer is the truth rather than an artefact,
+and `GXEndDisplayList` needs the pointer to have moved.
+
+**What has already been ruled out**, so as not to be tried again:
+
+- the vertex-format decoder mis-reading the VAT (checked field by field
+  against the register layout, and it agrees with the 20-byte reading);
+- `vcd_kind` mis-reading the descriptor (normal is bits 11..12 of `vcd_lo`,
+  which is 0, correctly);
+- float stores to the write-gather pipe taking a different path from integer
+  stores - the generated code routes `stfs` through `mem_write32` like
+  everything else;
+- a missing descriptor write between the logo and the sphere - the windowed
+  command trace shows the gap is NOP padding, and nothing else;
+- `GXBegin` not being `GXBegin` - it reads `__GXData+0x5AC` and calls a flush
+  helper per dirty bit, one of which is `__GXSetVCD` at 0x80041040.
+
+---
+
+**F103 — the engine sets a scissor box OFFSET of 1,024 pixels**, which is
+wider than the framebuffer. `BP 0x59 = 0x02ACAB` decodes as x = 683, y = 171
+in half-pixel units, so `GXSetScissorBoxOffset(1024, 0)`, alongside
+`GXSetScissor(0, 0, 512, 448)`.
+
+Taken at face value that puts the scissor rectangle at x in [-1024, -512),
+entirely off the framebuffer, and a renderer that honours it literally draws
+nothing at all. Dolphin computes SEVERAL candidate rectangles here precisely
+because these coordinates wrap, so the naive reading is not the right one.
+
+`MGS_NO_SCISSOR` exists to tell "the game clipped this" from "we computed the
+box wrongly", because those look identical from the outside. **The scissor
+implementation (F100) should be treated as provisional until that A/B has
+been run against this pass.**
 
 ---
 

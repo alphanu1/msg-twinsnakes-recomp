@@ -50,9 +50,70 @@ const MgsGxRaster* mgs_display_raster(void) { return &s_raster; }
 
 /* The command stream's destination. Bound to the MMIO layer so every byte the
  * game writes to the write-gather pipe is parsed rather than counted. */
+static GuestMemory* s_mem;
+static uint64_t s_recorded;
+
+uint64_t mgs_display_recorded(void);
+uint64_t mgs_display_recorded(void) { return s_recorded; }
+
 static void fifo_sink(void* user, uint32_t value, unsigned size)
 {
+    MgsMmio* mmio = mgs_host_mmio();
+    unsigned i;
+
     (void)user;
+
+    /* RECORDING A DISPLAY LIST IS NOT DRAWING.
+     *
+     * `GXBeginDisplayList` points the CPU-side FIFO at a buffer in main
+     * memory and leaves the graphics processor's alone. The game keeps
+     * storing to the same address - 0xCC008000, the write-gather pipe - but
+     * the data is being written down, not executed.
+     *
+     * Sending those bytes to the parser executes the recording, under
+     * whatever vertex descriptor is live at record time rather than the one
+     * the list will be called under. That is exactly what was happening: the
+     * engine records its sphere-map geometry at 24 bytes a vertex while the
+     * live descriptor still described the boot logo's 20, so the parser
+     * consumed four bytes too few per vertex and lost the stream on the
+     * first primitive after the logo.
+     *
+     * So the bytes go where the hardware would put them, and the parser
+     * never sees them until `GXCallDisplayList` plays the buffer back. */
+    if (s_mem && mgs_mmio_recording(mmio)) {
+        uint32_t wp  = mgs_mmio_cpu_fifo_wrptr(mmio);
+        uint32_t end = mgs_mmio_cpu_fifo_end(mmio);
+        uint32_t base = mgs_mmio_cpu_fifo_base(mmio);
+
+        for (i = 0; i < size; ++i) {
+            guest_write8(s_mem, wp,
+                         (uint8_t)(value >> (8u * (size - 1u - i))));
+            ++wp;
+            /* The FIFO is a ring. A list that overruns its buffer is the
+             * game's business, not ours, and wrapping is what the hardware
+             * does. */
+            if (end && wp >= end) wp = base;
+        }
+        mgs_mmio_set_cpu_fifo_wrptr(mmio, wp);
+        s_recorded += size;
+        return;
+    }
+
+    /* DRAWING LEAVES THE WRITE POINTER ALONE, and that is deliberate.
+     *
+     * On hardware both pointers move: the pipe advances the write pointer
+     * and the graphics processor advances the read pointer as it consumes.
+     * The SDK watches the distance between them to know how full the FIFO
+     * is. This host has no asynchronous graphics processor - a command is
+     * executed by the parser the moment it is written - so there is no read
+     * pointer to advance. Moving the write pointer alone describes a FIFO
+     * that only ever fills, and the SDK duly stops issuing: it took the
+     * boot from 55 frames and 8,158 commands to 2 and 578.
+     *
+     * Recording is the opposite case and does advance it, because there the
+     * absence of a consumer is the truth rather than an artefact - nothing
+     * drains a display-list buffer, and `GXEndDisplayList` needs the pointer
+     * to have moved to know how much was recorded. */
     mgs_gx_write(&s_gx, value, size);
 }
 
@@ -62,6 +123,7 @@ static int raster_abandon(void) { return mgs_module_interrupted != 0; }
 void mgs_display_init(GuestMemory* mem);
 void mgs_display_init(GuestMemory* mem)
 {
+    s_mem = mem;
     mgs_efb_init(&s_efb);
     mgs_gx_init(&s_gx, mem);
     mgs_raster_init(&s_raster, &s_efb);

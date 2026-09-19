@@ -20,6 +20,13 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
      * is no longer the first thing drawn: the boot logo's handful of
      * triangles now come and go long before the engine's own geometry
      * starts, and a fixed count of eight can only ever describe the logo. */
+    /* MGS_NO_SCISSOR ignores the box, to tell "the game clipped this" apart
+     * from "we computed the box wrongly". The engine sets a scissor box
+     * OFFSET of 1,024 pixels for its sphere-map pass (BP 0x59 = 0x02ACAB),
+     * which is larger than the framebuffer is wide, and a coordinate
+     * convention misread there clips everything rather than clipping
+     * nothing - so the two readings have to be comparable from one binary. */
+    r->no_scissor = getenv("MGS_NO_SCISSOR") != NULL;
     {
         const char* e = getenv("MGS_TRACE_RASTER");
         r->trace = e != NULL;
@@ -328,7 +335,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
         /* An all-zero scissor is the power-on state, not a request to draw
          * nothing. Until the game has set one, clip to the framebuffer. */
-        if (tl || br) {
+        if ((tl || br) && !r->no_scissor) {
             /* ZERO IS A LEGAL OFFSET, so an unwritten register cannot be read
              * as one. 171 is the value that makes the offset vanish
              * (171 * 2 == 342, the same bias the coordinates carry), which is

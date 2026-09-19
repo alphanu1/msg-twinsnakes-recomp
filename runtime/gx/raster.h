@@ -42,6 +42,7 @@ typedef struct MgsGxRaster {
     int      cull;                /* BP 0x41 bits 14-15 */
     int      trace;               /* MGS_TRACE_RASTER: explain rejections */
     unsigned trace_limit;         /* how many triangles to explain */
+    int      no_scissor;          /* MGS_NO_SCISSOR: ignore the scissor box */
 
     uint64_t submitted, clipped, drawn, pixels, textured, alpha_killed;
 

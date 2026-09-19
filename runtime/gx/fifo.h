@@ -183,6 +183,13 @@ typedef struct MgsGx {
      * first few can mean anything: once the stream is lost every byte after
      * it is read at the wrong offset, so the rest are consequences. */
     uint64_t trace_desync;
+    uint64_t trace_cp;            /* MGS_TRACE_GXCP: command-processor writes */
+    uint64_t trace_draw;          /* MGS_TRACE_GXDRAW: each draw's size inputs */
+    uint64_t trace_win_from;      /* MGS_TRACE_GXWINDOW: every command in a range */
+    uint64_t trace_win_n;
+    uint64_t trace_bytes_from;    /* MGS_TRACE_GXBYTES: the raw stream */
+    uint64_t trace_bytes_n;
+    uint64_t stream_pos;          /* bytes written to the pipe so far */
 
     /* Work the host must do, noticed here because this is the only place
      * that knows where a command starts. The naive alternative - scanning the

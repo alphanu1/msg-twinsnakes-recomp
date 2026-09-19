@@ -474,6 +474,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       `sqrtf(1 - x*x - y*y)`. Around 2,048 triangles, almost certainly a
       sphere map built by render-to-texture. This is the first engine
       geometry the port has reached, as opposed to the boot logo.
+- [x] **Display-list RECORDING is no longer executed as drawing** (F102).
+      `GXBeginDisplayList` points the CPU-side FIFO at a buffer and leaves
+      the graphics processor's alone; the game keeps storing to the
+      write-gather pipe but the data is being written down, not drawn. The
+      host executed it, under whatever vertex descriptor was live rather
+      than the one the list will be called under. Comparing the two FIFO
+      descriptions says which is happening. **Desyncs 198 to 0.**
+- [ ] **Play back what is recorded.** The sphere-map geometry now lands in
+      its buffer correctly; `GXCallDisplayList` has not yet been reached
+      within the step budgets run so far, so the playback path is written
+      but not exercised against it.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
       registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently

@@ -138,6 +138,20 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
     {
         const char* e = getenv("MGS_TRACE_GXDESYNC");
         gx->trace_desync = e ? strtoull(e, NULL, 0) : 0u;
+        e = getenv("MGS_TRACE_GXCP");
+        gx->trace_cp = e ? strtoull(e, NULL, 0) : 0u;
+        e = getenv("MGS_TRACE_GXDRAW");
+        gx->trace_draw = e ? strtoull(e, NULL, 0) : 0u;
+        e = getenv("MGS_TRACE_GXBYTES");
+        if (e) {
+            gx->trace_bytes_from = strtoull(e, (char**)&e, 0);
+            if (*e == ',') gx->trace_bytes_n = strtoull(e + 1, NULL, 0);
+        }
+        e = getenv("MGS_TRACE_GXWINDOW");
+        if (e) {
+            gx->trace_win_from = strtoull(e, (char**)&e, 0);
+            if (*e == ',') gx->trace_win_n = strtoull(e + 1, NULL, 0);
+        }
     }
 }
 
@@ -175,6 +189,23 @@ static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
 
 static void cp_write(MgsGx* gx, uint8_t reg, uint32_t value)
 {
+    /* MGS_TRACE_GXCP=N shows the first N command-processor writes.
+     *
+     * These decide how long every draw command is, so a missed or misread
+     * one makes the parser consume the wrong number of bytes per vertex -
+     * which looks like the game drawing nonsense rather than like a parsing
+     * fault. Tracing them is the only way to tell "the game never set this"
+     * from "we never saw it". */
+    /* The VERTEX DESCRIPTOR registers unconditionally when tracing, because
+     * they are rare and they are the ones that decide every draw's length.
+     * Gating them on a count of commands hides exactly the case worth
+     * seeing: a descriptor written once, thousands of commands in. */
+    if (gx->trace_cp) {
+        if (reg == 0x50u || reg == 0x60u || (reg & 0xF8u) == 0x70u)
+            fprintf(stderr, "[gx] cp  reg=0x%02X value=0x%08X  (cmd %llu)\n",
+                    reg, value, (unsigned long long)gx->commands);
+    }
+
     if (reg == 0x50u) gx->vcd_lo = value;
     else if (reg == 0x60u) gx->vcd_hi = value;
     else if ((reg & 0xF8u) == 0x70u) gx->vat_a[reg & 7u] = value;
@@ -274,6 +305,37 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
 {
     ++gx->commands;
+
+    /* MGS_TRACE_GXWINDOW=first,count prints every command in a range.
+     *
+     * The question this answers is "what happened between these two points",
+     * and nothing else can: the per-kind traces each show their own kind and
+     * so cannot show what is MISSING. The vertex descriptor in force at the
+     * sphere was the logo's, and the only way to see why is to look at every
+     * command in between rather than at the ones already known about. */
+    if (gx->trace_win_n &&
+        gx->commands >= gx->trace_win_from &&
+        gx->commands < gx->trace_win_from + gx->trace_win_n) {
+        fprintf(stderr, "[gx] %6llu @%08llu  op=0x%02X len=%-6u",
+                (unsigned long long)gx->commands,
+                (unsigned long long)gx->stream_pos, op, len);
+        if (op == GX_OP_LOAD_CP)
+            fprintf(stderr, "  CP  reg=0x%02X val=0x%08X",
+                    body[0], be32(body + 1));
+        else if (op == GX_OP_LOAD_BP)
+            fprintf(stderr, "  BP  reg=0x%02X val=0x%06X",
+                    (unsigned)(be32(body) >> 24), be32(body) & 0x00FFFFFFu);
+        else if (op == GX_OP_LOAD_XF)
+            fprintf(stderr, "  XF  addr=0x%04X n=%u",
+                    (unsigned)(be32(body) & 0xFFFFu),
+                    (unsigned)(((be32(body) >> 16) & 0xFu) + 1u));
+        else if (op == GX_OP_CALL_DL)
+            fprintf(stderr, "  DL  addr=0x%08X size=%u", be32(body), be32(body + 4));
+        else if (op >= GX_OP_DRAW_FIRST)
+            fprintf(stderr, "  DRAW fmt=%u count=%u",
+                    op & 7u, ((unsigned)body[0] << 8) | body[1]);
+        fprintf(stderr, "\n");
+    }
 
     if (op == GX_OP_LOAD_CP) { cp_write(gx, body[0], be32(body + 1)); return; }
     if (op == GX_OP_LOAD_XF) {
@@ -449,6 +511,27 @@ void mgs_gx_write(MgsGx* gx, uint32_t value, unsigned size)
     uint8_t b[4];
     unsigned i;
 
+    /* MGS_TRACE_GXBYTES=first,count dumps the RAW stream by byte position,
+     * before any interpretation.
+     *
+     * Every other trace here reports what the parser made of the bytes, and
+     * when the parser's reading is the thing in doubt that is circular. The
+     * vertex descriptor says this game's sphere vertex is 20 bytes and the
+     * bytes repeat every 24; only the undecoded stream can say which. */
+    if (gx->trace_bytes_n &&
+        gx->stream_pos >= gx->trace_bytes_from &&
+        gx->stream_pos < gx->trace_bytes_from + gx->trace_bytes_n) {
+        unsigned k;
+        for (k = 0; k < size; ++k) {
+            if (((gx->stream_pos + k) & 15u) == 0u)
+                fprintf(stderr, "\n[gx] %08llu ",
+                        (unsigned long long)(gx->stream_pos + k));
+            fprintf(stderr, " %02X",
+                    (unsigned)((value >> (8u * (size - 1u - k))) & 0xFFu));
+        }
+    }
+    gx->stream_pos += size;
+
     /* Set on the way in and CLEARED ON THE WAY OUT. A marker that is only
      * ever set says what happened last, not what is happening now, and that
      * is actively misleading: a wedged run reported "raster" when the
@@ -493,6 +576,31 @@ static void emit_primitive(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned 
 
     mgs_gx_vertex_format(gx, op & 7u, &f);
     vsize = mgs_gx_vertex_size(&f);
+
+    if (gx->trace_draw && gx->primitives < gx->trace_draw) {
+        unsigned k;
+        fprintf(stderr, "[gx] draw op=0x%02X prim=%u fmt=%u count=%u "
+                        "vsize=%u len=%u  vcd=%08X/%08X vat=%08X\n",
+                op, (unsigned)prim, op & 7u, count, vsize, len,
+                gx->vcd_lo, gx->vcd_hi, gx->vat_a[op & 7u]);
+        /* THE BYTES THEMSELVES, as floats.
+         *
+         * The descriptor says this vertex is 20 bytes and the code that
+         * writes it emits 24, and the two cannot both be right. Printing the
+         * actual stream settles which: a run of plausible coordinates ending
+         * where the descriptor says it should is one answer, and a fourth
+         * and fifth float where the next vertex ought to start is the other.
+         * Inferring it from register layouts had already produced two
+         * confident and opposite readings. */
+        for (k = 0; k + 4u <= 48u && 2u + k + 4u <= len; k += 4u) {
+            uint32_t bits = be32(body + 2u + k);
+            float f;
+            memcpy(&f, &bits, sizeof f);
+            fprintf(stderr, "      +%02u  %08X  % .4f%s", k, bits, (double)f,
+                    ((k / 4u) % 3u == 2u) ? "\n" : "");
+        }
+        fprintf(stderr, "\n");
+    }
     if (!vsize) { desync(gx, "vertex size is zero", op, 0u); return; }
 
     ++gx->primitives;

@@ -61,6 +61,9 @@ typedef struct MgsMmio {
 
     uint64_t reads, writes;
 
+    /* MGS_TRACE_FIFOREG: writes to the CPU- and GP-side FIFO descriptions. */
+    int      trace_fiforeg;
+
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
      * all you have is a total - and "33 million reads" was the only signal
@@ -104,6 +107,39 @@ void     mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user);
 /* Where the video interface is scanning from, as a guest address, or 0 if
  * the game has not programmed it yet. */
 uint32_t mgs_mmio_xfb_address(const MgsMmio* m);
+
+/* ---- the two FIFO descriptions ----------------------------------------
+ *
+ * There are two, and which one the write-gather pipe is feeding decides
+ * whether the guest is DRAWING or RECORDING a display list.
+ *
+ *   CPU side, in PI:  +0x0C base, +0x10 end, +0x14 write pointer.
+ *   GP side,  in CP:  +0x3C and +0x3E, the halves of the base address.
+ *
+ * `GXBeginDisplayList` points the CPU side at a buffer in main memory and
+ * leaves the GP side alone, so the same stores to 0xCC008000 land in that
+ * buffer instead of being executed. A host that sends every pipe write to
+ * the command parser executes the recording - with whatever vertex format
+ * happens to be live rather than the one the list will be called under.
+ *
+ * Observed directly: base 0x81791C60, end 0x8179E45C (the 51,200 bytes the
+ * game asked for), then restored to 0x80450160, which is exactly what the
+ * CP side holds. */
+#define PI_FIFO_BASE   0x0Cu
+#define PI_FIFO_END    0x10u
+#define PI_FIFO_WRPTR  0x14u
+#define CP_FIFO_BASE_L 0x3Cu
+#define CP_FIFO_BASE_H 0x3Eu
+
+uint32_t mgs_mmio_cpu_fifo_base(const MgsMmio* m);
+uint32_t mgs_mmio_cpu_fifo_end(const MgsMmio* m);
+uint32_t mgs_mmio_cpu_fifo_wrptr(const MgsMmio* m);
+void     mgs_mmio_set_cpu_fifo_wrptr(MgsMmio* m, uint32_t v);
+uint32_t mgs_mmio_gp_fifo_base(const MgsMmio* m);
+
+/* Non-zero when the pipe is feeding a display-list buffer rather than the
+ * graphics processor - that is, when the two descriptions disagree. */
+int      mgs_mmio_recording(const MgsMmio* m);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);

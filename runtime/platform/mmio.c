@@ -1,6 +1,9 @@
 #include "mmio.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+
+#include <stdio.h>
 #include <string.h>
 
 /* Command processor FIFO registers, by byte offset from MMIO_CP. The SDK
@@ -78,11 +81,16 @@
 
 void mgs_mmio_init(MgsMmio* m)
 {
+
     memset(m, 0, sizeof *m);
 
     /* Values hardware presents after reset, so the SDK's first reads see what
      * it expects rather than zeros it has to interpret. */
     m->regs[(MMIO_VI - MMIO_BASE) + VI_DISP_CFG + 1u] = 0x01u;  /* display enabled */
+
+    /* See the FIFO-register trace in mgs_mmio_write. */
+    m->trace_fiforeg = getenv("MGS_TRACE_FIFOREG") != NULL;
+
 }
 
 static uint8_t* at(MgsMmio* m, uint32_t addr)
@@ -274,6 +282,19 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         return;
     }
 
+    /* MGS_TRACE_FIFOREG shows writes to the two FIFO descriptions.
+     *
+     * The CPU-side one lives in PI at +0x0C/+0x10/+0x14 and the GP-side one
+     * in CP at +0x20 onwards. When they name the same memory the guest is
+     * drawing; when they differ it is RECORDING a display list, and every
+     * write-gather-pipe write belongs in a buffer rather than in the parser.
+     * Which registers carry that is worth confirming rather than assuming. */
+    if (m->trace_fiforeg &&
+        ((addr >= MMIO_PI + 0x0Cu && addr < MMIO_PI + 0x18u) ||
+         (addr >= MMIO_BASE + 0x20u && addr < MMIO_BASE + 0x40u)))
+        fprintf(stderr, "[mmio] fifo reg 0x%08X <- 0x%08X (%u bytes)\n",
+                addr, value, size);
+
     p = at(m, addr);
     if (!p) return;
     for (i = 0; i < size; ++i)
@@ -400,4 +421,69 @@ void mgs_mmio_set_fifo_sink(MgsMmio* m, MgsFifoSink sink, void* user)
     if (!m) return;
     m->fifo_sink = sink;
     m->fifo_user = user;
+}
+
+/* ---- the two FIFO descriptions ---------------------------------------- */
+
+static uint32_t reg32(const MgsMmio* m, uint32_t addr)
+{
+    const uint8_t* p = &m->regs[addr - MMIO_BASE];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static uint16_t reg16(const MgsMmio* m, uint32_t addr)
+{
+    const uint8_t* p = &m->regs[addr - MMIO_BASE];
+    return (uint16_t)(((uint32_t)p[0] << 8) | (uint32_t)p[1]);
+}
+
+/* The addresses are physical - the top bit is not stored - so they come back
+ * with the cached window's bit put back on, which is the form every other
+ * part of this runtime uses. */
+static uint32_t as_guest(uint32_t physical)
+{
+    return physical ? (0x80000000u | (physical & 0x03FFFFFFu)) : 0u;
+}
+
+uint32_t mgs_mmio_cpu_fifo_base(const MgsMmio* m)
+{
+    return as_guest(reg32(m, MMIO_PI + PI_FIFO_BASE));
+}
+
+uint32_t mgs_mmio_cpu_fifo_end(const MgsMmio* m)
+{
+    return as_guest(reg32(m, MMIO_PI + PI_FIFO_END));
+}
+
+uint32_t mgs_mmio_cpu_fifo_wrptr(const MgsMmio* m)
+{
+    return as_guest(reg32(m, MMIO_PI + PI_FIFO_WRPTR));
+}
+
+void mgs_mmio_set_cpu_fifo_wrptr(MgsMmio* m, uint32_t v)
+{
+    uint8_t* p = &m->regs[(MMIO_PI + PI_FIFO_WRPTR) - MMIO_BASE];
+    uint32_t phys = v & 0x03FFFFFFu;
+    p[0] = (uint8_t)(phys >> 24); p[1] = (uint8_t)(phys >> 16);
+    p[2] = (uint8_t)(phys >> 8);  p[3] = (uint8_t)phys;
+}
+
+uint32_t mgs_mmio_gp_fifo_base(const MgsMmio* m)
+{
+    uint32_t lo = reg16(m, MMIO_BASE + CP_FIFO_BASE_L);
+    uint32_t hi = reg16(m, MMIO_BASE + CP_FIFO_BASE_H);
+    return as_guest((hi << 16) | lo);
+}
+
+int mgs_mmio_recording(const MgsMmio* m)
+{
+    uint32_t cpu = mgs_mmio_cpu_fifo_base(m);
+    uint32_t gp  = mgs_mmio_gp_fifo_base(m);
+
+    /* Before either has been programmed there is nothing to tell apart, and
+     * the answer that keeps the boot working is "drawing" - the logo is
+     * issued before the game ever records a list. */
+    if (!cpu || !gp) return 0;
+    return cpu != gp;
 }
