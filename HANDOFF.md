@@ -308,6 +308,18 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **Caching anything on an address alone (F156).** An address is not an
+  identity. The texture cache matched on address/format/size and never read
+  the bytes, so every dynamically updated texture - a video frame above all -
+  was served stale forever. And when fixing it: a changed entry must be
+  REPLACED, never duplicated, or the cache fills with stale versions of one
+  texture and thrashes everything else out.
+- **Blaming the recompiler's floating point before checking (F156).** The
+  generated module is built with -O3 against the project's own rule, which
+  looks like a paired-single rounding bug waiting to happen. It is not one
+  here: there are zero FMA and zero AVX instructions in the module, so no
+  contraction is possible and the arithmetic is IEEE-exact. Fix the rule
+  breach because it is a breach, not as a cure for a symptom.
 - **Half a device (F128, F153).** Twice now, implementing part of a
   peripheral has been worse than leaving it stubbed: the DSP line mirror cost
   12x the boot, and completing serial transfers without also clearing RDST
@@ -5546,6 +5558,61 @@ of each write, and TFBL showed only `0x06` and `0x15` - clearly 16-bit writes
 to the low half, since the resolved address at exit was `0x8015A880`. It
 therefore CANNOT be used to argue that only two framebuffers exist. Log the
 composed address before drawing that conclusion.
+
+
+### F156 — the texture cache never looked at the texture
+
+The movie froze on its first frame and any corruption in that frame stayed on
+screen for good. The cause is not in the decoder, which is the game's own code
+recompiled to native, and not in the arithmetic: `objdump` finds **zero** FMA
+or AVX instructions in the module, so the floating point is IEEE-exact and the
+`-O3` the generated code is built with (a real breach of the project's
+"-O2, never -O3" rule, fixed separately) cannot be altering results.
+
+It is the cache. `mgs_tex_get` matched on address, format, size and palette
+and **never examined the bytes**, and `mgs_tex_cache_invalidate` was never
+called from anywhere outside `texture.c`. That is correct only for textures
+whose contents never change. A video frame is the opposite: the decoder writes
+every new frame into the SAME buffer at the SAME address, so after the first
+decode every lookup was a hit.
+
+Fixed by hashing the encoded bytes (FNV-1a) into the match. Textures over
+4 KB are sampled on a stride rather than read whole, because this runs per
+lookup and a 512x448 RGB565 frame is 448 KB; a changed video frame differs in
+far more than one sample, while a static texture costs a few hundred bytes to
+confirm.
+
+**The first version of this fix was much worse than the bug**, and the way it
+failed is the part worth keeping. A changed texture got a NEW cache entry
+while the old one stayed valid. With 256 slots, a video re-decoding every
+frame filled the cache with stale copies of itself within seconds; after that
+every allocation evicted a texture still in use, and the entire texture set
+re-decoded every frame. The boot stalled on the Konami logo. **A changed
+texture must take its own slot back - one entry per texture identity, never
+one per version.**
+
+| | GX commands | decoded | hits | evicted |
+|---|---|---|---|---|
+| address-keyed (stale video) | 2,338,178 | 14 | 16,186 | 0 |
+| hash, new entry per version | stalled on the logo | - | - | thrashing |
+| **hash + slot reuse** | **2,336,472** | 19 | 16,159 | **0** |
+
+The five extra decodes are the bug being fixed: five textures whose contents
+genuinely changed and which were previously shown stale. Zero evictions says
+the thrash is gone. 40M steps headless in 60 seconds.
+
+**Two hypotheses killed on the way, both cheaply:**
+
+- **Scan-out geometry.** `mgs_display_present` really does take width, height
+  and stride from the last EFB copy rather than from the video interface, and
+  that is worth fixing on its own. It is not this bug: `VI_HSW` is written
+  **once**, as `0x2040`, and never changes across 4,195 VI register writes in
+  a run that reaches the movie.
+- **A copy path unique to the video.** There is none. A run reaching the movie
+  uses the same three copy commands as the boot: 21,041 render-to-texture at
+  64x64 format 0xC (still discarded, still a real gap), 20,957 EFB-to-XFB at
+  512x448, and 56 of those with clear. The movie reaches the screen by the
+  ordinary route, which is why the fault had to be in what it samples.
 
 ---
 

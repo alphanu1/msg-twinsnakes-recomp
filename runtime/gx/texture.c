@@ -275,6 +275,39 @@ static MgsTexture* find_slot(MgsTexCache* c)
     return &c->entry[oldest];
 }
 
+/* A CONTENT HASH, BECAUSE AN ADDRESS IS NOT AN IDENTITY.
+ *
+ * The cache matched on address, format and size and never looked at the
+ * bytes, and nothing ever invalidated it. That is correct only for textures
+ * whose contents never change. A video frame is the opposite case: the
+ * decoder writes every new frame into the SAME buffer, so after the first
+ * decode every lookup is a hit and the picture stops moving - which is
+ * exactly how the movie froze, and how a buffer caught mid-write stays on
+ * screen as garbage for good.
+ *
+ * FNV-1a over the encoded bytes. Large textures are sampled on a stride
+ * rather than read whole, because this runs per lookup and a 512x448 RGB565
+ * frame is 448 KB: hashing all of it every draw would trade one bug for a
+ * different performance complaint. The stride is chosen so a changed frame
+ * cannot miss - a video frame differs in far more than one sample - while a
+ * static texture costs a few hundred bytes to confirm.
+ */
+static uint64_t content_hash(const uint8_t* p, unsigned bytes)
+{
+    uint64_t h = 1469598103934665603ull;
+    unsigned step = 1u, i;
+
+    if (bytes > 4096u) step = bytes / 4096u;   /* ~4 KB sampled, at most */
+
+    for (i = 0; i < bytes; i += step) {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    h ^= bytes;
+    h *= 1099511628211ull;
+    return h;
+}
+
 const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
                               uint32_t addr, uint32_t format,
                               unsigned width, unsigned height,
@@ -284,6 +317,8 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     MgsTexture* t;
     uint16_t* palette = NULL;
     uint16_t palette_copy[16384];
+    uint64_t hash;
+    MgsTexture* reuse = NULL;
 
     /* FIVE DIFFERENT REFUSALS SHARED ONE COUNTER, which made "2,964 refused"
      * unactionable: a bad size, an unmapped palette and a format the decoder
@@ -299,14 +334,36 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         ++c->refused; ++c->refused_texels; return NULL;
     }
 
+    {
+        unsigned nbytes = texture_bytes(format, width, height);
+        const uint8_t* src = nbytes ? guest_ptr(mem, addr, nbytes) : NULL;
+        hash = src ? content_hash(src, nbytes) : 0u;
+    }
+
+    /* ONE ENTRY PER TEXTURE IDENTITY, NOT ONE PER VERSION.
+     *
+     * A changed texture must REPLACE its entry, never add a second one.
+     * Adding was the first version of this and it was far worse than the bug
+     * it fixed: a video re-decoding every frame filled all 256 slots with
+     * stale copies of itself in seconds, after which every allocation evicted
+     * something still in use and the whole texture set re-decoded every
+     * frame. The boot stalled on the Konami logo. */
     for (i = 0; i < MGS_TEX_CACHE_ENTRIES; ++i) {
         MgsTexture* e = &c->entry[i];
         if (e->valid && e->addr == addr && e->format == format &&
             e->width == width && e->height == height &&
             e->tlut_addr == tlut_addr && e->tlut_format == tlut_format) {
-            e->generation = ++c->clock;
-            ++c->hits;
-            return e;
+            if (e->hash == hash) {
+                e->generation = ++c->clock;
+                ++c->hits;
+                return e;
+            }
+            /* Same texture, new contents: take this slot back. */
+            free(e->texels);
+            e->texels = NULL;
+            e->valid = 0;
+            reuse = e;
+            break;
         }
     }
     ++c->misses;
@@ -322,7 +379,7 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         palette = palette_copy;
     }
 
-    t = find_slot(c);
+    t = reuse ? reuse : find_slot(c);
     t->texels = (uint32_t*)malloc((size_t)width * height * sizeof(uint32_t));
     if (!t->texels) { ++c->refused; ++c->refused_alloc; return NULL; }
 
@@ -337,6 +394,7 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         return NULL;
     }
 
+    t->hash = hash;
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;
     t->tlut_addr = tlut_addr; t->tlut_format = tlut_format;

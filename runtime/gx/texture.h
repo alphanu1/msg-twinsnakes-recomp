@@ -30,6 +30,7 @@
 #define MGS_TEX_MAX_TEXELS    (1024u * 1024u)
 
 typedef struct MgsTexture {
+    uint64_t hash;           /* of the encoded bytes: contents, not address */
     uint32_t addr;            /* guest address the texels came from */
     uint32_t format;
     uint16_t width, height;

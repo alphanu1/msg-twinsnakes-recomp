@@ -453,6 +453,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       executed for real from the pixel engine's copy registers, BT.601
       conversion to YUV 4:2:2 at the address the game programmed, and
       scan-out from the video interface's own register (`tests/test_efb.c`).
+- [x] **Dynamically updated textures** (F156). The cache keyed on address and
+      never looked at the contents, and nothing invalidated it, so a texture
+      rewritten in place was served stale for the life of the run — which
+      froze the intro movie on its first decoded frame. Now matched on an
+      FNV-1a hash of the encoded bytes, sampled on a stride above 4 KB, with
+      a changed texture reusing its own slot rather than adding a second
+      entry.
 - [x] **Textures** — `runtime/gx/texture.c`. All eleven formats with their
       tiling, including RGBA8's two-halves-per-tile layout and CMPR's
       big-endian DXT1 with reversed selectors; palettes read from where the
