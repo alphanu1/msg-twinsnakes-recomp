@@ -10,6 +10,9 @@ typedef void (*MgsSdkFn)(CPUState* ctx);
 /* Returns the native implementation for a guest address, or NULL. */
 MgsSdkFn mgs_patch_lookup(uint32_t address);
 
+void mgs_memset(CPUState* ctx);
+void mgs___fill_mem(CPUState* ctx);
+void mgs_memcpy(CPUState* ctx);
 void mgs_PPCMfmsr(CPUState* ctx);
 void mgs_PPCMtmsr(CPUState* ctx);
 void mgs_PPCMfhid0(CPUState* ctx);

@@ -20,8 +20,25 @@
 #               strongest signature there is: the compiler emits those
 #               instructions verbatim, so they are identical across SDK
 #               revisions, link orders and games
+#   callgraph   named by its callees and callers, weighted by rarity;
+#               ambiguity refused rather than resolved by preference
+#   fileline    named from the __FILE__/__LINE__ pair it hands its own
+#               allocator or error routine
+#   callgraph+fileline
+#               both routes independently proposed the same name at the same
+#               address - corroboration, and recorded as such
+#   message     named from its own diagnostic message
 #   ghidra      recovered by our own analysis in Ghidra
 #   own         named by our own reasoning about behaviour
+#
+# A NAME MAY LEGITIMATELY APPEAR TWICE. `OnReset`, `AlarmHandler` and
+# `Callback` are `static` in the SDK's sources, so several translation units
+# each define one and the linker keeps them all. `BootInfo` and
+# `ResetFunctionInfo` are data. Do not "fix" these by deleting one - a
+# uniqueness check over this file must exempt statics, and a name that IS
+# unique in the SDK appearing twice is a real error. That is how
+# `GXInitLightPos` at both 0x800430D8 and 0x80043358 was caught: the first
+# writes the light object's `a[]` at +0x10 and is `GXInitLightAttnA`.
 #
 # No symbol here may originate from leaked source. See project rule 9 and
 # docs/decompilation-process.md.
@@ -481,7 +498,7 @@
 .text 0x8001D098 0x30 DCFlushRange dtk-sig
 .text 0x8001D0C8 0x30 DCStoreRange mkdd-align
 .text 0x8001D0F8 0x2C DCFlushRangeNoSync dtk-sig
-.text 0x8001D124 0x2C DCZeroRange mkdd-align
+.text 0x8001D124 0x2C DCStoreRangeNoSync sdk2004-asm
 .text 0x8001D150 0x34 ICInvalidateRange dtk-sig
 .text 0x8001D184 0x10 ICFlashInvalidate dtk-sig
 .text 0x8001D194 0x14 ICEnable dtk-sig
@@ -875,7 +892,8 @@
 .text 0x80042EF8 0x18C GXCopyTex mkdd-align
 .text 0x80043084 0x38 GXClearBoundingBox mkdd-align
 .text 0x800430BC 0x1C GXInitLightAttn mkdd-align
-.text 0x800430D8 0x10 GXInitLightPos mkdd-align
+.text 0x800430D8 0x10 GXInitLightAttnA sdk2004
+.text 0x800430E8 0x10 GXInitLightAttnK sdk2004
 .text 0x800430F8 0x190 GXInitLightSpot mkdd-align
 .text 0x80043288 0xD0 GXInitLightDistAttn mkdd-align
 .text 0x80043358 0x10 GXInitLightPos mkdd-align
@@ -1199,3 +1217,10 @@
 
 # stage 5g: named from the diagnostic message the function prints about itself
 .text 0x8001CC74 0x104 OSCheckHeap message
+
+# Stage 5b, inline-assembly signature match against doldecomp/dolsdk2004.
+.text 0x8001DAC0 0x30 OSSwitchFiber sdk2004-asm
+.text 0x80024F68 0x54 PSMTXMultVec sdk2004-asm
+.text 0x80025088 0x44 PSMTX44Copy sdk2004-asm
+.text 0x800250CC 0x104 PSMTX44Concat sdk2004-asm
+.text 0x800251D0 0x64 PSMTX44Transpose sdk2004-asm

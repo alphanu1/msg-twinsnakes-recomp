@@ -59,6 +59,15 @@ def opcodes(text, numeric_offsets=True):
         line = re.sub(r'(//|/\*).*', '', line).strip()
         if not line or line.endswith(':') or line.startswith('#'):
             continue
+        # DIRECTIVES THAT EMIT NO INSTRUCTION. `nofralloc` tells the
+        # Metrowerks compiler not to build a stack frame for this asm
+        # function; it produces no code, so it appears on the SDK side of the
+        # comparison and can never appear on ours. Leaving it in adds one
+        # token to the signature of every function that uses it, and since a
+        # match is accepted only on the FULL sequence, every one of them
+        # failed - PSMTX44Concat among them, which is byte-identical to ours.
+        if line in ('nofralloc', 'entry', 'noreturn'):
+            continue
         m = re.match(r'([a-z][a-z0-9_.]*)', line)
         if not m:
             continue
@@ -96,6 +105,14 @@ def load_sdk(paths):
             ops = []
             for b in blocks:
                 ops += opcodes(b, numeric_offsets=False)
+            # STRIP A TRAILING `blr` HERE TOO. Some SDK asm bodies write
+            # the return explicitly and some leave the compiler to add it,
+            # and our disassembly always has it. Stripping on one side only
+            # made every explicitly-returning function differ by exactly one
+            # token from its own machine code - PSMTX44Concat's 65 tokens
+            # were otherwise identical to ours, and it still did not match.
+            if ops and ops[-1] == 'blr':
+                ops = ops[:-1]
             if len(ops) >= 4:                 # too short to be distinctive
                 sigs.setdefault(tuple(ops), []).append(name)
     return sigs
@@ -177,6 +194,12 @@ def main():
 
         with open(a.out, 'w') as f:
             for fn, n in sorted(hits.items()):
+                # A function our disassembly already names is a CHECK, not a
+                # discovery: the matcher reproducing a name we arrived at by
+                # another route is evidence the signature works. It has no
+                # address to emit, so it is reported and not written.
+                if not re.fullmatch(r'fn_[0-9A-Fa-f]+', fn):
+                    continue
                 addr = int(fn.split('_')[-1], 16)
                 f.write(f".text 0x{addr:08X} 0x{bounds.get(addr, 0):X} "
                         f"{n} sdk2004-asm\n")

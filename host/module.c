@@ -747,6 +747,141 @@ void mgs_module_set_pump(MgsPump pump, void* user)
  * genuine gap, and the pc names it - or when the step ceiling is reached,
  * which catches a guest spinning rather than letting it hang the host.
  */
+/* A SAMPLING PROFILER over guest addresses.
+ *
+ * The heartbeat prints one pc every N steps, and that turned out to be worse
+ * than useless: the run loop raises a retrace interrupt every 2000 steps, so
+ * any N whose remainder mod 2000 is small lands at nearly the same phase of
+ * the tick on every sample. With N = 2,000,003 the sample drifted three
+ * steps per beat and every beat landed inside __OSDispatchInterrupt - which
+ * reads exactly like a hang in the interrupt handler, and is not.
+ *
+ * So the interval here is PRIME and coprime to every period in the run loop
+ * (2000, 512, 256, 64). 1009 shares no factor with any of them, so the
+ * sample walks the whole phase space and the histogram reflects where the
+ * guest actually spends its time rather than where the host interrupts it.
+ *
+ * Open addressing, fixed capacity, no allocation: the profiler must not
+ * change the behaviour it is measuring. When full it stops learning new
+ * addresses and keeps counting known ones, which biases towards the hot
+ * addresses - the ones worth seeing.
+ */
+#define PROF_INTERVAL 1009ull
+#define PROF_SLOTS    16384u
+
+static uint32_t s_prof_pc[PROF_SLOTS];
+static uint32_t s_prof_hits[PROF_SLOTS];
+static uint64_t s_prof_samples;
+static unsigned s_prof_used;
+
+static void prof_sample(uint32_t pc)
+{
+    unsigned i = (unsigned)((pc >> 2) * 2654435761u) & (PROF_SLOTS - 1u);
+    unsigned probe;
+
+    ++s_prof_samples;
+    for (probe = 0u; probe < 64u; ++probe) {
+        unsigned k = (i + probe) & (PROF_SLOTS - 1u);
+        if (s_prof_hits[k] && s_prof_pc[k] != pc) continue;
+        if (!s_prof_hits[k]) {
+            if (s_prof_used >= PROF_SLOTS - (PROF_SLOTS / 8u)) return;
+            s_prof_pc[k] = pc;
+            ++s_prof_used;
+        }
+        ++s_prof_hits[k];
+        return;
+    }
+}
+
+/* CALLER profiling, for a single chosen address.
+ *
+ * The pc histogram says memcpy is 63% of the run; it cannot say who is
+ * calling it, and that is the whole question. On entry to a function the
+ * link register still holds the return address, so sampling lr the moment
+ * the guest arrives at a chosen pc attributes the call to its caller.
+ *
+ * Every arrival is counted, not a sample of them: a caller that runs once
+ * with a 4 MB copy matters as much as one that runs ten thousand times, and
+ * sampling would hide exactly that asymmetry.
+ */
+static uint32_t s_caller_pc[PROF_SLOTS];
+static uint32_t s_caller_hits[PROF_SLOTS];
+static uint64_t s_caller_bytes[PROF_SLOTS];
+static uint64_t s_caller_total;
+static unsigned s_caller_used;
+
+static void caller_sample(uint32_t lr, uint32_t bytes)
+{
+    unsigned i = (unsigned)((lr >> 2) * 2654435761u) & (PROF_SLOTS - 1u);
+    unsigned probe;
+
+    ++s_caller_total;
+    for (probe = 0u; probe < 64u; ++probe) {
+        unsigned k = (i + probe) & (PROF_SLOTS - 1u);
+        if (s_caller_hits[k] && s_caller_pc[k] != lr) continue;
+        if (!s_caller_hits[k]) {
+            if (s_caller_used >= PROF_SLOTS - (PROF_SLOTS / 8u)) return;
+            s_caller_pc[k] = lr;
+            ++s_caller_used;
+        }
+        ++s_caller_hits[k];
+        s_caller_bytes[k] += bytes;
+        return;
+    }
+}
+
+/* Dump the histogram, hottest first, as plain "count address" lines.
+ *
+ * Deliberately NOT resolved to names here: the host has no symbol table, and
+ * giving it one would mean keeping two copies of config/symbols in step.
+ * tools/resolve-addrs.py maps the output through both symbol files, which
+ * also means the same dump can be re-resolved as naming improves. */
+void mgs_module_profile_dump(FILE* out, unsigned top);
+void mgs_module_profile_dump(FILE* out, unsigned top)
+{
+    unsigned i, n = 0u, shown;
+    static unsigned order[PROF_SLOTS];
+
+    if (!s_prof_samples) return;
+    for (i = 0u; i < PROF_SLOTS; ++i)
+        if (s_prof_hits[i]) order[n++] = i;
+
+    /* Selection of the top `top` rather than a full sort: n is at most a
+     * few thousand and this runs once, but a partial pass keeps the dump
+     * from being the most expensive thing in a short run. */
+    for (shown = 0u; shown < top && shown < n; ++shown) {
+        unsigned best = shown, k;
+        for (k = shown + 1u; k < n; ++k)
+            if (s_prof_hits[order[k]] > s_prof_hits[order[best]]) best = k;
+        { unsigned t = order[shown]; order[shown] = order[best]; order[best] = t; }
+        fprintf(out, "[prof] %8u  %5.1f%%  0x%08X\n",
+                s_prof_hits[order[shown]],
+                100.0 * (double)s_prof_hits[order[shown]] / (double)s_prof_samples,
+                s_prof_pc[order[shown]]);
+    }
+    if (s_caller_total) {
+        unsigned m = 0u, sh;
+        static unsigned corder[PROF_SLOTS];
+        for (i = 0u; i < PROF_SLOTS; ++i)
+            if (s_caller_hits[i]) corder[m++] = i;
+        for (sh = 0u; sh < top && sh < m; ++sh) {
+            unsigned best = sh, k;
+            for (k = sh + 1u; k < m; ++k)
+                if (s_caller_hits[corder[k]] > s_caller_hits[corder[best]]) best = k;
+            { unsigned t = corder[sh]; corder[sh] = corder[best]; corder[best] = t; }
+            fprintf(out, "[call] %8u calls  %12llu bytes  from 0x%08X\n",
+                    s_caller_hits[corder[sh]],
+                    (unsigned long long)s_caller_bytes[corder[sh]],
+                    s_caller_pc[corder[sh]]);
+        }
+        fprintf(out, "[call] %llu arrivals from %u distinct callers\n",
+                (unsigned long long)s_caller_total, m);
+    }
+    fprintf(out, "[prof] %llu samples over %u distinct addresses%s\n",
+            (unsigned long long)s_prof_samples, n,
+            s_prof_used >= PROF_SLOTS - (PROF_SLOTS / 8u) ? " (table full)" : "");
+}
+
 MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 {
     MgsRunResult r;
@@ -756,6 +891,9 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     uint64_t trace_from = 0u;
     uint64_t trace_every = 0u;
     uint64_t heartbeat = 0u;
+    int profile = 0;
+    uint32_t caller_of = 0u;
+    unsigned caller_size_reg = 5u;
 
     /* MGS_TRACE_STEPS=N prints the first N guest pcs. A stop address alone
      * says where execution ended, not how it got there, and for a boot the
@@ -772,6 +910,16 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         trace_every = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
         env = getenv("MGS_HEARTBEAT");
         heartbeat = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
+        profile = getenv("MGS_PROFILE") != NULL;
+        /* MGS_PROFILE_CALLERS=<guest address> attributes arrivals at that
+         * address to the callers that got there. MGS_PROFILE_SIZE_REG names
+         * the argument register holding a byte count, so the report can rank
+         * by bytes moved as well as by call count - memcpy and __fill_mem
+         * both take it in r5. */
+        env = getenv("MGS_PROFILE_CALLERS");
+        caller_of = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
+        env = getenv("MGS_PROFILE_SIZE_REG");
+        if (env) caller_size_reg = (unsigned)strtoul(env, NULL, 0);
     }
 
     /* A ring of recent addresses. A stop address says where execution ended;
@@ -863,6 +1011,15 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 
         recent[recent_n % RECENT] = pc;
         ++recent_n;
+
+        if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
+
+        if (caller_of && pc == caller_of) {
+            const uint32_t* g = mgs_module_gpr(cpu);
+            uint32_t lr;
+            memcpy(&lr, (const uint8_t*)cpu + CPU_LR_OFFSET, sizeof lr);
+            caller_sample(lr, caller_size_reg < 32u ? g[caller_size_reg] : 0u);
+        }
 
         /* MGS_HEARTBEAT=N prints progress every N steps. A run that stops
          * producing output is either stuck in the guest or stuck in the

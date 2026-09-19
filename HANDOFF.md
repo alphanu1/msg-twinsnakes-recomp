@@ -21,25 +21,25 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 56.5%
+## PHASE 0 PROGRESS — 65.7%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 866 / 18,485 | 4.7% |
+| Functions named | 951 / 18,485 | 5.1% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 151 / 336 | 44.9% |
-| SDK call sites covered | 2,725 / 7,078 | 38.5% |
-| GX surface named | 167 / 177 | **94.4%** |
-| **Average of the five** | | **56.5%** |
+| SDK entry points the engine calls, named | 171 / 336 | 50.9% |
+| SDK call sites covered | 5,385 / 7,078 | 76.1% |
+| GX surface named | 171 / 177 | **96.6%** |
+| **Average of the five** | | **65.7%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
 and neither is the answer: the engine is translated mechanically, so naming it
 buys debugging rather than correctness, while boundaries are what the
 recompiler actually consumes. **The row that governs the remaining work is the
-SDK boundary at 29.5%.**
+SDK boundary** — now 50.9% of entry points and 76.1% of call sites.
 
 ---
 
@@ -138,45 +138,65 @@ Between OS init and there the game renders — thousands of GX commands, its own
 `GXDrawDone` answered by a PE-finish interrupt the host raises from the command
 stream.
 
-**What is NOT done:** no pixels. The host counts GX FIFO bytes and discards
-them; turning them into an image is phase 3, and the Konami logo seen under
-ModernGekko was drawn by Dolphin's GPU emulation, not by anything of ours.
+**The renderer is ours and it draws.** `runtime/gx/` parses the command stream,
+decodes every vertex format, transforms, rasterises, samples textures and runs
+the TEV combiner; `host/display.c` executes the game's framebuffer copies from
+the parser's own register state and presents what the video interface points
+at. The Konami logo is drawn by that code and nothing else — 7,203 commands,
+0 parser desyncs, 108 triangles, 12,494,848 pixels.
 
-Nine findings from this session are recorded below as **F61-F69**. The one
-worth reading first is **F68**: a translation layer that fixes control flow
-passes every test that only checks control flow, and hides a data bug
-indefinitely.
+**Where the boot stops, and what that turned out to mean.** After the logo the
+game keeps running a frame loop but issues no further GX commands. That looked
+like a stall for three sessions. It is not one: a sampling profile puts
+**62.8% of the run inside `memcpy` and 23.5% inside `__fill_mem`**, and caller
+attribution shows **nineteen memcpy calls in the whole boot, one of which
+moves 5.7 MB** — the engine overlay, copied a byte at a time into the second
+address window where every store takes the slow external-write path. The game
+was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
+natively now.
+
+Findings from this session are **F90-F97**. The two worth reading first are
+**F91** — the heartbeat that aliased with the retrace tick and made every
+sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
+interrupt handler — and **F94**, the engine's per-frame work being reached
+through a function pointer, so no amount of following `bl` targets finds the
+renderer.
 
 ---
 
 ## NEXT, IN ORDER
 
-1. **Get further into the boot.** The panic is fixed (F84, F85) and file
-   loading works (F87, F88): the engine opens and reads `stage.dat`,
-   `dummy.tpl` and the rest. The next thing is simply to see where it stops.
-2. **Name the remaining unnamed SDK entry points the engine calls** — 176 of
-   336. Ordered alignment is exhausted (F72); the live routes are the call
-   graph and the `__FILE__`/`__LINE__` pairs, and the biggest untapped one is
-   the REL, which has 17,000 functions and its own file-name strings.
-3. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
+1. **See how far the boot gets now that the overlay copy is native.** The 5.7
+   MB `memcpy` was 63% of the run; with it shimmed, the same step budget buys
+   far more of the game. Re-measure with `MGS_PROFILE=1` before concluding
+   anything about what comes after it — the last three "it is stuck" calls
+   were all wrong, and all three were made without a profile.
+2. **Dump the engine's task table** (`mgs_dump_tasks`, `host/heaps.c`). The
+   per-frame work is reached through a function pointer at `+0x04` of a node
+   in a 12-level table at REL `.bss+0x23708`, gated by a per-level mask at
+   `+0x40` and per-node flag bits 12..15. That table says directly which tasks
+   exist and which are gated off; the call graph cannot.
+3. **Name the remaining 165 SDK entry points the engine calls.** 171 of 336
+   are named and they cover 76.1% of call sites. Ordered alignment is
+   exhausted (F72); the live routes are the call graph, the `__FILE__`/
+   `__LINE__` pairs, and — newly productive again — inline-assembly matching,
+   which had two defects silently subtracting 22 matches (F90).
+4. **The 198 functions in `0x8004E700`-`0x80062000`.** Now attributed
+   (`config/symbols/main.dol.files.txt`): Konami's sound layer and a complete
+   Tremor. Heavily called by the engine and entirely unnamed. Tremor's upstream
+   source is in `extern/tremor`, but Konami edited it and the line numbers do
+   not match, so ordinal alignment would produce names with no valid origin.
+5. **Renderer gaps:** indirect textures, lighting, fog, blending, near-plane
    clipping. All configured by registers the parser already reads.
-4. **Wire the REL into the module** (F30) — the four items above. This is what
-   stands between the Konami logo and the title screen, and it is phase 1's
-   remaining work.
-2. **Clear the interpreter fallback** on chunk `[0x800455E0,0x800495E0)`,
-   caused by SDK stub patching in the `Hu_IsStub` region (F29).
-3. **Name the 266 DOL functions the REL calls but we have not named.** Of 336
-   SDK entry points the engine calls directly, 70 are named. These 266 are the
-   highest-value targets in the project — each is demonstrably used. The
-   Dolphin SDK-call log is the best route.
-2. **Log 60 seconds of SDK calls from Dolphin.** Still the specification for
-   phase 2, and the better route to the last ~84 GX names than more alignment.
-3. **Name the last ~84 GX functions.** 93 of MKDD's 177 are named; the runs
-   broke on size disagreement. Phase 3 wants the full surface.
-4. **Stand up the repository skeleton** — CMake tree, `tools/verify-hash`
-   against `config/GGSPA4.toml`, `runtime/` and `patches/` directories.
-5. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
+6. **The second window is the performance floor.** The whole engine runs at
+   `0x7E000000`, so every load and store goes through `external_read`/
+   `external_write` rather than the generated code's fast path. The `memcpy`
+   shim removed the largest single consumer; the rest of the engine still pays
+   it on every access.
+7. **Decide where MPEG video lives.** `mpegGCN.c` and 95 MB of `movie.dat` are
    real work that no phase owns (F10).
+8. **Phase 4 needs a software Tremor path**, not only a DSP voice mixer — the
+   decoder is in `main.dol` and runs on the CPU.
 
 ---
 
@@ -2678,7 +2698,10 @@ Three things added so that this does not recur:
   GAME has achieved (framebuffer copies, files read), not just the host's
   step count, which only ever says the host is alive.
 - **Ctrl-C ends a run cleanly** rather than killing it, so the report still
-  prints. `SIGINT`/`SIGTERM` set a `volatile sig_atomic_t` the loop checks.
+  prints. `SIGINT`/`SIGTERM` set a `volatile sig_atomic_t` the loop checks —
+  **and a SECOND signal now `_exit`s**, because the flag is only read between
+  dispatch calls and translated code that loops without exhausting its cycle
+  budget never returns to be asked. See F95.
 - **`MGS_TRACE_ALLOC`** logs the game's tracking allocator and its matching
   free with the source file and line each was called from.
 
@@ -2686,6 +2709,154 @@ Three things added so that this does not recur:
 At 1,000,000 every beat landed on the VI interrupt, because the interrupt
 fires every 2,000 steps and 1,000,000 is a multiple of it - so every sample
 reported the same pc and looked like a hang in `__OSDispatchInterrupt`.
+**The fix chosen at the time, 2,000,003, has the same defect** — see F91.
+
+---
+
+**F90 — The inline-assembly matcher had two defects, each subtracting from the
+count silently, and together they cost 22 matches.** `PSMTX44Concat` is
+byte-for-byte identical to our `fn_800250CC` — all 65 instructions in order —
+and did not match.
+
+- `nofralloc` is a Metrowerks **directive**, not an instruction. It emits no
+  code, so it was in the SDK side of every signature that used it and could
+  never be in ours.
+- The trailing `blr` was stripped from **our** side only. Some SDK asm bodies
+  write the return explicitly; ours always has it.
+
+Each made the affected functions differ by exactly one token, and since a
+match needs the full sequence, each one failed. Neither produced a diagnostic:
+the tool reported "12 matches" and looked finished.
+
+Fixed, it reports **34 matches, 5 new** — `OSSwitchFiber`, `PSMTXMultVec`,
+`PSMTX44Copy`, `PSMTX44Concat`, `PSMTX44Transpose` — at 164, 104, 39 and 17
+engine call sites. Call-site coverage 71.5% → **76.1%**.
+
+**The lesson is about the shape of the failure, not the bug.** A matcher that
+refuses everything is obviously broken. One that quietly matches a third of
+what it should looks exactly like a method that has been exhausted, and that
+is what it was believed to be for two sessions.
+
+---
+
+**F91 — `MGS_HEARTBEAT=2000003` aliases with the retrace tick just as badly as
+1,000,000 did.** 2,000,003 mod 2,000 is **3**, so consecutive samples land
+three steps further into the same interrupt handler. Every beat read
+`__OSDispatchInterrupt`, which is indistinguishable from a hang in the
+interrupt handler — and was read as one.
+
+Avoiding a multiple is not enough; the interval must be **coprime** to every
+period in the run loop: retrace 2,000, host pump 512, display 256, PE-finish
+64. `MGS_PROFILE` samples at **1,009**, prime and sharing no factor with any
+of them.
+
+---
+
+**F92 — 86% of the boot is `memcpy` and `__fill_mem`, and one call is 5.7 MB.**
+The sampling profile: `memcpy+0x18` **62.8%**, `__fill_mem` **23.5%**,
+everything else 13.7%, over 8,920 samples and 152 distinct addresses.
+
+Caller attribution (`MGS_PROFILE_CALLERS`, counting *every* arrival and reading
+the link register) found **nineteen memcpy calls in the entire boot**, one of
+which moves **5,737,728 bytes** from `rel_loader_LoadRel+0x94` — the engine
+overlay. Translated, that is `lbzu`/`stbu` 5.7 million times, every store
+landing in the second address window and taking the slow external-write path:
+about one host step per byte, matching the 5,654,184 second-window writes the
+run reports.
+
+**The game was never stalled after the logo. It was copying.** Three sessions
+of "why has it stopped rendering" were asking the wrong question, and a
+five-minute profile answered it.
+
+---
+
+**F93 — the guest's `memcpy` is `memmove`, and the shim must be too.** It
+compares `src` against `dest` and copies backwards when `src < dest`. The game
+is entitled to rely on overlap working; the host's `memcpy` is undefined
+exactly there. `runtime/os/mem_shims.c` calls `memmove`, and its
+window-straddling fallback copies in the same direction the guest would so
+both paths behave identically.
+
+`__fill_mem` takes its value as the **low byte** of r4 (`clrlwi r4, r4, 24`)
+and does not preserve r3 — which is why the SDK's `memset` saves the
+destination in r31 and restores it.
+
+**`tools/gen-patch-table.py` matched only `.text`.** The CodeWarrior block
+moves are linked into `.init`, so the names resolved, the addresses did not,
+and they were reported as unimplemented rather than as a section filter.
+
+---
+
+**F94 — the engine's per-frame work is reached through a function pointer, so
+the call graph cannot find the renderer.** The main loop is
+`bl fn_80007180 ; bl fn_1_F394C`. The first clears one word. The second
+contains exactly one `bl`; its real work is a `bctrl`.
+
+`fn_1_F394C` is a **scheduler**: a 12-level table at REL `.bss+0x23708`,
+0x44 bytes per level, each level a linked list of nodes. `+0x40` of the level
+is a gate AND'd with a global mask (set = skip the level); `+0x08` of a node
+carries flag bits 12..15 (set = skip the node); `+0x04` is the function.
+`fn_1_F3A20` links a node in and confirms the layout.
+
+`mgs_dump_tasks` in `host/heaps.c` dumps it. **Following `bl` targets outward
+from the main loop will never reach the renderer, however long it is done for.**
+
+---
+
+**F95 — the host could not be stopped, and both long runs outlived their
+`timeout`.** One sat at 21 minutes against a 20-minute limit, state R, SIGTERM
+delivered and caught, flag set. The run loop reads the flag *between* dispatch
+calls; translated code that loops without exhausting its cycle budget never
+returns to be asked. `timeout` sends one signal and then waits forever for a
+process that caught it and carried on.
+
+A second signal now `_exit(130)`s. Long runs should use `timeout -k`.
+
+**Five stale `twin-snakes` processes skewed an hour of measurements earlier in
+this project for the same underlying reason, and `pkill -x` does not end them
+— killing by PID does.** Check `ps -C twin-snakes` before trusting a timing.
+
+---
+
+**F96 — `main.dol` is not only SDK, and 198 functions were unattributed
+because nobody looked.** Nineteen `__FILE__` strings in the DOL name Konami's
+own sound layer (`sd_sound.c`, `sd_stream2.c`, `sd_mem.c`, `sd_ogg.c`) and a
+complete **Tremor** — the Xiph fixed-point Vorbis decoder — in `codebook.c`,
+`floor0.c`, `floor1.c`, `framing.c`, `info.c`, `mapping0.c`, `res012.c`,
+`sharedbook.c`, `vorbisfile.c`, `block.c`. That block is `0x8004E700`-
+`0x80062000`, about 34 KB, heavily called by the engine, entirely unnamed.
+
+The **line numbers** come from the same calls: Konami's allocators take
+`(…, file, line, …)`. Tracking registers to each `bl` gives the ABI without
+assuming it, and all four allocators land inside `sd_mem.c`'s own range.
+
+**Cross-check:** within all nine Tremor/ogg units the line numbers run
+strictly *downwards* as the address rises — CodeWarrior emitted them in
+reverse order of definition — while the four `sd_*.c` units run strictly
+upwards. Every file's functions form a contiguous, non-overlapping run.
+
+**What is NOT claimed:** the line numbers do not match upstream Tremor
+(`framing.c` 864 is inside `ogg_stream_pagein` upstream; here it allocates 80
+bytes). Konami edited these files. Aligning by ordinal would produce names
+with no valid origin, so none are claimed. `config/symbols/main.dol.files.txt`
+records **64 attributions**, 31 of them for functions already named — and the
+attribution agrees with the name in every one.
+
+---
+
+**F97 — a name in the map was wrong, and the origin column is what found it.**
+`0x8001D124` was `DCZeroRange`, origin `mkdd-align`. Its body is a `dcbst`
+loop — cache *store*, not zero. It is **`DCStoreRangeNoSync`**. Two
+independent routes agree: the SDK's `OSCache.c` order puts exactly one
+function between `DCFlushRangeNoSync` and `ICInvalidateRange`, and there is no
+`dcbz` anywhere in `main.dol` outside `__LCEnable`'s `dcbz_l` — `DCZeroRange`
+and `DCTouchRange` were dead-stripped.
+
+Ordered alignment mis-assigned it because it assumed both survived the link.
+**A name carrying `mkdd-align` rests on an assumption about what the *other*
+binary contains**, and is worth re-checking against evidence taken from ours.
+
+---
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

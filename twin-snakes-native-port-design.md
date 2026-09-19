@@ -151,6 +151,25 @@ self-contained 380 KB rather than something tangled through the game.
 
 **Patch table.** For each SDK function in the symbol map, the recompiler emits a call to the native implementation instead of translating the original body. The game sees identical behaviour; you get to write `GXBegin` in C++ once rather than emulate the write-gather pipe. This is the single most important design decision: the boundary between "translated" and "native" is the SDK's public API, which is documented, stable across games, and around 400 functions.
 
+**Amended 2026-09-19: the boundary is the SDK's public API *plus the
+CodeWarrior runtime's block moves*.** `memcpy`, `memset` and `__fill_mem` are
+not SDK — they are Metrowerks Standard Library, linked into `.init` — and by
+the rule above they should stay translated. Measurement says otherwise:
+a sampling profile of the boot puts **62.8% of the run inside `memcpy` and
+23.5% inside `__fill_mem`**, and there are only nineteen `memcpy` calls in the
+whole boot, one of which moves 5.7 MB. Translated, that is a two-instruction
+byte loop run 5.7 million times, every store landing in the second address
+window and taking the slow external-write path out to the host.
+
+The principle behind the original rule is unchanged — the boundary belongs
+where the interface is documented, stable and narrow — and these three qualify
+on all three counts; they are simply from a different library than anticipated.
+What the rule was protecting against is *engine* code creeping across the
+boundary, and that prohibition stands unaltered. See
+`runtime/os/mem_shims.c`, and note that the guest's `memcpy` has **memmove**
+semantics: it compares source against destination and copies backwards when
+they overlap, so the shim must too.
+
 **Threads.** GameCube OS threads are cooperative on a single core with priority scheduling. Implement `OSThread` on a fiber or ucontext scheduler that runs exactly one guest thread at a time, so the game's own assumptions about atomicity hold. Host threads are used only inside the platform layer (audio callback, file prefetch, GPU submission).
 
 **Renderer.** Keep the GX state machine (TEV stages, vertex descriptors, matrix memory, texture cache) as a faithful software model, and emit host draw calls from it. Shaders are generated from TEV configuration and cached by hash, as Dolphin and the ww project both do. Rendering at native GameCube resolution with a scale factor is the first milestone; widescreen and higher-quality upscaling are later.

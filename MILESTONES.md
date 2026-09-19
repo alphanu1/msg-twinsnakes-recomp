@@ -15,14 +15,14 @@ when the work feels done.
 
 ---
 
-## Status, 2026-09-18
+## Status, 2026-09-19
 
-**Phase 0, in progress — 1,067 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,072 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
 mechanical rewrite of machine code into C; decompilation in the matching-source
-sense is out of scope by design and sits at ~0%. Phase 0 progress is 56.5%. The toolchain is
+sense is out of scope by design and sits at ~0%. Phase 0 progress is 65.7%. The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
@@ -41,6 +41,7 @@ phase 3.
 |---|---|---|---|---|
 | 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
 | 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **boots — Konami logo at ~43 fps**; one interpreter fallback remains |
+| 2b | *(within 2)* Our own renderer | — | — | **the Konami logo is drawn by `runtime/gx/`**, 0 parser desyncs; the 86% of the boot that was `memcpy`/`__fill_mem` is now native (F92) — measured before the change, effect not yet re-measured |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **runs 2M steps without faulting**; waiting on MMIO we have not built |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
 | 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
@@ -159,11 +160,27 @@ more.
       the REL embeds no public library, so its 16,667 functions have no public
       source to draw names from. The measures that mean something here are
       SDK entry points named and call sites covered, not the function count.
-- [ ] Name the last 6 GX functions and the 169 remaining SDK entry points the
-      engine calls — 50 of them are leaves the call graph cannot reach (F81). The call graph has reached its ceiling (F81): 50 of them
-      have no callers and no callees at all, so instruction-sequence matching
-      and string references are the routes with room left. The biggest untapped source is the REL: 17,000 functions,
-      with its own file-name strings.
+- [x] **Inline-assembly matching was not exhausted — it was broken** (F90).
+      Two defects, each silently subtracting from the count: `nofralloc` is a
+      directive that emits no code, and the trailing `blr` was stripped from
+      our side only. 12 matches → **34**, 5 new, at 164/104/39/17 engine call
+      sites. Call sites covered **71.5% → 76.1%**.
+- [x] **A wrong name found and corrected** (F97) — `0x8001D124` was
+      `DCZeroRange`; its body is a `dcbst` loop, so it is
+      `DCStoreRangeNoSync`. Confirmed twice over: the SDK's `OSCache.c` order,
+      and the absence of any `dcbz` in `main.dol` outside `__LCEnable`.
+- [x] **`main.dol` attributed to its source files** (F96) —
+      `config/symbols/main.dol.files.txt`, 64 attributions. It is not only SDK:
+      it carries Konami's sound layer and a complete **Tremor**, 198 functions
+      in `0x8004E700`-`0x80062000`, all unnamed and heavily called. Line
+      numbers run strictly downwards within every Tremor unit and upwards
+      within every `sd_*.c` one, which is the check that they are read right.
+- [ ] Name the last 6 GX functions and the **165** remaining SDK entry points
+      the engine calls — 50 of them are leaves the call graph cannot reach
+      (F81), so instruction-sequence matching and string references are the
+      routes with room left. The 198 Tremor/`sd_*` functions are attributed
+      but not named: Konami edited Tremor, so upstream line numbers do not
+      align and ordinal alignment would give names no valid origin (F96).
 - [x] **Engine function boundaries recovered** — **16,667 functions** in the
       REL.
 - [x] **221 engine functions classified by SDK usage**, 177 of them renderer
@@ -425,6 +442,24 @@ This is the project. ~200 functions and the widest error bars in the plan.
       pixels, 55 frames copied to the external framebuffer and presented.
       Drawn entirely by `runtime/gx/`; `ldd` on the host lists SDL3, libc and
       libm and nothing else.
+- [x] **The boot is measured, not guessed at** (F91, F92). `MGS_PROFILE`
+      samples the guest pc at a prime interval **coprime to every period in
+      the run loop** — the old heartbeat at 2,000,003 aliased with the
+      2,000-step retrace tick and put every sample in
+      `__OSDispatchInterrupt`, which reads as a hang. `MGS_PROFILE_CALLERS`
+      attributes arrivals at an address to the link register.
+      `tools/resolve-addrs.py` names the addresses afterwards, so an old dump
+      can be re-resolved as naming improves.
+- [x] **86% of the boot was two functions with no logic in them** (F92, F93).
+      `memcpy` 62.8%, `__fill_mem` 23.5%. Nineteen memcpy calls in the whole
+      boot; **one moves 5.7 MB** — the overlay, copied byte-at-a-time into the
+      second address window. `runtime/os/mem_shims.c` does all three natively,
+      as `memmove` because the guest's `memcpy` chooses its direction.
+      **The game was never stalled after the logo — it was copying.**
+- [x] **The renderer is reached through a function pointer** (F94), so the
+      call graph cannot find it. `fn_1_F394C` is a 12-level task scheduler;
+      `mgs_dump_tasks` in `host/heaps.c` dumps the table, the per-level gate
+      and the per-node flag bits.
 - [ ] **Indirect textures, lighting, fog and blending** — configured by
       registers this reads but does not yet act on.
 - [ ] **Near-plane clipping** — a triangle straddling the camera is currently

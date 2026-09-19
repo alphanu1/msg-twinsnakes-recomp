@@ -30,7 +30,12 @@ def main():
     named = {}
     for line in open(a.symbols):
         m = re.match(r'^(\.\w+) 0x([0-9A-Fa-f]+) \S+ (\S+) (\S+)', line)
-        if m and m.group(1) == '.text':
+        # `.init` as well as `.text`. The CodeWarrior runtime's block moves -
+        # memcpy, memset, __fill_mem - are linked into .init, and restricting
+        # this to .text silently dropped them from the table: the name
+        # resolved, the address did not, and they were reported as missing
+        # implementations rather than as a section filter.
+        if m and m.group(1) in ('.text', '.init'):
             named.setdefault(m.group(3), int(m.group(2), 16))
 
     want, missing = [], []

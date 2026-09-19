@@ -168,3 +168,93 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module)
                "(relocation tables, dead after linking)\n", from, span);
     }
 }
+
+/* ---- the engine's task table -------------------------------------------
+ *
+ * WHY THIS EXISTS. After the Konami logo the game keeps running a frame loop
+ * - PADRead, VIWaitForRetrace, DVDGetDriveStatus all tick over - but issues
+ * no further GX commands at all. Following the call graph outwards from the
+ * main loop does not explain it, and cannot: the main loop is two calls, one
+ * of which clears a flag, and the other of which is a SCHEDULER. Everything
+ * the game does per frame is reached through a function pointer, so no static
+ * analysis of `bl` targets will ever reach the renderer.
+ *
+ * The scheduler is fn_1_F394C, and its structure is all in its own code:
+ *
+ *   lis/addi r30, lbl_1_bss_23708    the table of level heads
+ *   li r28, 0xc                      twelve priority levels
+ *   addi r29, r29, 0x44              each level head is 0x44 bytes
+ *   lwz r3, 0x40(r29) ; and. r0, r3, <mask at lbl_1_bss_23A38>
+ *                                    a per-level enable mask, AND'd with a
+ *                                    global one; non-zero SKIPS the level
+ *   lwz r3, 0x0(r29)                 the level's first node
+ *   lwz r27, 0x0(r3)                 the next node
+ *   lwz r0, 0x8(r3) ; rlwinm. 0,12,15   flag bits 12..15; non-zero skips
+ *   lwz r12, 0x4(r3) ; mtctr ; bctrl    the node's function - the work
+ *
+ * and fn_1_F3A20 links a node in, confirming the 0x44 stride and that +0x00
+ * is the list pointer and +0x04 the function.
+ *
+ * So dumping this table says, directly, which tasks exist, which are gated
+ * off, and what each one would call. That turns "the renderer stopped" into
+ * a specific question about a specific node.
+ */
+#define TASK_TABLE_OFF   0x23708u
+#define TASK_MASK_OFF    0x23A38u
+#define TASK_LEVELS      12u
+#define TASK_LEVEL_SIZE  0x44u
+#define TASK_LEVEL_HEAD  0x00u
+#define TASK_LEVEL_GATE  0x40u
+#define TASK_NEXT        0x00u
+#define TASK_FUNC        0x04u
+#define TASK_FLAGS       0x08u
+
+void mgs_dump_tasks(void* cpu, uint32_t rel_bss);
+void mgs_dump_tasks(void* cpu, uint32_t rel_bss)
+{
+    uint32_t table = rel_bss + TASK_TABLE_OFF;
+    uint32_t mask  = mgs_module_guest_read32(cpu, rel_bss + TASK_MASK_OFF);
+    unsigned lvl, total = 0u, gated = 0u, skipped = 0u;
+
+    printf("engine tasks (table 0x%08X, global mask 0x%08X):\n", table, mask);
+
+    for (lvl = 0u; lvl < TASK_LEVELS; ++lvl) {
+        uint32_t head = table + lvl * TASK_LEVEL_SIZE;
+        uint32_t gate = mgs_module_guest_read32(cpu, head + TASK_LEVEL_GATE);
+        uint32_t node = mgs_module_guest_read32(cpu, head + TASK_LEVEL_HEAD);
+        unsigned n = 0u;
+        int level_off = (gate & mask) != 0u;
+
+        /* An empty level is the common case and says nothing; printing all
+         * twelve every time buries the two that matter. */
+        if (!node && !gate) continue;
+
+        printf("  level %2u  gate 0x%08X%s\n", lvl, gate,
+               level_off ? "   -- SKIPPED, gate & mask is set" : "");
+        if (level_off) ++gated;
+
+        /* The list is guest data and may be circular or corrupt; a bound
+         * here is the difference between a diagnostic and a hang. */
+        while (node && n < 256u) {
+            uint32_t next  = mgs_module_guest_read32(cpu, node + TASK_NEXT);
+            uint32_t func  = mgs_module_guest_read32(cpu, node + TASK_FUNC);
+            uint32_t flags = mgs_module_guest_read32(cpu, node + TASK_FLAGS);
+            int off = (flags & 0x000F0000u) != 0u;   /* rlwinm 0, 12, 15 */
+
+            printf("      node 0x%08X  fn 0x%08X  flags 0x%08X%s%s\n",
+                   node, func, flags,
+                   off ? "  [flag-skipped]" : "",
+                   func ? "" : "  [no function]");
+            if (off || !func) ++skipped;
+            ++total;
+            node = next;
+            ++n;
+        }
+        if (n >= 256u) printf("      (list did not terminate - corrupt)\n");
+    }
+
+    printf("  %u task%s across the table; %u level%s gated off, "
+           "%u node%s that would not run\n",
+           total, total == 1u ? "" : "s", gated, gated == 1u ? "" : "s",
+           skipped, skipped == 1u ? "" : "s");
+}

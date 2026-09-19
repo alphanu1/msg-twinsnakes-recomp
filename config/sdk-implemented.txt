@@ -91,3 +91,13 @@ LCDisable
 # the patch guards now reach intra-chunk calls.
 __OSInitAudioSystem
 __OSStopAudioSystem
+
+# --- the CodeWarrior runtime's block moves ----------------------------------
+# Not SDK, but by far the largest single cost in the boot: a sampling profile
+# puts 62.8% of the run inside memcpy and 23.5% inside __fill_mem. Nineteen
+# memcpy calls in the whole boot, one of which moves 5.7 MB - the engine
+# overlay, copied byte-at-a-time into the second address window, where every
+# store takes the slow external-write path. See runtime/os/mem_shims.c.
+memcpy
+memset
+__fill_mem

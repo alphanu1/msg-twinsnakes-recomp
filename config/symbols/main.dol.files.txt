@@ -1,0 +1,97 @@
+# main.dol — source-file attribution (GGSPA4, PAL)
+#
+# NOT names. These are functions whose SOURCE FILE is established from the
+# binary itself: each hands its own `__FILE__` and `__LINE__` to Konami's
+# tracked allocator in sd_mem.c, so the file it was compiled from - and the
+# exact line the call sits on - are in its instruction stream. The companion
+# file for the engine overlay is mgso_pal.rel.files.txt.
+#
+# WHAT THIS ESTABLISHED, beyond the per-function attribution: main.dol is not
+# only SDK and CodeWarrior runtime. It carries Konami's own sound layer
+# (sd_sound.c, sd_stream2.c, sd_mem.c, sd_ogg.c) and a complete Tremor -
+# the Xiph fixed-point Vorbis decoder - in codebook.c, floor0.c, floor1.c,
+# framing.c, info.c, mapping0.c, res012.c, sharedbook.c, vorbisfile.c and
+# block.c. That block is 198 functions and about 34 KB, all of it previously
+# unattributed, and it is what the engine's audio calls reach.
+#
+# CROSS-CHECK. Within every one of the nine Tremor/ogg translation units the
+# line numbers run STRICTLY DOWNWARDS as the address rises - CodeWarrior
+# emitted those units in reverse order of definition - while the four Konami
+# sd_*.c units run strictly upwards. Nine files monotonic in one direction
+# and four in the other is not something a mis-parse produces; it is the
+# check that these line numbers are being read correctly.
+#
+# The line numbers do NOT match upstream Tremor: framing.c line 864 is inside
+# ogg_stream_pagein upstream, and here it allocates 80 bytes. Konami edited
+# these files - replacing Xiph's allocator with their own tracked one, among
+# other things - so upstream line numbers cannot be used to put NAMES to
+# these addresses, and none are claimed here.
+#
+# Produced by the register-tracking scan in docs/decompilation-process.md
+# stage 5e, applied to main.dol.
+#
+# <address> <size> <source file> <line numbers compiled into it>
+0x800066F8 0xE8 rel_loader.c 123,131,132
+0x80046EF0 0x12C texPalette.c 86
+0x8004B6D8 0x72C CR_System.c 668,671,681
+0x8004BE04 0xB8 CR_System.c 465
+0x8004C82C 0xA0 CR_System.c -
+0x8004EBD0 0x60 sd_sound.c 330
+0x80052960 0x114 sd_stream2.c 730
+0x80052C3C 0x80 sd_stream2.c 1002
+0x80052F48 0x64 sd_stream2.c 1234
+0x800532DC 0x168 sd_stream2.c 1607
+0x800535C0 0x370 sd_stream2.c -
+0x80055B74 0x58 sd_mem.c 272
+0x80055BCC 0xD0 sd_mem.c 319
+0x80055D50 0x58 sd_mem.c 571
+0x80055DA8 0x54 sd_mem.c 607
+0x80055EA8 0x8C sd_mem.c 744
+0x80056810 0x158 sd_ogg.c 959,969,984
+0x80056968 0xA8 sd_ogg.c 1032,1037,1041,1044
+0x80057264 0x34C codebook.c 47,75,119
+0x800577A0 0x184 floor0.c 360,374,385
+0x800579FC 0x144 floor0.c -
+0x80057B40 0x88 floor0.c 310,311,313
+0x80057BC8 0x4C floor0.c 302
+0x80058560 0x1F4 floor1.c 131
+0x8005876C 0x254 floor1.c 76
+0x800589E0 0x4C floor1.c 59
+0x80058A2C 0x4C floor1.c 51
+0x800592DC 0x50 framing.c 864
+0x80059750 0x60 framing.c 610
+0x800597B0 0x5C framing.c 597
+0x8005A17C 0x58 framing.c 159
+0x8005A210 0x70 framing.c 132
+0x8005A280 0xD4 framing.c 105,112,113
+0x8005A37C 0xD8 framing.c 62
+0x8005A454 0x38 framing.c 39
+0x8005A5DC 0x3BC info.c -
+0x8005A998 0x170 info.c 202,206,207
+0x8005AC4C 0x1E0 info.c 157,159
+0x8005AE2C 0x54 info.c 127
+0x8005AE80 0xD4 info.c 110,111,112
+0x8005B3D8 0x230 mapping0.c 133
+0x8005B634 0x1B4 mapping0.c 95,97,99,100
+0x8005B7E8 0xFC mapping0.c 77,78,79,80,82
+0x8005B8E4 0x4C mapping0.c 63
+0x8005D1B0 0x254 res012.c 140,146,161
+0x8005D404 0x198 res012.c 93
+0x8005D5E0 0xFC res012.c 62,65,68
+0x8005D6DC 0x4C res012.c 50
+0x8005D728 0x4B4 sharedbook.c 376,386,393,399,409
+0x8005DCAC 0xC4 sharedbook.c 302,303,305,306,307
+0x8005DD70 0x40 sharedbook.c 296
+0x8005DDB0 0x70 sharedbook.c 288,289
+0x8005DE20 0x400 sharedbook.c 192,193,281
+0x8005E420 0x214 sharedbook.c 76,92
+0x8005E7A4 0x34 skstuff.c 271
+0x8005F2BC 0x168 vorbisfile.c 794,795,797,798,799,800
+0x8005F498 0x178 vorbisfile.c 740,741
+0x8005FC54 0x40C vorbisfile.c 348,349,350
+0x80060284 0x358 vorbisfile.c 251,252
+0x8006196C 0x184 block.c 236,237,250,251
+0x80061BA8 0x23C block.c 155,166,176,177,187
+0x80061DE4 0x5C block.c 143
+0x80061E40 0xCC block.c 130
+0x80061F0C 0xC8 block.c 99,107

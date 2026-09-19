@@ -370,6 +370,80 @@ The three are `PSQUATAdd`, `PSQUATSubtract`, `PSQUATScale` — at 913, 697 and
 named treats a leaf called 900 times the same as one called once; the
 call-site measure is the one that says what the engine actually depends on.
 
+## Stage 5b, third pass — two bugs that cost 22 matches · **DONE**
+
+**In:** our disassembly + `doldecomp/dolsdk2004`. **Out:** 34 matches, 5 new,
+and one name already in the map corrected.
+
+```sh
+python3 tools/match-sdk-asm.py --sdk $(find extern/dolsdk2004/src -name '*.c') \
+    --asm build/phase0/out/asm/auto_01_800055E0_text.s \
+    --boundaries build/phase0/main.symbols.txt --out asmhits.txt
+```
+
+The second pass reported 12 matches and was believed to have exhausted the
+method. It had not. `PSMTX44Concat` is **byte-for-byte identical** to our
+`fn_800250CC` — all 65 instructions, in order — and did not match. Two
+defects, each of which silently subtracted from the count rather than
+reporting anything:
+
+**`nofralloc` is a directive, not an instruction.** It tells the Metrowerks
+compiler not to build a stack frame and emits no code. It appeared in the SDK
+side of every signature that used it and could never appear in ours, and
+since a match is accepted only on the *full* sequence, every such function
+failed by exactly one token.
+
+**The trailing `blr` was stripped from one side only.** Our disassembly always
+carries the return; the SDK writes it explicitly in some asm bodies and lets
+the compiler add it in others. Stripping it from our side and not theirs made
+every explicitly-returning function differ by one token — again, by exactly
+one, and again with no diagnostic.
+
+Both are now filtered symmetrically in `opcodes()`/`load_sdk()`.
+
+| | |
+|---|---|
+| SDK inline-asm signatures | 104 |
+| exact full-sequence matches | 34 |
+| already named — independent confirmation | 19 |
+| **new** | **5** |
+| ambiguous signature (refused) | 5 |
+| non-unique body (refused) | 2 |
+
+The five new are `OSSwitchFiber`, `PSMTXMultVec`, `PSMTX44Copy`,
+`PSMTX44Concat` and `PSMTX44Transpose`. The last three are called **164, 104
+and 39** times by the engine; `PSMTXMultVec` 17 times.
+
+**Nineteen already-named functions reproducing themselves is the cross-check.**
+`DCFlushRange`, `ICInvalidateRange`, `PPCHalt`, `PSVECAdd` and fifteen others
+were named by ordered run alignment, by an unrelated route, and the
+instruction-sequence match arrives at the same name at the same address.
+
+### A name in the map was wrong, and this is what found it
+
+`0x8001D124` was recorded as `DCZeroRange`, origin `mkdd-align`. Its body is:
+
+```
+cmplwi r4, 0x0 ; blelr ; clrlwi r5, r3, 27 ; add r4, r4, r5
+addi r4, r4, 0x1f ; srwi r4, r4, 5 ; mtctr r4
+.L: dcbst r0, r3 ; addi r3, r3, 0x20 ; bdnz .L ; blr
+```
+
+`dcbst` is *store*. `DCZeroRange` is `dcbz`. The function is
+**`DCStoreRangeNoSync`**, which is what the assembly match says, and two
+independent routes agree:
+
+- the SDK's `OSCache.c` order is `DCFlushRangeNoSync`, `DCStoreRangeNoSync`,
+  `DCZeroRange`, `DCTouchRange`, `ICInvalidateRange`. Our binary has exactly
+  **one** function between `DCFlushRangeNoSync` and `ICInvalidateRange`;
+- there is **no `dcbz` anywhere in `main.dol`** outside `__LCEnable`'s
+  `dcbz_l`. `DCZeroRange` and `DCTouchRange` were dead-stripped.
+
+Ordered alignment mis-assigned it because it assumed both survived the link.
+**This is the failure mode the origin column exists for:** a name carrying
+`mkdd-align` is a name resting on an assumption about what the *other* binary
+contains, and it is worth re-checking against evidence taken from ours.
+
 ### Where the call graph stops
 
 Of the 172 SDK entry points still unnamed when this was measured: 43 have a
@@ -527,6 +601,82 @@ which function that is:
 
 That also settles a phase-0 open question: `mpegGCN.c` is in the REL, so the
 MPEG video decoder is the game's own code and not an SDK component (F10).
+
+## Stage 5e-DOL — Attribute main.dol to its source files · **DONE**
+
+**In:** `main.dol` strings + our disassembly. **Out:** 64 attributions, and
+the identification of 198 previously unattributed functions.
+
+Stage 5e was run on the engine overlay. It had never been run on `main.dol`,
+on the assumption that `main.dol` is SDK, CodeWarrior runtime and the
+Metrowerks TRK debugger. **That assumption was wrong**, and the strings say
+so:
+
+```sh
+# every printable run in the DOL's loaded segments, with its guest address
+python3 - <<'EOF'
+import struct, re
+d = open('discs/GGSPA4/disc1/sys/main.dol','rb').read()
+offs, addrs, sizes = (struct.unpack('>18I', d[i:i+72]) for i in (0,72,144))
+for a,o,s in ((addrs[i],offs[i],sizes[i]) for i in range(18) if sizes[i]):
+    for m in re.finditer(rb'[\x20-\x7e]{6,}\x00', d[o:o+s]):
+        print(hex(a+m.start()), m.group(0)[:-1].decode())
+EOF
+```
+
+Nineteen of them are `__FILE__` strings, and they name Konami's own sound
+layer — `sd_sound.c`, `sd_stream2.c`, `sd_mem.c`, `sd_ogg.c` — and a complete
+**Tremor**, the Xiph fixed-point Vorbis decoder: `codebook.c`, `floor0.c`,
+`floor1.c`, `framing.c`, `info.c`, `mapping0.c`, `res012.c`, `sharedbook.c`,
+`vorbisfile.c`, `block.c`. Plus `rel_loader.c`, `texPalette.c`, `CR_System.c`,
+`dvdfs.c` and `skstuff.c`.
+
+That block is `0x8004E700`–`0x80062000`: **198 functions, about 34 KB, every
+one of them unnamed**, and it is what the engine's audio reaches.
+
+### Reading the file and the line out of the instruction stream
+
+The `__FILE__` string alone says which functions mention a file. The **line**
+comes from the same call: Konami replaced the allocators with tracked ones
+that take `(…, file, line, …)`. Tracking registers to each `bl` gives the ABI
+without assuming it:
+
+| callee | file in | sites |
+|---|---|---|
+| `fn_80055C9C` | r4 | 54 |
+| `fn_80055B74` | r5 | 30 |
+| `fn_80055B08` | r4 | 24 |
+| `fn_80055BCC` | r5 | 4 |
+
+— and all four are inside `sd_mem.c`'s own address range, which is the check
+that they are what they look like. The line is the next register.
+
+### The cross-check, and it is a strong one
+
+Within every one of the **nine** Tremor/ogg translation units the line
+numbers run **strictly downwards** as the address rises — CodeWarrior emitted
+those units in reverse order of definition — while the **four** Konami
+`sd_*.c` units run strictly upwards. Thirteen files monotonic, nine one way
+and four the other, is not something a mis-parse produces.
+
+A second check: every file's attributed functions form a **contiguous,
+non-overlapping** address run, and the runs are in link order. Had the
+register tracking been picking up the wrong constant, the runs would
+interleave.
+
+### What this does NOT give, and why it is not claimed
+
+The line numbers **do not match upstream Tremor**. `framing.c` line 864 is
+inside `ogg_stream_pagein` upstream; here it allocates 80 bytes. Konami edited
+these files — replacing Xiph's allocator with their own is one visible change
+among others — so upstream line numbers cannot be used to put *names* to
+these addresses, and **none are claimed**. Aligning by ordinal within a file
+would produce names with no valid origin, which is exactly what stage 5's
+rules refuse.
+
+The result is in `config/symbols/main.dol.files.txt`: **64 attributions**, of
+which 31 are functions already named, which is itself corroboration — the
+attribution agrees with the name in every case.
 
 ## Stage 5f — Name by exact source line · **DONE**
 
@@ -1121,6 +1271,132 @@ source commit — which is why the port is GPL-3.
 Compile with `-O2`, not `-O3`, and **never `-ffast-math`**: paired-single
 semantics need exact rounding.
 
+## Stage 8e — Measuring the boot instead of guessing at it · **DONE**
+
+After the Konami logo the game keeps running a frame loop - `PADRead`,
+`VIWaitForRetrace`, `DVDGetDriveStatus` all tick over - and issues **no
+further GX commands**. GX stays at 7,203 commands and 108 triangles, frames at
+55. Three sessions of reasoning about the call graph did not explain it.
+
+### The call graph was never going to explain it
+
+The engine's main loop is two calls:
+
+```
+.L_118: bl fn_80007180 ; bl fn_1_F394C ; b .L_118
+```
+
+`fn_80007180` clears one word. `fn_1_F394C` contains exactly one `bl`. Its
+real work is a `bctrl`:
+
+```
+lis/addi r30, lbl_1_bss_23708    a table of level heads
+li  r28, 0xc                     twelve priority levels
+addi r29, r29, 0x44              0x44 bytes per level
+lwz r3, 0x40(r29) ; and. r0, r3, <mask>   per-level gate; set SKIPS the level
+lwz r3, 0x0(r29)                 the level's first node
+lwz r0, 0x8(r3) ; rlwinm. 0,12,15         flag bits 12..15; set skips the node
+lwz r12, 0x4(r3) ; mtctr r12 ; bctrl      the node's function - the work
+```
+
+**It is a scheduler.** Everything the game does per frame is reached through a
+function pointer held in guest data, so no amount of following `bl` targets
+reaches the renderer. `fn_1_F3A20` links a node in and confirms the layout:
+0x44 stride, `+0x00` next, `+0x04` function. `host/heaps.c` dumps the table.
+
+### The sampling profiler, and the heartbeat that was lying
+
+`MGS_PROFILE=1` samples the guest pc into a histogram;
+`tools/resolve-addrs.py` puts names to it afterwards, so an old dump can be
+re-resolved as naming improves.
+
+**The interval is prime and coprime to every period in the run loop.** The
+loop raises a retrace interrupt every 2,000 steps, services host work every
+512, runs framebuffer copies every 256 and raises PE-finish every 64. The
+existing `MGS_HEARTBEAT` had been set to 2,000,003 to avoid aliasing with the
+retrace - but 2,000,003 mod 2,000 is **3**, so the sample drifted three steps
+per beat and landed in the same place in the same handler every time. Every
+heartbeat read `__OSDispatchInterrupt`, which looks exactly like a hang in the
+interrupt handler. The profiler uses 1,009, which shares no factor with any of
+them.
+
+### What it said, immediately
+
+| | |
+|---|---|
+| `memcpy+0x18` | **62.8%** |
+| `__fill_mem` | **23.5%** |
+| `OSDisableInterrupts` / `OSRestoreInterrupts` | 2.0% |
+| everything else | 11.7% |
+
+8,920 samples over 152 distinct addresses. **86% of the boot is two functions
+that contain no logic.**
+
+### Then: who is calling them
+
+`MGS_PROFILE_CALLERS=<address>` counts *every* arrival at an address and
+attributes it to the link register, which on entry still holds the return
+address. Not a sample of arrivals - a caller that runs once with a 4 MB copy
+matters as much as one that runs ten thousand times, and sampling hides
+exactly that.
+
+```
+[call]   15 calls        2,280 bytes  from OSExceptionInit+0x1EC
+[call]    1 calls       17,738 bytes  from 0x800064C8
+[call]    1 calls    5,737,728 bytes  from rel_loader_LoadRel+0x94
+[call]   19 arrivals from 5 distinct callers
+```
+
+**Nineteen memcpy calls in the entire boot, and one of them is 5.7 MB** - the
+engine overlay being put in place. Translated, that is `lbzu`/`stbu` run 5.7
+million times, and every store lands in the second address window where it
+takes the slow external-write path out to the host: roughly one host step per
+byte, which matches the 5,654,184 second-window writes the run reports.
+
+**The game was never stalled.** It was copying.
+
+### The fix, and why memcpy is not memcpy
+
+`runtime/os/mem_shims.c` implements `memcpy`, `memset` and `__fill_mem`
+natively. Guest memory is a byte array in guest order, so a byte move needs no
+swapping and `guest_ptr` gives a bounds-checked host pointer for each side.
+
+**The guest's `memcpy` has memmove semantics**:
+
+```
+cmplw r4, r3         ; src vs dest
+blt   .L_800051C8    ; src < dest - copy BACKWARDS from the end
+```
+
+It chooses its direction, so the game is entitled to rely on overlap working.
+Calling the host's `memcpy` would be undefined precisely where the game
+expects defined behaviour; the shim calls `memmove`. Where a range straddles
+the end of a window `guest_ptr` returns NULL and the fallback copies in the
+same direction the guest would, so overlap behaves identically on both paths.
+
+`__fill_mem` takes its value as the **low byte** of r4 (`clrlwi r4, r4, 24`)
+and does not preserve r3 - which is why the SDK's `memset` saves the
+destination in r31 and restores it.
+
+**The generator was dropping them.** `tools/gen-patch-table.py` matched only
+`.text` symbols; the CodeWarrior block moves are linked into `.init`. The name
+resolved, the address did not, and they were reported as unimplemented rather
+than as a section filter.
+
+### A host that could not be stopped
+
+Both long runs outlived their `timeout`: one sat at 21 minutes against a
+20-minute limit, in state R, with SIGTERM delivered and caught.
+
+`on_interrupt` set `mgs_module_interrupted`, and the run loop reads that flag
+**between** dispatch calls. Translated code that loops without exhausting its
+cycle budget never returns, so the flag is never read, and the process cannot
+be stopped by Ctrl-C or by `timeout` - which sends one signal and then waits
+forever for a process that caught it and carried on.
+
+A second signal now calls `_exit(130)`. Anything that ignored the first is not
+going to answer the second. Long runs should also use `timeout -k`.
+
 ## Stage 9 — Verify against the original · **PLANNED**
 
 **In:** the port and Dolphin. **Out:** a divergence report.
@@ -1144,6 +1420,11 @@ are exactly:
 | `dtk-sig` | signature match against the SDK `0x2301` build |
 | `mkdd-align` | ordered run alignment against `doldecomp/mkdd` |
 | `sdk2004` | name confirmed against `doldecomp/dolsdk2004` sources |
+| `sdk2004-asm` | full inline-assembly body matched against `dolsdk2004` — the strongest signature there is, since the compiler emits those instructions verbatim and they are identical across SDK revisions, link orders and games |
+| `callgraph` | named by its callees and callers, weighted by rarity, ambiguity refused (stage 5d) |
+| `fileline` | named from the `__FILE__`/`__LINE__` pair it hands its own allocator or error routine (stages 5e, 5f) |
+| `callgraph+fileline` | both routes independently proposed the same name at the same address |
+| `message` | named from its own diagnostic message (stage 5g) |
 | `ghidra` | recovered by our own analysis |
 | `own` | named by our own reasoning about behaviour |
 

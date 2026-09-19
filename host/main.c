@@ -137,6 +137,7 @@ static void frame_pump(void)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <stdarg.h>
 
 static void overlay_line(const char* fmt, ...);
@@ -262,9 +263,27 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 
 static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
 
+/* A SECOND signal exits outright.
+ *
+ * Setting a flag is the right FIRST response: the run loop notices it at the
+ * top of the next step and the report still gets printed, which is most of
+ * why a long run is worth interrupting at all.
+ *
+ * But the flag is only read between dispatch calls. Translated code that
+ * loops without exhausting its cycle budget never returns, the loop never
+ * gets to look at the flag, and the process cannot be stopped at all - not
+ * by Ctrl-C and not by `timeout`, which sends one SIGTERM and then waits
+ * forever for a process that caught it and carried on. That happened here:
+ * a 30,000,000-step run sat at 21 minutes against a 20-minute timeout, in
+ * state R, with the flag set and SIGTERM delivered.
+ *
+ * So the second signal is not polite. Anything that ignored the first one is
+ * not going to answer the second either.
+ */
 static void on_interrupt(int sig)
 {
     (void)sig;
+    if (mgs_module_interrupted) _exit(130);
     mgs_module_interrupted = 1;
 }
 
@@ -600,6 +619,10 @@ int main(int argc, char** argv)
                             if (out && mgs_display_save_ppm(out, &rt.mem))
                                 printf("wrote %s\n", out);
                         }
+                        /* Where the guest actually spent its time. Printed
+                         * last because it is the longest, and only when
+                         * asked for. */
+                        mgs_module_profile_dump(stdout, 30u);
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",
@@ -641,7 +664,13 @@ int main(int argc, char** argv)
                                        mod_, bss_);
                                 /* The RECOMPILED overlay's globals, which is
                                  * where the engine actually keeps them. */
-                                if (mod_) mgs_dump_heaps(cpu, mod_ + 0x4B6678u - 0x24AD8u);
+                                if (mod_) {
+                                    uint32_t bss = mod_ + 0x4B6678u - 0x24AD8u;
+                                    mgs_dump_heaps(cpu, bss);
+                                    /* What the per-frame scheduler would
+                                     * actually run. See host/heaps.c. */
+                                    mgs_dump_tasks(cpu, bss);
+                                }
                             }
                         }
                         mgs_dump_threads(cpu, NULL);

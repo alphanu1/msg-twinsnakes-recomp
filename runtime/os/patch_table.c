@@ -9,6 +9,9 @@
 typedef struct { uint32_t address; MgsSdkFn fn; } MgsPatch;
 
 static const MgsPatch k_patches[] = {
+    {0x800050B4u, mgs_memset},   /* memset */
+    {0x800050E4u, mgs___fill_mem},   /* __fill_mem */
+    {0x8000519Cu, mgs_memcpy},   /* memcpy */
     {0x8001B5FCu, mgs_PPCMfmsr},   /* PPCMfmsr */
     {0x8001B604u, mgs_PPCMtmsr},   /* PPCMtmsr */
     {0x8001B60Cu, mgs_PPCMfhid0},   /* PPCMfhid0 */
@@ -47,7 +50,7 @@ static const MgsPatch k_patches[] = {
     {0x80029DE8u, mgs_DVDCompareDiskID},   /* DVDCompareDiskID */
 };
 
-#define MGS_PATCH_COUNT 36u
+#define MGS_PATCH_COUNT 39u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {
