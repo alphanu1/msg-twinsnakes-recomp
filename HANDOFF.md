@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F131**. The two worth reading first are
+Findings from this session are **F90-F132**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,15 +166,14 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **The third wall: the engine repeats per-frame work without advancing
-   (F130, corrected by F131).** The hot routine at REL `.text 0xF0F2C` is a
-   healthy 16-iteration bucket sort called very often — not a hang. But
-   200,000,000 steps give the same 177,806 GX commands and 223 completions as
-   40,000,000, so the work is being redone rather than progressing.
-   **Compare engine state between two stopping points** — task table, frame
-   ring indices, heap free lists — instead of profiling again. A profile
-   cannot tell progress from repetition, which is what cost this thread three
-   wrong conclusions.
+1. **Why the boot's decompression never completes (F132).** The wall is
+   zlib: `huft_build` holds 81.6% of samples, inflate succeeds every time,
+   and 800,000,000 steps change nothing. No new disc read is issued in
+   760,000,000 extra steps, so look at what feeds `inflate`'s input — the
+   chain is `0x8004A46C` -> `fn_1_130DB8` -> `fn_1_130AB8` -> `inflate`.
+   Instrument `z->avail_in`/`next_in` rather than the Huffman code, and
+   remember `Z_BUF_ERROR` sets no message so it cannot be ruled out by the
+   string scan.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
@@ -4296,6 +4295,56 @@ blind spot as evidence.** All three share a shape — a conclusion drawn from
 something the measurement could not have shown. The fix is not more care; it
 is asking "what would this look like if I were wrong" before writing the
 finding down.
+
+---
+
+**F132 — the boot's wall is DECOMPRESSION, and the engine embeds zlib.** The
+routine holding 81.6% of the boot's samples is **zlib's `huft_build`**,
+called from **`inflate_trees_dynamic`**. Proved two independent ways:
+
+- **Its own error messages.** `inflate_trees_dynamic` stores five string
+  constants into `z->msg`, and all five are in this binary verbatim and in
+  zlib's own order: *"oversubscribed literal/length tree"*, *"incomplete
+  literal/length tree"*, *"oversubscribed distance tree"*, *"incomplete
+  distance tree"*, *"empty distance tree with lengths"*.
+- **Its structure.** A 16-entry bit-length histogram (zlib's `BMAX` is 15),
+  the literal/length count `0x101` = 257, the table-fill stride
+  `1 << (k - w)`, and returns of -3, -4, -5 — `Z_DATA_ERROR`, `Z_MEM_ERROR`,
+  `Z_BUF_ERROR`.
+
+Named `huft_build` and `inflate_trees_dynamic`, origin `message`. The call
+chain is now known end to end:
+
+```
+0x8004A46C (main.dol, task dispatch)
+  -> fn_1_130DB8 -> fn_1_130AB8        (Konami's wrappers)
+  -> fn_1_F0968  = zlib inflate
+  -> fn_1_EEC44  = zlib inflate_blocks
+  -> inflate_trees_dynamic -> huft_build
+```
+
+**It is stuck, and that is now beyond argument.** `MGS_STEPS=800000000` —
+twenty times the original budget — produces **byte-identical** output to
+40,000,000: same 177,806 GX commands, same 223 frame completions, same 64
+disc reads, same pc. Engine state is frozen too: heap free lists identical to
+the byte (10,716,480 free, same list pointer, same 7 blocks) and the task
+table unchanged.
+
+**And inflate is not failing.** Scanning guest RAM for pointers to those five
+strings finds all five strings present and **zero words pointing at any of
+them**, so `z->msg` was never set. The engine is decompressing *successfully*,
+for ever, without finishing.
+
+**What that leaves.** No new disc reads are issued across 760,000,000 extra
+steps, so the likeliest shape is inflate wanting more input that never
+arrives. `Z_BUF_ERROR` sets no message, so the scan above cannot exclude it —
+that is a real limit of this evidence and not a gap to paper over.
+
+**The pc hook failed again, and this time it was not believed.** A hook on
+`huft_build`'s return site never fired once, exactly as F131 describes: the
+call returns inside one dispatch chunk. The question was answered from guest
+memory instead, which cannot miss. That is the F131 lesson actually applied
+rather than merely written down.
 
 ---
 

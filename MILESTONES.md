@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,200 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,202 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -550,12 +550,21 @@ This is the project. ~200 functions and the widest error bars in the plan.
       nothing could clear it. The line now mirrors the device, as VI's always
       has. **`PI cause 0x40` stuck to `0x00000000`, 871,157 re-offers to
       1,122, 55 disc reads to 64**, determinism intact.
-- [ ] **The third livelock: work repeated, not stuck** (F130, F131). The hot
-      routine at REL `.text 0xF0F2C` is a healthy 16-iteration bucket sort,
-      called very often — its registers read `stride 4, bound 64`. Not a
-      hang. But 200,000,000 steps give the same output as 40,000,000, so the
-      engine is redoing per-frame work without advancing. Compare engine
-      state between two stopping points rather than profiling again.
+- [x] **The third wall identified: the boot is stuck DECOMPRESSING** (F132).
+      The hot routine at REL `.text 0xF0F2C` is **zlib's `huft_build`**,
+      called from `inflate_trees_dynamic` — proved by five verbatim zlib error
+      strings in this binary plus independent structural agreement. It holds
+      **81.6% of the boot's samples**. The stuck-ness is now certain:
+      **800,000,000 steps produce byte-identical output to 40,000,000** —
+      same GX commands, same disc reads, same heap free lists, same task
+      table. And inflate is **not failing**: none of its five error strings
+      is pointed at by any word in guest RAM.
+- [ ] **Why the decompression never completes.** Chain is
+      `0x8004A46C` (task dispatch) -> `fn_1_130DB8` -> `fn_1_130AB8` ->
+      zlib `inflate` (`fn_1_F0968`) -> `inflate_blocks` (`fn_1_EEC44`).
+      Inflate succeeds and is re-entered for ever while no new disc read is
+      issued, so the likeliest shape is "needs more input, never gets it".
+      Z_BUF_ERROR sets no message, so the error scan cannot rule it out.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

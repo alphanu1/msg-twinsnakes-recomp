@@ -556,10 +556,23 @@ static void trace_sem_signal(void* cpu, const uint32_t* gpr)
  * trace that repeats it a million times buries it. */
 static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
 {
-    static int said;
-    if (said) return;
-    said = 1;
+    /* SAMPLED REPEATEDLY, because one sample cannot tell a stream being
+     * decoded from a stream being restarted. Identical parameters every time
+     * mean the same Huffman table is being rebuilt from the same input;
+     * varying ones mean real progress through different blocks. That is the
+     * difference between "the engine is stuck" and "the engine is working".*/
+    static uint64_t seen;
+    static uint32_t first19, first30, first25;
     (void)cpu;
+    ++seen;
+    if (seen == 1u) { first19 = gpr[19]; first30 = gpr[30]; first25 = gpr[25]; }
+    if (seen != 1u && (seen % 500000u) != 0u) return;
+    if (seen > 1u)
+        fprintf(stderr, "[loop] sample %llu: base 0x%08X %s first (0x%08X), "
+                        "bound 0x%08X %s first (0x%08X)\n",
+                (unsigned long long)seen, gpr[25],
+                gpr[25] == first25 ? "==" : "!=", first25,
+                gpr[30], gpr[30] == first30 ? "==" : "!=", first30);
     fprintf(stderr,
             "[loop] at REL 0xF1314:  r19=0x%08X (index)  r21=0x%08X (stride)"
             "  r30=0x%08X (bound)  r25=0x%08X (base)\n"
@@ -568,6 +581,83 @@ static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
             gpr[24], gpr[26], gpr[11], gpr[12],
             gpr[21] == 0u ? "   <-- STRIDE IS ZERO: this loop cannot end"
                           : "");
+}
+
+/* huft_build's RETURN CODE, read where the caller tests it.
+ *
+ * 0x7F0F95CC is the `cmpwi r3, 0` immediately after the first call in
+ * inflate_trees_dynamic, so r3 here is exactly what huft_build returned:
+ * 0 on success, and -3, -4 or -5 for Z_DATA_ERROR, Z_MEM_ERROR or
+ * Z_BUF_ERROR. That single number decides the whole diagnosis - a boot that
+ * inflates successfully for ever is decompressing something enormous, and one
+ * that fails for ever is being handed data that is wrong. */
+static void trace_huft_result(void* cpu, const uint32_t* gpr)
+{
+    static uint64_t ok, data_err, mem_err, buf_err, other, total;
+    int32_t r3 = (int32_t)gpr[3];
+    (void)cpu;
+    ++total;
+    if (r3 == 0)       ++ok;
+    else if (r3 == -3) ++data_err;
+    else if (r3 == -4) ++mem_err;
+    else if (r3 == -5) ++buf_err;
+    else               ++other;
+    if ((total % 20000u) == 0u)
+        fprintf(stderr, "[huft] %llu returns:  ok %llu  Z_DATA_ERROR %llu  "
+                        "Z_MEM_ERROR %llu  Z_BUF_ERROR %llu  other %llu\n",
+                (unsigned long long)total, (unsigned long long)ok,
+                (unsigned long long)data_err, (unsigned long long)mem_err,
+                (unsigned long long)buf_err, (unsigned long long)other);
+}
+
+/* DID INFLATE FAIL? Answered from guest memory, not from a pc hook.
+ *
+ * zlib sets `z->msg` to one of five string constants when a Huffman tree is
+ * malformed. Those constants live in the module's own data, so if any of them
+ * is POINTED AT by a word anywhere in guest RAM, inflate reported that error
+ * to somebody. That is a fact about memory and cannot be missed the way a pc
+ * hook can - which matters here, because the hook on huft_build's return site
+ * never fired at all (the call returns inside one dispatch chunk, the blind
+ * spot recorded in HANDOFF F131).
+ *
+ * Finds the string by content first, because the module's load address is the
+ * game's choice and has already changed once.
+ */
+static void find_inflate_error(const GuestMemory* mem)
+{
+    static const char* const msgs[] = {
+        "oversubscribed literal/length tree",
+        "incomplete literal/length tree",
+        "oversubscribed distance tree",
+        "incomplete distance tree",
+        "empty distance tree with lengths",
+    };
+    uint32_t lo = 0x80000000u, hi = 0x81800000u;
+    unsigned m;
+
+    for (m = 0; m < sizeof msgs / sizeof msgs[0]; ++m) {
+        size_t len = strlen(msgs[m]);
+        uint32_t a, found = 0u;
+        for (a = lo; a + (uint32_t)len < hi; ++a) {
+            size_t i = 0;
+            while (i < len && guest_read8(mem, a + (uint32_t)i) ==
+                              (uint8_t)msgs[m][i]) ++i;
+            if (i == len) { found = a; break; }
+        }
+        if (!found) { printf("  \"%s\": not in guest RAM\n", msgs[m]); continue; }
+        {
+            uint32_t p, refs = 0u, first = 0u;
+            for (p = lo; p + 4u < hi; p += 4u)
+                if (guest_read32(mem, p) == found) {
+                    if (!refs) first = p;
+                    ++refs;
+                }
+            printf("  \"%s\" at 0x%08X, pointed at by %u word%s%s",
+                   msgs[m], found, refs, refs == 1u ? "" : "s",
+                   refs ? "" : "\n");
+            if (refs) printf(" (first 0x%08X)  <-- INFLATE REPORTED THIS\n", first);
+        }
+    }
 }
 
 static void usage(const char* argv0)
@@ -813,6 +903,8 @@ int main(int argc, char** argv)
                             mgs_module_trace_calls(0x80023E3Cu, trace_sleep);
                             mgs_module_trace_calls2(0x80023F28u, trace_wakeup);
                         }
+                        if (getenv("MGS_TRACE_HUFT"))
+                            mgs_module_trace_calls4(0x7F0F95CCu, trace_huft_result);
                         if (getenv("MGS_TRACE_LOOP"))
                             mgs_module_trace_calls3(0x7F0F9400u, trace_stuck_loop);
                         if (getenv("MGS_TRACE_THREADS")) {
@@ -998,6 +1090,10 @@ int main(int argc, char** argv)
                             /* MGS_SAVE_FRAME=<path> writes the last frame the
                              * game presented, so a headless run can be looked
                              * at rather than only counted. */
+                            if (getenv("MGS_FIND_ZMSG")) {
+                                printf("inflate error messages in guest RAM:\n");
+                                find_inflate_error(&rt.mem);
+                            }
                             const char* best = getenv("MGS_SAVE_BEST");
                             const char* out = getenv("MGS_SAVE_FRAME");
                             if (best)

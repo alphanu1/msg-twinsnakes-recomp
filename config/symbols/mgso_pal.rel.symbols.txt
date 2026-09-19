@@ -62,3 +62,25 @@
 .text 0x121278 0x4 gcn_gx_end own
 .text 0x12127C 0x14 gcn_gx_write3f own
 .text 0x121290 0x14 gcn_gx_write3f_pos own
+
+# --- zlib, embedded in the engine ------------------------------------------
+# PascalCase rule aside, these are zlib's OWN names: the binary identifies
+# them beyond doubt, so they are the actual names and not a description.
+#
+# The evidence is the five error messages `inflate_trees_dynamic` stores into
+# `z->msg`, which appear in this binary verbatim and in that order:
+#
+#   "oversubscribed literal/length tree"   "incomplete literal/length tree"
+#   "oversubscribed distance tree"         "incomplete distance tree"
+#   "empty distance tree with lengths"
+#
+# and the structure agrees independently: a 16-entry bit-length histogram
+# (zlib's BMAX is 15), the literal/length count 0x101 = 257, the table-fill
+# stride `1 << (k - w)`, and the return codes -3, -4 and -5 - Z_DATA_ERROR,
+# Z_MEM_ERROR and Z_BUF_ERROR. Two routes, one answer.
+#
+# WHY THIS MATTERS BEYOND THE NAMES. huft_build holds 81.6% of the boot's
+# samples (HANDOFF F132). The thing the boot spends its life doing is
+# building Huffman tables, which is not where anyone was looking.
+.text 0x0F0F2C 0x4A4 huft_build message
+.text 0x0F1470 0x17C inflate_trees_dynamic message
