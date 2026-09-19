@@ -559,12 +559,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       same GX commands, same disc reads, same heap free lists, same task
       table. And inflate is **not failing**: none of its five error strings
       is pointed at by any word in guest RAM.
-- [ ] **Why the decompression never completes.** Chain is
-      `0x8004A46C` (task dispatch) -> `fn_1_130DB8` -> `fn_1_130AB8` ->
-      zlib `inflate` (`fn_1_F0968`) -> `inflate_blocks` (`fn_1_EEC44`).
-      Inflate succeeds and is re-entered for ever while no new disc read is
-      issued, so the likeliest shape is "needs more input, never gets it".
-      Z_BUF_ERROR sets no message, so the error scan cannot rule it out.
+- [ ] **Why the decompression never completes** (F133). Narrowed hard: it is
+      a true infinite loop inside `inflate_blocks`, **not** starvation and
+      **not** table overflow. The stream has 59,633 bytes of input and 3.3 MB
+      of output space; `huft_build`'s `MANY` check reads `1024 <= 1440 ok`.
+      Hashing guest memory per megabyte at two step budgets shows **the output
+      buffer and the Huffman table are byte-identical after 80,000,000 extra
+      steps** — zero decompressed bytes, same table rebuilt for ever. Only the
+      `z_stream` and zlib's internal state move. Next: narrow megabyte 23 per
+      4 KB, then per word, to name the state field.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

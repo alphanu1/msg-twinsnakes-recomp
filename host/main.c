@@ -562,17 +562,73 @@ static void trace_stuck_loop(void* cpu, const uint32_t* gpr)
      * varying ones mean real progress through different blocks. That is the
      * difference between "the engine is stuck" and "the engine is working".*/
     static uint64_t seen;
-    static uint32_t first19, first30, first25;
-    (void)cpu;
     ++seen;
-    if (seen == 1u) { first19 = gpr[19]; first30 = gpr[30]; first25 = gpr[25]; }
-    if (seen != 1u && (seen % 500000u) != 0u) return;
-    if (seen > 1u)
-        fprintf(stderr, "[loop] sample %llu: base 0x%08X %s first (0x%08X), "
-                        "bound 0x%08X %s first (0x%08X)\n",
-                (unsigned long long)seen, gpr[25],
-                gpr[25] == first25 ? "==" : "!=", first25,
-                gpr[30], gpr[30] == first30 ? "==" : "!=", first30);
+    if (seen != 1u && (seen % 200000u) != 0u) return;
+
+    /* THE z_stream, RECOVERED BY WALKING ONE FRAME UP.
+     *
+     * A hook on inflate's entry never fires - the call happens inside a
+     * dispatch chunk (HANDOFF F131) - but this one, inside huft_build's hot
+     * inner loop, fires constantly because the loop is where the pc lands.
+     * So the stream is reached from here instead of being waited for:
+     *
+     *   huft_build's sp  ->  back chain  ->  inflate_trees_dynamic's frame,
+     *   whose `stmw r24, 0x4a0(r1)` puts the saved r31 at +0x4BC, and r31 is
+     *   the z_stream because that is where it stores z->msg (+0x18).
+     *
+     * total_in and total_out are zlib's own progress counters. If they do not
+     * move between samples, inflate is not consuming or producing anything,
+     * and no amount of Huffman detail matters. */
+    {
+        uint32_t huft_sp = gpr[1];
+        uint32_t itd_sp  = mgs_module_guest_read32(cpu, huft_sp);
+        uint32_t z       = mgs_module_guest_read32(cpu, itd_sp + 0x4BCu);
+        static uint32_t last_ti, last_to;
+        uint32_t ni, ai, ti, no, ao, to, msg;
+
+        if (z < 0x80000000u || z >= 0x81800000u) {
+            fprintf(stderr, "[zlib] sample %llu: frame walk gave z=0x%08X, "
+                            "not a guest pointer - walk is wrong\n",
+                    (unsigned long long)seen, z);
+            return;
+        }
+        ni  = mgs_module_guest_read32(cpu, z + 0x00u);
+        ai  = mgs_module_guest_read32(cpu, z + 0x04u);
+        ti  = mgs_module_guest_read32(cpu, z + 0x08u);
+        no  = mgs_module_guest_read32(cpu, z + 0x0Cu);
+        ao  = mgs_module_guest_read32(cpu, z + 0x10u);
+        to  = mgs_module_guest_read32(cpu, z + 0x14u);
+        msg = mgs_module_guest_read32(cpu, z + 0x18u);
+        fprintf(stderr,
+                "[zlib] sample %llu  z=0x%08X  in: next 0x%08X avail %u "
+                "total %u%s   out: next 0x%08X avail %u total %u%s  msg 0x%08X\n",
+                (unsigned long long)seen, z, ni, ai, ti,
+                (seen > 1u && ti == last_ti) ? " (STALLED)" : "",
+                no, ao, to,
+                (seen > 1u && to == last_to) ? " (STALLED)" : "", msg);
+        last_ti = ti; last_to = to;
+
+        /* AND THE TABLE-SPACE COUNTER, which is the silent failure.
+         *
+         * huft_build returns Z_MEM_ERROR when `*hn + z > MANY` - at
+         * REL 0xF1208 that constant is 0x5A0, 1440, zlib's MANY exactly. That
+         * return sets NO message (inflate_trees_dynamic passes -4 straight
+         * out), which is why scanning for error strings found nothing while
+         * the stream sat frozen.
+         *
+         * r22 holds the `hn` pointer and r30 the table size z, both still
+         * live at this point in the inner loop, so the check can be evaluated
+         * here without hooking the branch itself. */
+        {
+            uint32_t hn = mgs_module_guest_read32(cpu, gpr[22]);
+            uint32_t zsz = gpr[30];
+            fprintf(stderr,
+                    "[huft] *hn=%u  z=%u  *hn+z=%u  MANY=1440  ->  %s\n",
+                    hn, zsz, hn + zsz,
+                    (hn + zsz) > 1440u ? "Z_MEM_ERROR (silent)" : "ok");
+        }
+        return;
+    }
     fprintf(stderr,
             "[loop] at REL 0xF1314:  r19=0x%08X (index)  r21=0x%08X (stride)"
             "  r30=0x%08X (bound)  r25=0x%08X (base)\n"
@@ -1090,6 +1146,43 @@ int main(int argc, char** argv)
                             /* MGS_SAVE_FRAME=<path> writes the last frame the
                              * game presented, so a headless run can be looked
                              * at rather than only counted. */
+                            {
+                                /* GUEST MEMORY, HASHED. The last word on
+                                 * progress: total_in and total_out only move
+                                 * when inflate exits, so frozen counters are
+                                 * also what "inside one long call" looks
+                                 * like. Memory cannot hide that - a decoder
+                                 * making progress writes SOMETHING. If two
+                                 * runs with different step budgets hash the
+                                 * same, the guest did nothing at all with the
+                                 * extra steps. */
+                                uint64_t h = 1469598103934665603ull;
+                                uint32_t a, mb;
+                                for (a = 0x80000000u; a < 0x81800000u; a += 4u) {
+                                    h ^= guest_read32(&rt.mem, a);
+                                    h *= 1099511628211ull;
+                                }
+                                printf("MEM1 hash: 0x%016llX\n",
+                                       (unsigned long long)h);
+                                /* PER-MEGABYTE, so two runs can be compared
+                                 * and the change LOCALISED. A whole-memory
+                                 * hash says only that something moved; which
+                                 * megabyte moved says whether a decoder is
+                                 * filling its output buffer or a loop is
+                                 * churning its own scratch. */
+                                printf("MEM1 by MB:");
+                                for (mb = 0; mb < 24u; ++mb) {
+                                    uint64_t g = 1469598103934665603ull;
+                                    uint32_t b, base = 0x80000000u + mb * 0x100000u;
+                                    for (b = 0; b < 0x100000u; b += 4u) {
+                                        g ^= guest_read32(&rt.mem, base + b);
+                                        g *= 1099511628211ull;
+                                    }
+                                    printf(" %02u:%04X", mb,
+                                           (unsigned)((g >> 48) & 0xFFFFu));
+                                }
+                                printf("\n");
+                            }
                             if (getenv("MGS_FIND_ZMSG")) {
                                 printf("inflate error messages in guest RAM:\n");
                                 find_inflate_error(&rt.mem);

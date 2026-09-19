@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F132**. The two worth reading first are
+Findings from this session are **F90-F133**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -166,14 +166,13 @@ renderer.
 
 ## NEXT, IN ORDER
 
-1. **Why the boot's decompression never completes (F132).** The wall is
-   zlib: `huft_build` holds 81.6% of samples, inflate succeeds every time,
-   and 800,000,000 steps change nothing. No new disc read is issued in
-   760,000,000 extra steps, so look at what feeds `inflate`'s input — the
-   chain is `0x8004A46C` -> `fn_1_130DB8` -> `fn_1_130AB8` -> `inflate`.
-   Instrument `z->avail_in`/`next_in` rather than the Huffman code, and
-   remember `Z_BUF_ERROR` sets no message so it cannot be ruled out by the
-   string scan.
+1. **Name the zlib state field that is ping-ponging (F133).** inflate is in a
+   true infinite loop inside `inflate_blocks`: output buffer untouched across
+   80,000,000 steps, identical Huffman table rebuilt for ever, input and
+   output space both plentiful. Only megabyte 23 — the `z_stream` at
+   `0x81701998` and zlib's internal state — changes. Hash MB 23 per 4 KB at
+   two budgets, then per word inside the page that differs. That names the
+   field, and the field names the bug.
 2. ~~Why 99.8% of the geometry shades black~~ — **answered, and it is not a
    fault (F130).** The combiner does exactly what the game configures. The
    screen is black with a logo because the boot is on a logo screen.
@@ -4345,6 +4344,63 @@ that is a real limit of this evidence and not a gap to paper over.
 call returns inside one dispatch chunk. The question was answered from guest
 memory instead, which cannot miss. That is the F131 lesson actually applied
 rather than merely written down.
+
+---
+
+**F133 — inflate is spinning, and the proof is that its output buffer never
+changes.** F132 left the question "why does the decompression never finish".
+Three measurements answer it, and two of them corrected earlier guesses.
+
+**The z_stream, recovered without a working hook.** A hook on inflate's entry
+never fires (F131's blind spot), so the stream was reached by walking the
+stack from the one hook that does: `huft_build`'s sp -> back chain ->
+`inflate_trees_dynamic`'s frame, whose `stmw r24, 0x4a0(r1)` puts the saved
+r31 at `+0x4BC`, and r31 is the `z_stream` because that is where it stores
+`z->msg`. zlib's layout confirms it — `msg` at `+0x18`, exactly.
+
+```
+z=0x81701998  in:  next 0x816D3E8F  avail 59633  total 136975
+              out: next 0x80973A2F  avail 3303281 total 267695   msg 0
+```
+
+**It is not starved.** 59,633 bytes of input are available and 3.3 MB of
+output space. The "needs more input that never arrives" guess in F132 is
+wrong.
+
+**And it is not the table-space failure either.** `huft_build` returns
+`Z_MEM_ERROR` when `*hn + z > MANY`, and at REL 0xF1208 that constant is
+`0x5A0` = 1440 = zlib's `MANY` exactly (a third independent confirmation of
+the identification). That return sets **no message**, which is the silent case
+the F132 string scan could not see — so it was worth checking, and it is not
+happening: every sample reads `*hn=512  z=512  sum=1024  <= 1440  ok`.
+
+**What settles it: hash guest memory per megabyte at two step budgets.**
+`total_in` and `total_out` only move when inflate exits, so frozen counters
+are also what "inside one long call" looks like — they cannot distinguish
+stuck from busy. Memory can:
+
+| megabyte | what lives there | changed between 40M and 120M steps? |
+|---|---|---|
+| 01-02 | OS and engine globals, threads, timers | **yes** — scheduler churn |
+| **09** | **inflate's output buffer** (`next_out` 0x80973A2F) | **NO** |
+| **22** | **the Huffman table** (`0x816F2830`) | **NO** |
+| 23 | the `z_stream` and zlib's internal state | yes |
+
+**Zero decompressed bytes in 80,000,000 extra steps**, and a byte-identical
+Huffman table rebuilt into the same address for ever. Only zlib's own stream
+state moves. That is a true infinite loop inside `inflate_blocks`, not a slow
+decode and not a starved one.
+
+**Next:** narrow megabyte 23 to the words that change, by hashing it per 4 KB
+at two budgets and then per word within the page that differs. That names the
+state field that is ping-ponging, which is the bug.
+
+**Method note.** Three guesses died here — starved input, table overflow, and
+"maybe it is just slow" — each killed by a measurement rather than by
+argument, and each was plausible enough to have been written up as the answer.
+The per-megabyte hash is the one that actually decided it, and it is worth
+keeping as a standard probe: *what changed in memory* is a question almost
+nothing else in this runtime can answer.
 
 ---
 
