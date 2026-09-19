@@ -155,7 +155,7 @@ address window where every store takes the slow external-write path. The game
 was never stalled; it was copying. `runtime/os/mem_shims.c` does those three
 natively now.
 
-Findings from this session are **F90-F110**. The two worth reading first are
+Findings from this session are **F90-F112**. The two worth reading first are
 **F91** — the heartbeat that aliased with the retrace tick and made every
 sample land in `__OSDispatchInterrupt`, which reads exactly like a hang in the
 interrupt handler — and **F94**, the engine's per-frame work being reached
@@ -3367,6 +3367,74 @@ the pump and `drain` only compares against what it is given.
 
 **Four identical runs**, byte-for-byte on every counter down to the deferred
 count of 3,271.
+
+---
+
+**F111 — the thread dump was hiding half the threads, including every blocked
+one.** It rejected any thread pointer outside MEM1 as "not a thread" and
+stopped the walk there. The engine's overlay lives at 0x7E000000 and upwards
+and creates threads in its own memory, so the list ended at the first of
+them: a dump reporting four threads was concealing four more, and the ones
+that mattered were all in the hidden half.
+
+**An instrument that quietly stops early is worse than one that refuses**,
+because a short answer still looks like an answer. That is the third time in
+this session - a phase marker that was only ever set (F99), a heartbeat whose
+interval aliased with the tick (F91), and now this.
+
+With the second window accepted, there are **eight** threads:
+
+| thread | prio | state |
+|---|---|---|
+| 0x801ECD70 | 16 | SUSPENDED - parked deliberately, see below |
+| 0x8020BCF0 | 31 | running: the idle thread |
+| 0x801E8E30 | 0 | waiting on 0x8027DD74 (healthy: 3,627 sleeps, 3,624 wakes) |
+| 0x80209D78 | 18 | waiting on 0x8020B95C |
+| **0x7F4A5630** | **10** | **waiting on 0x7F4A595C - the engine's main thread** |
+| 0x80217D58 | 10 | waiting on 0x8021336C |
+| 0x802134E8 | 9 | waiting on 0x802133AC |
+| 0x80215920 | 11 | waiting on 0x8021338C |
+
+**The suspended thread is not a bug.** `fn_8004A658` sets up the engine's
+threading system, spawns its workers and then calls `fn_8004A630`, which is
+`OSGetCurrentThread` followed by `OSSuspendThread` - it parks the thread it
+was called on, by design, and the work continues on the threads it made.
+
+---
+
+**F112 — where the boot now stops: the engine's main thread is waiting for a
+fourth event that never arrives.** Not yet fixed.
+
+Counting sends against receives per queue is what found it. Three message
+queues - 0x802133A4, 0x80213384, 0x80213364 - receive once and are never
+sent to; those are the engine's worker threads waiting for jobs, which is
+what an idle worker looks like. The interesting one is the engine's **main**
+thread's queue at 0x7F4A5954:
+
+```
+recv from REL 0x28C          send from REL 0x8C0
+recv from REL 0x28C          send from REL 0x8C0
+recv from REL 0x28C          send from REL 0x8C0
+recv from REL 0x28C          <- waiting, no fourth send
+```
+
+A clean alternation, three times, then nothing. `fn_1_888` (REL 0x888) is the
+poster: it stores its argument into a structure, sets a type field to 8, and
+calls `OSSendMessage`. It has **17 call sites**, almost all in one cluster
+between REL 0x88B7C and 0x893AC - a block of small, similar functions that
+look like completion callbacks.
+
+So the question is which of those seventeen should have fired fourth. That is
+the next thing to chase, and the traces to do it with are in place:
+`MGS_TRACE_MSG` prints every send and receive with its queue, message and
+caller, and `MGS_TRACE_QUEUES` does the same for `OSSleepThread` and
+`OSWakeupThread`.
+
+**Also observed, and deliberately not acted on:** `__DVDThreadQueue`
+(0x8027DD00) is slept on 52 times and never woken. That is expected rather
+than wrong - the DVD reads are served natively by the patch table, so the
+SDK's own DVD thread has nothing to do. Worth knowing before someone
+"fixes" it.
 
 ---
 

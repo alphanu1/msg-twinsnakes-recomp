@@ -12,6 +12,7 @@
  * and it stays correct however the game creates and destroys threads.
  */
 #include "module.h"
+#include "memory/guest.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -50,11 +51,23 @@ void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t))
     if (!thread) { printf("  (the active thread list is empty)\n"); return; }
 
     /* Bounded in two ways: a corrupt link would otherwise walk for ever, and
-     * a pointer outside MEM1 is not a thread. A diagnostic that hangs or
-     * crashes is worse than no diagnostic - and this one runs precisely when
-     * the guest has already gone wrong, so garbage is the expected input. */
+     * a pointer that is in neither address window is not a thread. A
+     * diagnostic that hangs or crashes is worse than no diagnostic - and this
+     * one runs precisely when the guest has already gone wrong, so garbage is
+     * the expected input.
+     *
+     * THE SECOND WINDOW COUNTS. The engine overlay lives at 0x7E000000 and
+     * upwards, and it creates threads whose structures are in its own memory.
+     * Rejecting those as "not a thread" truncated the list at the first one -
+     * so a dump that showed four threads was hiding however many came after,
+     * and the three that were actually blocked were among the hidden ones.
+     * An instrument that quietly stops early is worse than one that refuses
+     * outright, because the short answer still looks like an answer. */
     for (; n < 64u; ++n) {
-        if (thread < 0x80000000u || thread >= 0x81800000u || (thread & 3u)) {
+        int in_mem1 = thread >= 0x80000000u && thread < 0x81800000u;
+        int in_vmem = thread >= GUEST_VMEM_BASE &&
+                      thread <  GUEST_VMEM_BASE + GUEST_VMEM_SIZE;
+        if ((!in_mem1 && !in_vmem) || (thread & 3u)) {
             if (thread) printf("  (link 0x%08X is not a thread; list ends)\n", thread);
             break;
         }

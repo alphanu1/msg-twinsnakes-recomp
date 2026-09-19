@@ -416,6 +416,59 @@ static void trace_dsp_donecb(void* cpu, const uint32_t* gpr)
     fprintf(stderr, "[dsp] done_cb ran\n");
 }
 
+/* Who suspends and resumes threads.
+ *
+ * The boot ends with its prio-16 thread SUSPENDED and only the idle thread
+ * running, so something suspended it and nothing resumed it. The argument is
+ * the thread, and the link register says which caller - together that is the
+ * whole question. */
+static void trace_suspend(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[thr] OSSuspendThread(0x%08X) from 0x%08X\n",
+            gpr[3], mgs_module_lr(cpu));
+}
+
+static void trace_resume(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[thr] OSResumeThread(0x%08X) from 0x%08X\n",
+            gpr[3], mgs_module_lr(cpu));
+}
+
+/* Which queues are slept on, and which are woken.
+ *
+ * The boot goes quiet with its threads blocked on queues and only the idle
+ * thread running. A queue that is slept on and never woken is the whole
+ * answer, and the argument to both calls is the queue. */
+static void trace_sleep(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu;
+    fprintf(stderr, "[thr] sleep on queue 0x%08X\n", gpr[3]);
+}
+
+static void trace_wakeup(void* cpu, const uint32_t* gpr)
+{
+    (void)cpu;
+    fprintf(stderr, "[thr] wake  queue 0x%08X\n", gpr[3]);
+}
+
+/* Message queues, which is how the engine's own threads block.
+ *
+ * The thread that stops making progress is not on any OSSleepThread queue,
+ * so it is waiting on a message that never arrives. Both calls take the
+ * queue as their first argument, so counting sends against receives per
+ * queue says which one is starved. */
+static void trace_recv(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[msg] recv 0x%08X from 0x%08X\n",
+            gpr[3], mgs_module_lr(cpu));
+}
+
+static void trace_send(void* cpu, const uint32_t* gpr)
+{
+    fprintf(stderr, "[msg] send 0x%08X msg=0x%08X from 0x%08X\n",
+            gpr[3], gpr[4], mgs_module_lr(cpu));
+}
+
 static void usage(const char* argv0)
 {
     fprintf(stderr,
@@ -633,6 +686,18 @@ int main(int argc, char** argv)
                          * tracking allocator, with the file and line it was
                          * called from - which is how an arena running out
                          * becomes a list rather than a guess. */
+                        if (getenv("MGS_TRACE_MSG")) {
+                            mgs_module_trace_calls(0x80020C3Cu, trace_recv);
+                            mgs_module_trace_calls2(0x80020B74u, trace_send);
+                        }
+                        if (getenv("MGS_TRACE_QUEUES")) {
+                            mgs_module_trace_calls(0x80023E3Cu, trace_sleep);
+                            mgs_module_trace_calls2(0x80023F28u, trace_wakeup);
+                        }
+                        if (getenv("MGS_TRACE_THREADS")) {
+                            mgs_module_trace_calls3(0x80023CCCu, trace_suspend);
+                            mgs_module_trace_calls4(0x80023A44u, trace_resume);
+                        }
                         if (getenv("MGS_TRACE_DSPCB")) {
                             mgs_module_trace_calls(0x80032924u, trace_dsp_initcb);
                             mgs_module_trace_calls2(0x80032988u, trace_dsp_donecb);
