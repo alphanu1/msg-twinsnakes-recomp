@@ -1433,3 +1433,18 @@
 # why it is recorded apart from the brackets above.
 .text 0x8003D99C 0x220 CARDCreateAsync sdk2004-align
 .text 0x8003DBBC 0x48 CARDCreate sdk2004-align
+
+# GXTransform.c, same bracket method (stage 5g).
+#
+#   GXLoadPosMtxImm .. GXLoadNrmMtxImm   expects 1, found 1   taken
+#
+# Three further GX gaps were checked and REFUSED, all short by functions the
+# linker stripped:
+#   GXLoadNrmMtxImm .. GXSetCurrentMtx   expects 2 (Imm3x3, Indx3x3), found 1
+#   GXSetTevDirect  .. __GXUpdateBPMask  expects 5 (IndWarp..IndRepeat), found 1
+#   __GXCleanGPFifo .. GXGetCPUFifo      expects 2 (Set/GetCurrentGXThread), found 1
+#
+# The last is tempting - 0x80040AD8 is 0x4C, far too large for a getter that
+# returns one word, so it "must" be GXSetCurrentGXThread. That is resemblance,
+# and resemblance is what the count test exists to refuse. It stays unnamed.
+.text 0x800460CC 0x30 GXLoadPosMtxIndx sdk2004-align

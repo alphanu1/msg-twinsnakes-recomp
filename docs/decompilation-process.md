@@ -2087,6 +2087,14 @@ dropped decides every name in the gap, so nothing in them is named. Recording
 the refusals matters as much as the names: a method that only ever succeeds is
 not being checked.
 
+**A counter-example, kept deliberately.** Four unnamed OS functions sit between
+`OSGetSemaphoreCount` and `__OSSystemCallVectorStart`, and `OSMessage.c` has
+exactly four functions. The count agrees and the bracket is two-sided, so by
+the rule above it is a name - except `OSMessage.c` is already named at
+`0x80020B14`, elsewhere in the binary. **A matching count is necessary, not
+sufficient: the file being claimed must also be shown not to live somewhere
+else already.** One grep settles it, and it is now part of the method.
+
 **Cross-checked independently by shape.** The SDK's sync wrapper around an
 async call compiles to 0x48 bytes in this binary. `CARDRename` at 0x8003ECB4
 was already named `own+sdk2004` and is 0x48. The three wrappers this stage

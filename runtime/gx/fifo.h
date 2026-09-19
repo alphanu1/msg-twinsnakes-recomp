@@ -209,6 +209,9 @@ typedef struct MgsGx {
     unsigned cmdring_at;
     uint64_t drawring[32];   /* op<<56 | count<<40 | vsize<<24 | len */
     unsigned drawring_at;
+    uint64_t dlring[8];
+    unsigned dlring_at;
+    uint64_t dl_calls, dl_ragged, dl_truncated;
 } MgsGx;
 
 void mgs_gx_init(MgsGx* gx, GuestMemory* mem);

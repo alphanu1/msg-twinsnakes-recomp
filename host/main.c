@@ -1298,6 +1298,16 @@ int main(int argc, char** argv)
                                            (unsigned long long)rs->cmode_hit[i]);
                                 }
                             }
+                            {
+                                const MgsGx* g = mgs_display_gx();
+                                printf("  display lists: %llu called, "
+                                       "%llu with a size that is not a "
+                                       "multiple of 32, %llu ending "
+                                       "mid-command\n",
+                                       (unsigned long long)g->dl_calls,
+                                       (unsigned long long)g->dl_ragged,
+                                       (unsigned long long)g->dl_truncated);
+                            }
                             printf("  blend: %llu pixels blended, "
                                    "%llu writes masked off entirely\n",
                                    (unsigned long long)rs->blended,

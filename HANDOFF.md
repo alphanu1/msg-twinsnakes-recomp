@@ -27,10 +27,10 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 996 / 18,485 | 5.4% |
+| Functions named | 997 / 18,485 | 5.4% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 197 / 336 | 58.6% |
-| SDK call sites covered | 6,142 / 7,078 | 86.8% |
+| SDK entry points the engine calls, named | 198 / 336 | 58.9% |
+| SDK call sites covered | 6,144 / 7,078 | 86.8% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
 | **Average of the five** | | **70.2%** |
 
@@ -308,6 +308,18 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **"A ragged display-list size proves corruption" (F160).** It does not. The
+  game passes non-multiples routinely - 14,717 of 18,000 in a boot - and F137
+  had already measured that rounding them up costs 231 desyncs. The refutation
+  was in the comment above the code being read.
+- **"Display lists ending mid-command is the bug" (F160).** 7,164 of 18,000
+  lists in a boot end mid-command, and that boot has 0 desyncs. The parser
+  discards the partial command and restores the caller's state, which is what
+  the hardware does. Pre-existing, and not the video fault.
+- **A matching function count as proof on its own (F159).** Four unnamed OS
+  functions sat in a bracket, and `OSMessage.c` has exactly four functions -
+  but `OSMessage.c` was already named elsewhere in the binary. Before claiming
+  a file fills a gap, grep the map for that file's functions first.
 - **A diagnostic that derives its context from the corrupt value (F158).**
   The desync report printed the vertex format as `op & 7` where `op` was the
   garbage byte it was complaining about. It described the corruption, not the
@@ -5687,6 +5699,66 @@ opcodes and were being consumed as no-ops.
 Unknown opcodes are now reported wherever they appear. Still open: what
 diverges the stream in the first place, with `83:42` - a draw whose 40-byte
 body is not a whole number of 12-byte vertices - the current lead.
+
+
+### F159 — a bracket that matched by coincidence, and was refused
+
+The four unnamed OS functions at `0x80022C2C`, `0x80022C58`, `0x80022C94` and
+`0x80022D60` sit in a gap bracketed by two named functions -
+`OSGetSemaphoreCount` and `__OSSystemCallVectorStart` - and `OSMessage.c` has
+**exactly four functions**. By F157's rule that is a name.
+
+**It is not.** `OSMessage.c` is already named, at `0x80020B14`, in an entirely
+different part of the binary. The count agreeing was coincidence, and taking it
+would have put four confident wrong names in the map with a valid-looking
+origin.
+
+The right-hand anchor turns out to be `OSSync.c`, which holds only
+`SystemCallVector` and `__OSInitSystemCall`, so the gap belongs to some
+translation unit between `OSSemaphore.c` and `OSSync.c` that adjacency alone
+does not identify. **The gap stays unnamed.**
+
+**What this changes about F157's method:** a matching count is necessary, not
+sufficient. The file whose functions are being claimed must also be shown not
+to live somewhere else already. Checking that costs one grep and is now part of
+the method.
+
+
+### F160 — the video desync is inside a display list, and three theories died getting there
+
+`dl_depth=1` on the first desync: the parser loses the stream **inside a
+display list**, not in the outer FIFO. The list is `0x8107F2E0`, 43,499 bytes,
+32-byte aligned, reached by a correctly framed `CALL_DL`.
+
+**Theories killed, each by its own measurement:**
+
+- **"The vertex is sized too small."** A truncated 83-byte list was dumped
+  whole and hand-parsed. Its first command is `84 00 04` followed by four
+  12-byte vertices forming a clean quad - (0,0), (0x2000,0), (0x2000,0x1800),
+  (0,0x1800) with matching texcoords. **The size of 12 is exactly right.**
+- **"The display-list size operand is wrong."** The raw operand bytes are
+  `80 97 CA E0  00 00 00 53` - address then 83, framed correctly. The game
+  really does pass 83.
+- **"A size that is not a multiple of 32 proves corruption."** It does not, and
+  F137 had already established this: the game passes ragged sizes routinely
+  (14,717 of 18,000 in a boot) and rounding them up to the fetch unit took the
+  boot from 0 desyncs to 231. **The evidence against this was already written
+  in the function being read.** Re-read the comment before theorising.
+
+**Display lists ending mid-command are NOT the bug either.** 7,164 of 18,000
+lists in a *boot* end mid-command - a boot that reports **0 desyncs**. The
+parser saves and restores its state around a list, so a partial command at the
+end is discarded and the caller's stream is untouched, which is almost
+certainly what the hardware does as well. It is pre-existing, it is not new to
+the video, and it is not what corrupts the picture. Worth knowing; not worth
+chasing.
+
+**Where this leaves it.** Something inside a 43 KB display list diverges. The
+instruments now exist to find it - rings of recent bytes, commands, draws and
+display lists, all dumped at the desync - and the next step is to trace
+commands from that list's start rather than from the point where the parser
+noticed. It noticed late by construction until tonight's fix, and it may still
+notice late for reasons that are not opcode-related.
 
 ---
 

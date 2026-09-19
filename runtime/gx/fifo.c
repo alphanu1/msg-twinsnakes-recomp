@@ -187,6 +187,19 @@ static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
             fprintf(stderr, " %02X", gx->recent[(gx->recent_at - k) & 63u]);
         fprintf(stderr, "\n");
     }
+    {   /* The last display lists called. A GX display list is 32-byte
+         * aligned, so a low nibble here says we jumped somewhere that was
+         * never a display list - and a bogus call feeds an arbitrary region
+         * of memory back through the parser. */
+        unsigned k;
+        fprintf(stderr, "[gx] last display lists (addr/size align):");
+        for (k = 6u; k > 0u; --k) {
+            uint64_t e = gx->dlring[(gx->dlring_at - k) & 7u];
+            fprintf(stderr, " %08X/%u a%u", (unsigned)(e >> 32),
+                    (unsigned)(e & 0xFFFFFFFFu), (unsigned)((e >> 32) & 0x1Fu));
+        }
+        fprintf(stderr, "\n");
+    }
     {   /* The last draws: op count*vsize=len. If len-2 is not count*vsize,
          * the stream and our descriptor disagree about the vertex. */
         unsigned k;
@@ -208,7 +221,7 @@ static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
          * run that simply stops is a pointer or buffer problem instead. */
         unsigned k;
         fprintf(stderr, "[gx] last commands (op:len):");
-        for (k = 24u; k > 0u; --k) {
+        for (k = 64u; k > 0u; --k) {
             uint32_t e = gx->cmdring[(gx->cmdring_at - k) & 127u];
             fprintf(stderr, " %02X:%u", e >> 24, e & 0xFFFFFFu);
         }
@@ -230,9 +243,9 @@ static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
         fprintf(stderr, "  vcd=%08X/%08X\n", gx->vcd_lo, gx->vcd_hi);
     }
     fprintf(stderr,
-            "[gx] desync %llu: %s  op=0x%02X fmt=%u prim=%u detail=%u  "
+            "[gx] desync %llu (dl_depth=%u): %s  op=0x%02X fmt=%u prim=%u detail=%u  "
             "vcd=%08X/%08X vat=%08X/%08X/%08X  cmds=%llu tris=%llu\n",
-            (unsigned long long)gx->desyncs, why, op, op & 7u,
+            (unsigned long long)gx->desyncs, gx->dl_depth, why, op, op & 7u,
             (op >> 3) & 7u, detail,
             gx->vcd_lo, gx->vcd_hi,
             gx->vat_a[op & 7u], gx->vat_b[op & 7u], gx->vat_c[op & 7u],
@@ -403,7 +416,19 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         xf_write(gx, head & 0xFFFFu, words, n < 16u ? n : 16u);
         return;
     }
-    if (op == GX_OP_CALL_DL) { run_dl(gx, be32(body), be32(body + 4)); return; }
+    if (op == GX_OP_CALL_DL) {
+        /* The operand bytes as they arrived. Lists that declare 83 bytes sit
+         * 64 apart and therefore overlap, so either this size or this address
+         * is not what the game wrote - and the raw bytes settle which. */
+        if (gx->trace_desync && be32(body + 4) < 256u &&
+            gx->dl_ragged < 6u)
+            fprintf(stderr, "[gx] CALL_DL operand: %02X %02X %02X %02X  "
+                            "%02X %02X %02X %02X\n",
+                    body[0], body[1], body[2], body[3],
+                    body[4], body[5], body[6], body[7]);
+        run_dl(gx, be32(body), be32(body + 4));
+        return;
+    }
     if (op == GX_OP_LOAD_BP) {
         uint32_t packed = be32(body);
         uint8_t  reg = (uint8_t)(packed >> 24);
@@ -572,6 +597,17 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
      * 841,627,908 desyncs. So the address check stays, the mapped-memory
      * check stays, and a size beyond any plausible list is still refused.
      */
+    gx->dlring[gx->dlring_at & 7u] = ((uint64_t)addr << 32) | (size & 0xFFFFFFFFu);
+    ++gx->dlring_at;
+
+    /* A GX display list is a whole number of 32-byte fetch units. A size that
+     * is not says the operand is wrong, and running past the end of a real
+     * list feeds whatever follows it back through the parser. Counted rather
+     * than assumed: if the game legitimately passes ragged sizes this will be
+     * most of them, and if it is corruption it will be a handful. */
+    ++gx->dl_calls;
+    if (size & 0x1Fu) ++gx->dl_ragged;
+
     if (addr & 0x1Fu) {
         if (gx->trace_desync)
             fprintf(stderr, "[gx] CALL_DL addr=0x%08X size=%u  addr%%32=%u\n",
@@ -615,6 +651,37 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
         gx->have = gx->want = 0u;
 
         feed(gx, p, size);
+
+        /* A WELL-FORMED LIST ENDS ON A COMMAND BOUNDARY.
+         *
+         * If bytes are still staged here, the last command in the list ran off
+         * its end - which means either the list's size is wrong or we sized a
+         * command inside it wrongly. The caller's stream is protected either
+         * way, so this is invisible unless counted, and it is precisely the
+         * fault that would make a list render as garbage without ever
+         * reporting a desync. */
+        if (gx->have || gx->want) {
+            ++gx->dl_truncated;
+            if (gx->trace_desync && gx->dl_truncated <= 2u) {
+                unsigned k;
+                fprintf(stderr, "[gx] display list 0x%08X/%u ended mid-command:"
+                                " op=0x%02X have=%u  vcd=%08X/%08X\n",
+                        addr, size, gx->opcode, gx->have,
+                        gx->vcd_lo, gx->vcd_hi);
+                /* The whole list, so it can be parsed by hand. A short one
+                 * that we cannot follow is worth more than any counter. */
+                fprintf(stderr, "[gx]   bytes:");
+                for (k = 0; k < size && k < 128u; ++k)
+                    fprintf(stderr, " %02X", p[k]);
+                fprintf(stderr, "\n[gx]   vertex sizes:");
+                for (k = 0; k < 8u; ++k) {
+                    MgsGxVertexFormat vf;
+                    mgs_gx_vertex_format(gx, k, &vf);
+                    fprintf(stderr, " %u:%u", k, mgs_gx_vertex_size(&vf));
+                }
+                fprintf(stderr, "\n");
+            }
+        }
 
         memcpy(gx->buf, saved, saved_have);
         gx->opcode = saved_buf_op;
