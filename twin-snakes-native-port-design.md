@@ -264,6 +264,27 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
 
+**The interim software rasteriser, and why it is not phase 3.** Phase 3 above
+specifies a TEV-to-GLSL shader generator on a Vulkan backend, and that remains
+the plan. But phases 1 and 2 need pixels on screen to be debuggable at all, so
+`runtime/gx/raster.c` fills triangles on the CPU. It was fast enough for menus
+and far too slow for the intro movie — 13.5 Mpx/s, about 320 cycles a pixel.
+
+It now splits large triangles into bands of scanlines across the host worker
+pool: 51.4 Mpx/s, a full boot in 10.6s against 40.3s. A band owns a disjoint
+range of rows, so two bands cannot touch the same framebuffer or depth word;
+no locking, no binning pass, and drawing order is preserved because each band
+draws the same triangles in the same order. No arithmetic changes, which is
+why the result is checkable: the framebuffer is bit-identical to the serial
+path, and `MGS_RASTER_THREADS=1` is the control that demonstrates it.
+
+This is recorded here because it is a real architectural commitment — the
+rasteriser is now the second consumer of the worker pool described under
+Architecture — and because it must not be mistaken for the phase 3 exit
+criterion. A CPU rasteriser will not render the Dock and the Heliport at
+native resolution. It buys time until the Vulkan backend exists, and the
+phase 3 row is unchanged.
+
 ```mermaid
 flowchart LR
     A[0 Ground truth + symbols] --> B[1 Boot in ModernGekko]

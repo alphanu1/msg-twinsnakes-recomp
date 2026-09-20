@@ -1,4 +1,5 @@
 #include "raster.h"
+#include "platform/jobs.h"
 #include "fifo.h"
 
 #include <stdio.h>
@@ -16,6 +17,17 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->depth_update = 1;
     r->depth_func = 3;            /* less-or-equal, the usual default */
     r->trace_noisy = getenv("MGS_TRACE_NOISY") != NULL;
+    r->skip_all = getenv("MGS_NO_RASTER") != NULL;
+    r->find_turn = getenv("MGS_FIND_TURN") != NULL;
+    r->count_black = getenv("MGS_COUNT_BLACK") != NULL;
+    /* MGS_RASTER_THREADS=N caps how many bands a large triangle is split
+     * into; =1 keeps the whole thing on this thread, which is the control
+     * a bit-identical comparison needs. Default 0 means "ask the pool". */
+    {
+        const char* e = getenv("MGS_RASTER_THREADS");
+        r->max_bands = e ? (unsigned)strtoul(e, NULL, 10) : 0u;
+        r->jobs = NULL;
+    }
     r->color_update = 1;          /* power-on: writes enabled, no blend */
     r->alpha_update = 1;
     /* MGS_TRACE_RASTER=N explains the first N triangles; bare =1 keeps the
@@ -365,6 +377,345 @@ static void note_value(uint32_t* keys, uint64_t* hits, unsigned* n, uint32_t v)
     ++hits[15];
 }
 
+/* THE SCANLINE LOOP, SEPARATED FROM THE SETUP THAT FEEDS IT.
+ *
+ * Splitting it out costs nothing on its own - the caller still runs it over
+ * the triangle's full height - but it is what lets a band of rows be handed
+ * to another core later, and it makes the per-pixel work visible as its own
+ * function in a profile rather than buried in 480 lines of state decoding.
+ */
+typedef struct RasterSpan {
+    MgsGx*              gx;
+    MgsGxRaster*        r;
+    const MgsGxVertex*  vin[3];
+    const MgsTexture*   tex;
+    unsigned            tex_coord, wrap_s, wrap_t;
+    int                 bilinear;
+    int                 alpha_always;
+    MgsTevCompiled      tev;
+    float               sx[3], sy[3], sz[3], iw[3];
+    float               area, inv_area, dw0dx, dw1dx;
+    int                 x0, x1;
+} RasterSpan;
+
+static void raster_span(const RasterSpan* sp, int y0, int y1,
+                        MgsRasterTally* t)
+{
+    MgsGx* gx = sp->gx;
+    MgsGxRaster* r = sp->r;
+    const MgsGxVertex* const* vin = sp->vin;
+    const MgsTexture* tex = sp->tex;
+    unsigned tex_coord = sp->tex_coord, wrap_s = sp->wrap_s, wrap_t = sp->wrap_t;
+    int bilinear = sp->bilinear, alpha_always = sp->alpha_always;
+    const MgsTevCompiled* tev = &sp->tev;
+    const float* sx = sp->sx; const float* sy = sp->sy;
+    const float* sz = sp->sz; const float* iw = sp->iw;
+    float area = sp->area;
+    float inv_area = sp->inv_area, dw0dx = sp->dw0dx, dw1dx = sp->dw1dx;
+    int x0 = sp->x0, x1 = sp->x1;
+    int px, py;
+
+    for (py = y0; py < y1; ++py) {
+        /* ONCE PER SCANLINE, not once per triangle.
+         *
+         * The per-triangle check above cannot release a run that is inside a
+         * single large triangle, and that is exactly where a wedged host was
+         * found sitting: the phase marker said `raster`, the abandon hook was
+         * installed, and the process still would not stop. A row is at most a
+         * few hundred pixels, so this bounds the response time to something
+         * far below a human's patience while costing one predictable branch
+         * per row. */
+        if (r->abandon && r->abandon()) return;
+
+        /* TWO DIVIDES PER PIXEL, GONE.
+         *
+         * A sampling profile put 50% of the whole program in this function,
+         * and the weights were the reason: an edge function evaluated from
+         * scratch and then divided by the area, twice, for every pixel on
+         * screen. An edge function is affine in x, so along a row it is an
+         * add; and dividing by the area once per triangle turns the divides
+         * into multiplies. The row start is still evaluated exactly rather
+         * than carried down from the row above, so drift is bounded by one
+         * row's width instead of accumulating over the whole triangle.
+         */
+        {
+        float fy = (float)py + 0.5f;
+
+        for (px = x0; px < x1; ++px) {
+            float fx = (float)px + 0.5f;
+            float w0 = edge(sx[1], sy[1], sx[2], sy[2], fx, fy) / area;
+            float w1 = edge(sx[2], sy[2], sx[0], sy[0], fx, fy) / area;
+            float w2 = 1.0f - w0 - w1;
+            float z, pw;
+            unsigned at;
+
+            if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) continue;
+
+            z = w0 * sz[0] + w1 * sz[1] + w2 * sz[2];
+            at = (unsigned)py * r->width + (unsigned)px;
+            /* COUNTED. 3.3 million extra triangles reached this loop and
+             * produced not one pixel, and the totals were byte-identical to a
+             * run with a seventh of the geometry - so something rejects every
+             * candidate after the coverage test. Splitting "outside the
+             * triangle" from "failed the depth test" is the difference
+             * between a geometry fault and a stale depth buffer, and the
+             * depth buffer is only reset on a clearing copy: 56 of them in a
+             * boot, all early. */
+            ++t->covered;
+            if (!depth_passes(r, z, r->depth[at])) { ++t->depth_failed; continue; }
+
+            /* Perspective-correct interpolation of the vertex colour: the
+             * weights are in screen space, and dividing by the interpolated
+             * 1/w corrects them. Skipping this is the classic warped-texture
+             * artefact, and it bends Gouraud shading the same way. */
+            pw = w0 * iw[0] + w1 * iw[1] + w2 * iw[2];
+            {
+                MgsTevInput in;
+                uint32_t pixel;
+                float k0, k1, k2;
+
+                if (pw > 0.0f) {
+                    /* One reciprocal, two multiplies. A divide is an order
+                     * of magnitude dearer than a multiply and this ran twice
+                     * for every pixel on screen. */
+                    float inv = 1.0f / pw;
+                    k0 = w0 * iw[0] * inv; k1 = w1 * iw[1] * inv;
+                    k2 = 1.0f - k0 - k1;
+                } else {
+                    k0 = 1.0f; k1 = 0.0f; k2 = 0.0f;
+                }
+
+                in.raster = lerp_color(vin[0]->color[0], vin[1]->color[0],
+                                       vin[2]->color[0], k0, k1, k2);
+                in.has_texture = 0;
+                in.texture = 0xFFFFFFFFu;
+
+                if (tex) {
+                    float u = k0 * vin[0]->u[tex_coord] +
+                              k1 * vin[1]->u[tex_coord] +
+                              k2 * vin[2]->u[tex_coord];
+                    float v = k0 * vin[0]->v[tex_coord] +
+                              k1 * vin[1]->v[tex_coord] +
+                              k2 * vin[2]->v[tex_coord];
+                    in.texture = mgs_tex_sample(tex, u, v, wrap_s, wrap_t, bilinear);
+                    in.has_texture = 1;
+                }
+
+                pixel = mgs_tev_run_compiled(tev, &in);
+
+                /* The alpha test runs AFTER the combiner and before anything
+                 * is written, depth included. Cut-out foliage and text rely
+                 * on it entirely; without it every transparent texel becomes
+                 * an opaque square that also writes depth. */
+                /* HOISTED: the game sets ALPHA_COMPARE to ALWAYS/ALWAYS,
+                 * so the test cannot fail and 0 pixels are killed in a whole
+                 * run - yet it was a function call for every pixel drawn.
+                 * Decided once per triangle; the per-pixel call remains for
+                 * the configurations that can actually reject. */
+                if (!alpha_always && !mgs_tev_alpha_test(&gx->bp, pixel)) {
+                    ++t->alpha_killed;
+                    continue;
+                }
+
+                /* COUNTED SEPARATELY FROM `pixels`, because "12 million
+                 * pixels written" and "12 million BLACK pixels written" look
+                 * identical in a tally and mean opposite things. One says the
+                 * rasteriser works; the other says every stage upstream of
+                 * the colour is working and the colour is not. */
+                if (pixel & 0x00FFFFFFu) ++t->pixels_lit;
+
+                /* DOES ANYTHING BLACK PAINT OVER SOMETHING LIT, AND WHERE?
+                 *
+                 * 165,888 triangles a run are configured a=b=c=d=ZERO -
+                 * "output black" - and they are the large ones, about 66
+                 * pixels each. One of those covering the right of the screen
+                 * would truncate every line of text at the same column
+                 * regardless of content, which is the signature this bug has
+                 * always had.
+                 *
+                 * COUNTED, NOT SUPPRESSED. The first version of this skipped
+                 * black writes to see if the text reappeared, and that
+                 * changed the boot: 7,235 GX commands instead of 2,476,033.
+                 * Altering the EFB alters what the copies put in guest
+                 * memory, so a "diagnostic" that changes pixels is not a
+                 * diagnostic at all. This one only observes. */
+                if (r->count_black && !(pixel & 0x00FFFFFFu) &&
+                    (r->efb->pixels[at] & 0x00FFFFFFu)) {
+                    unsigned bx = (unsigned)px / 32u;
+                    ++t->black_over_lit;
+                    if (bx < 20u) ++t->black_over_lit_x[bx];
+                }
+
+                /* Blend and mask, in the hardware's order: the combiner's
+                 * result is the source, the framebuffer is the destination,
+                 * and the update bits decide which channels survive. */
+                if (!(r->blend_enable && !r->blend_noop) &&
+                    r->color_update && r->alpha_update) {
+                    /* The common case by a wide margin: no blending in
+                     * effect and both channels writable. */
+                    r->efb->pixels[at] = pixel;
+                } else {
+                    uint32_t dstp = r->efb->pixels[at];
+                    uint32_t out = pixel;
+
+                    if (r->blend_enable && !r->blend_noop) {
+                        int sa = (int)((pixel >> 24) & 0xFFu);
+                        int da = (int)((dstp  >> 24) & 0xFFu);
+                        unsigned ch;
+                        out = pixel & 0xFF000000u;
+                        for (ch = 0; ch < 3u; ++ch) {
+                            unsigned sh = ch * 8u;
+                            int sc = (int)((pixel >> sh) & 0xFFu);
+                            int dc = (int)((dstp  >> sh) & 0xFFu);
+                            int sf = blend_factor(r->blend_src, sc, dc, sa, da, 1);
+                            int df = blend_factor(r->blend_dst, sc, dc, sa, da, 0);
+                            int v = r->blend_sub
+                                  ? (dc * df - sc * sf) / 255
+                                  : (sc * sf + dc * df) / 255;
+                            if (v < 0) v = 0;
+                            if (v > 255) v = 255;
+                            out |= (uint32_t)v << sh;
+                        }
+                        ++t->blended;
+                    }
+
+                    if (!r->color_update) out = (out & 0xFF000000u)
+                                              | (dstp & 0x00FFFFFFu);
+                    if (!r->alpha_update) out = (out & 0x00FFFFFFu)
+                                              | (dstp & 0xFF000000u);
+                    if (!r->color_update && !r->alpha_update) ++t->write_masked;
+
+                    r->efb->pixels[at] = out;
+                }
+            }
+
+            if (r->depth_update) r->depth[at] = z;
+            ++t->pixels;
+        }
+        }
+    }
+}
+
+/* ONE TRIANGLE, SPLIT ACROSS CORES.
+ *
+ * A sampling profile put essentially the whole program inside the pixel loop,
+ * and the size histogram says where those pixels are: 1,538 triangles cover
+ * 94.3% of them, while 1.6 million tiny ones in the scratch strip cover 3.8%.
+ * So the work is not spread thinly over millions of triangles - it is
+ * concentrated in a few hundred full-screen quads, which is the shape that
+ * splits across cores well.
+ *
+ * Bands of scanlines, not tiles: a band owns a contiguous, disjoint range of
+ * rows, so two bands can never touch the same framebuffer or depth word and
+ * the split needs no locking and no binning pass. Drawing order is preserved
+ * because each band draws the same triangles in the same order.
+ *
+ * ONLY LARGE TRIANGLES. Submitting a job costs far more than eight pixels,
+ * so anything below the threshold runs inline exactly as before - which is
+ * also what keeps the single-core path identical rather than merely similar.
+ *
+ * NO ARITHMETIC CHANGES HERE, deliberately. The boot is chaotically
+ * sensitive to rounding in the weights: replacing the per-pixel divide with
+ * a multiply by the reciprocal - a one-ULP change - took a boot from
+ * 3,708,746 triangles to 109. Splitting the same computation across cores
+ * changes which core runs it and nothing else, so the result stays
+ * bit-identical and can be checked as such.
+ */
+typedef struct RasterBand {
+    const RasterSpan* sp;
+    int               y0, y1;
+    MgsRasterTally    t;
+} RasterBand;
+
+static void raster_band_job(void* user)
+{
+    RasterBand* b = (RasterBand*)user;
+    raster_span(b->sp, b->y0, b->y1, &b->t);
+}
+
+/* The totals the reports print keep their existing names and meaning; only
+ * the path they take to get there changed. */
+static void tally_fold(MgsGxRaster* r, const MgsRasterTally* t)
+{
+    unsigned i;
+    r->covered      += t->covered;
+    r->depth_failed += t->depth_failed;
+    r->alpha_killed += t->alpha_killed;
+    r->pixels_lit   += t->pixels_lit;
+    r->pixels       += t->pixels;
+    r->blended      += t->blended;
+    r->write_masked += t->write_masked;
+    r->black_over_lit += t->black_over_lit;
+    for (i = 0; i < 20u; ++i) r->black_over_lit_x[i] += t->black_over_lit_x[i];
+}
+
+static void tally_add(MgsRasterTally* dst, const MgsRasterTally* src)
+{
+    unsigned i;
+    dst->covered      += src->covered;
+    dst->depth_failed += src->depth_failed;
+    dst->alpha_killed += src->alpha_killed;
+    dst->pixels_lit   += src->pixels_lit;
+    dst->pixels       += src->pixels;
+    dst->blended      += src->blended;
+    dst->write_masked += src->write_masked;
+    dst->black_over_lit += src->black_over_lit;
+    for (i = 0; i < 20u; ++i) dst->black_over_lit_x[i] += src->black_over_lit_x[i];
+}
+
+/* Below this many rows the job overhead dominates and the split loses. */
+#define RASTER_BAND_MIN_ROWS 8
+
+static void raster_dispatch(MgsGxRaster* r, const RasterSpan* sp, int y0, int y1)
+{
+    RasterBand band[64];
+    MgsRasterTally total;
+    unsigned n, i;
+    int rows = y1 - y0;
+
+    memset(&total, 0, sizeof total);
+
+    n = r->max_bands;
+    if (n > 64u) n = 64u;
+    if (n > (unsigned)(rows / RASTER_BAND_MIN_ROWS)) n = (unsigned)(rows / RASTER_BAND_MIN_ROWS);
+    if (!r->jobs || n < 2u) {
+        raster_span(sp, y0, y1, &total);
+        tally_fold(r, &total);
+        return;
+    }
+
+    for (i = 0; i < n; ++i) {
+        band[i].sp = sp;
+        band[i].y0 = y0 + (int)((unsigned)rows * i / n);
+        band[i].y1 = y0 + (int)((unsigned)rows * (i + 1u) / n);
+        memset(&band[i].t, 0, sizeof band[i].t);
+    }
+
+    /* Submit all but the first, then run the first on this thread: the
+     * caller would otherwise sit idle waiting, and a core is a core. A
+     * refused submission runs inline, which is what the pool's contract
+     * asks for and keeps this correct when the pool is full. */
+    for (i = 1; i < n; ++i) {
+        if (!mgs_jobs_submit((MgsJobPool*)r->jobs, raster_band_job, &band[i]))
+            raster_band_job(&band[i]);
+    }
+    raster_band_job(&band[0]);
+    mgs_jobs_wait((MgsJobPool*)r->jobs);
+
+    for (i = 0; i < n; ++i) tally_add(&total, &band[i].t);
+    tally_fold(r, &total);
+}
+
+void mgs_raster_set_jobs(MgsGxRaster* r, void* pool)
+{
+    unsigned avail;
+    r->jobs = pool;
+    if (!pool) { r->max_bands = 1u; return; }
+    /* One band per worker plus this thread, which runs a band itself. */
+    avail = mgs_jobs_worker_count((const MgsJobPool*)pool) + 1u;
+    if (r->max_bands == 0u || r->max_bands > avail) r->max_bands = avail;
+}
+
 void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                          const MgsGxVertex* b, const MgsGxVertex* c)
 {
@@ -372,6 +723,53 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     const MgsGxVertex* vin[3];
     const MgsTexture* tex = NULL;
     unsigned tex_coord = 0, wrap_s = 0, wrap_t = 0;
+    int alpha_always;
+    MgsTevCompiled tev;
+
+    /* MGS_NO_RASTER: count the triangle and return without touching a pixel.
+     * Timing the same workload with and without the inner loops splits the
+     * wall clock between drawing and everything else - guest execution, FIFO
+     * parsing, copies - which need completely different work. */
+    if (r->skip_all) { ++r->submitted; return; }
+
+    /* CATCH THE CROSSING AS IT HAPPENS, not at the end of the frame.
+     *
+     * A frame draws thousands of triangles, so a ring of the last few dozen
+     * only ever shows the tail - by which time the noise has been circulating
+     * for most of the frame. Sampling the buffer every few hundred triangles
+     * costs little and names the draw that turns it, which is the one fact
+     * this has been missing. */
+    if (r->find_turn && !r->turn_found && (r->submitted % 256u) == 0u) {
+        unsigned yy, cnt = 0u, rough = 0u;
+        for (yy = 64u; yy < 448u; yy += 32u) {
+            unsigned xx;
+            for (xx = 65u; xx < 512u; xx += 16u) {
+                uint32_t a = r->efb->pixels[yy * MGS_EFB_WIDTH + xx - 1u];
+                uint32_t b = r->efb->pixels[yy * MGS_EFB_WIDTH + xx];
+                int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) / 3;
+                int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
+                rough += (unsigned)(va > vb ? va - vb : vb - va);
+                ++cnt;
+            }
+        }
+        if (cnt && rough / cnt > 20u) {
+            r->turn_found = 1;
+            fprintf(stderr,
+                    "[turn] buffer crossed into noise at triangle %llu, "
+                    "roughness %u\n"
+                    "[turn]   this draw: %s, vcd=%08X/%08X, tev stages %u, "
+                    "blend %s, depth %s\n",
+                    (unsigned long long)r->submitted, rough / cnt,
+                    tex ? "textured" : "UNTEXTURED",
+                    gx->vcd_lo, gx->vcd_hi,
+                    ((mgs_bp_get(&gx->bp, BP_GEN_MODE) >> 10) & 0xFu) + 1u,
+                    r->blend_enable ? "on" : "off",
+                    r->depth_test ? "on" : "off");
+            if (tex)
+                fprintf(stderr, "[turn]   texture %ux%u fmt 0x%X at 0x%08X\n",
+                        tex->width, tex->height, tex->format, tex->addr);
+        }
+    }
     int bilinear = 0, tex_enabled = 0;
     float sx[3], sy[3], sz[3], iw[3];
     float minx, maxx, miny, maxy, area;
@@ -715,7 +1113,11 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             /* Record every large sampled texture, noisy or not. The
              * question is which draw turns a clean buffer dirty, and that
              * cannot be answered from the noisy ones alone. */
-            if (tex && tex->width >= 128u) {
+            /* EVERY sampled texture, whatever its size. The buffer turns
+             * noisy while the last LARGE texture sampled is clean, so what
+             * does it is smaller than the old threshold - or is not a
+             * texture at all, which an empty log would say just as clearly. */
+            if (tex) {
                 unsigned yy, c2 = 0u, r2 = 0u;
                 for (yy = 0; yy < tex->height; yy += 16u) {
                     unsigned xx;
@@ -776,159 +1178,37 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         }
     }
 
-    for (py = y0; py < y1; ++py) {
-        /* ONCE PER SCANLINE, not once per triangle.
-         *
-         * The per-triangle check above cannot release a run that is inside a
-         * single large triangle, and that is exactly where a wedged host was
-         * found sitting: the phase marker said `raster`, the abandon hook was
-         * installed, and the process still would not stop. A row is at most a
-         * few hundred pixels, so this bounds the response time to something
-         * far below a human's patience while costing one predictable branch
-         * per row. */
-        if (r->abandon && r->abandon()) return;
+    /* WHERE ARE THE PIXELS? Splitting one triangle's scanlines across threads
+     * pays only if the large triangles carry the work. If the cost is spread
+     * over millions of small ones, the batch has to be divided instead, which
+     * is a far larger change. Bucket each triangle's bounding-box area by
+     * power of two so the answer is measured rather than assumed. */
+    {
+        unsigned area = (unsigned)((x1 - x0) * (y1 - y0));
+        unsigned b = 0;
+        while ((area >> b) > 1u && b < 19u) ++b;
+        r->area_tris[b] += 1u;
+        r->area_px[b] += area;
+    }
 
-        for (px = x0; px < x1; ++px) {
-            float fx = (float)px + 0.5f, fy = (float)py + 0.5f;
-            float w0 = edge(sx[1], sy[1], sx[2], sy[2], fx, fy) / area;
-            float w1 = edge(sx[2], sy[2], sx[0], sy[0], fx, fy) / area;
-            float w2 = 1.0f - w0 - w1;
-            float z, pw;
-            unsigned at;
+    alpha_always = mgs_tev_alpha_test_always(&gx->bp);
+    mgs_tev_compile(&gx->bp, &tev);
 
-            if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) continue;
-
-            z = w0 * sz[0] + w1 * sz[1] + w2 * sz[2];
-            at = (unsigned)py * r->width + (unsigned)px;
-            /* COUNTED. 3.3 million extra triangles reached this loop and
-             * produced not one pixel, and the totals were byte-identical to a
-             * run with a seventh of the geometry - so something rejects every
-             * candidate after the coverage test. Splitting "outside the
-             * triangle" from "failed the depth test" is the difference
-             * between a geometry fault and a stale depth buffer, and the
-             * depth buffer is only reset on a clearing copy: 56 of them in a
-             * boot, all early. */
-            ++r->covered;
-            if (!depth_passes(r, z, r->depth[at])) { ++r->depth_failed; continue; }
-
-            /* Perspective-correct interpolation of the vertex colour: the
-             * weights are in screen space, and dividing by the interpolated
-             * 1/w corrects them. Skipping this is the classic warped-texture
-             * artefact, and it bends Gouraud shading the same way. */
-            pw = w0 * iw[0] + w1 * iw[1] + w2 * iw[2];
-            {
-                MgsTevInput in;
-                uint32_t pixel;
-                float k0, k1, k2;
-
-                if (pw > 0.0f) {
-                    k0 = w0 * iw[0] / pw; k1 = w1 * iw[1] / pw;
-                    k2 = 1.0f - k0 - k1;
-                } else {
-                    k0 = 1.0f; k1 = 0.0f; k2 = 0.0f;
-                }
-
-                in.raster = lerp_color(vin[0]->color[0], vin[1]->color[0],
-                                       vin[2]->color[0], k0, k1, k2);
-                in.has_texture = 0;
-                in.texture = 0xFFFFFFFFu;
-
-                if (tex) {
-                    float u = k0 * vin[0]->u[tex_coord] +
-                              k1 * vin[1]->u[tex_coord] +
-                              k2 * vin[2]->u[tex_coord];
-                    float v = k0 * vin[0]->v[tex_coord] +
-                              k1 * vin[1]->v[tex_coord] +
-                              k2 * vin[2]->v[tex_coord];
-                    in.texture = mgs_tex_sample(tex, u, v, wrap_s, wrap_t, bilinear);
-                    in.has_texture = 1;
-                }
-
-                pixel = mgs_tev_run(&gx->bp, &in);
-
-                /* The alpha test runs AFTER the combiner and before anything
-                 * is written, depth included. Cut-out foliage and text rely
-                 * on it entirely; without it every transparent texel becomes
-                 * an opaque square that also writes depth. */
-                if (!mgs_tev_alpha_test(&gx->bp, pixel)) {
-                    ++r->alpha_killed;
-                    continue;
-                }
-
-                /* COUNTED SEPARATELY FROM `pixels`, because "12 million
-                 * pixels written" and "12 million BLACK pixels written" look
-                 * identical in a tally and mean opposite things. One says the
-                 * rasteriser works; the other says every stage upstream of
-                 * the colour is working and the colour is not. */
-                if (pixel & 0x00FFFFFFu) ++r->pixels_lit;
-
-                /* DOES ANYTHING BLACK PAINT OVER SOMETHING LIT, AND WHERE?
-                 *
-                 * 165,888 triangles a run are configured a=b=c=d=ZERO -
-                 * "output black" - and they are the large ones, about 66
-                 * pixels each. One of those covering the right of the screen
-                 * would truncate every line of text at the same column
-                 * regardless of content, which is the signature this bug has
-                 * always had.
-                 *
-                 * COUNTED, NOT SUPPRESSED. The first version of this skipped
-                 * black writes to see if the text reappeared, and that
-                 * changed the boot: 7,235 GX commands instead of 2,476,033.
-                 * Altering the EFB alters what the copies put in guest
-                 * memory, so a "diagnostic" that changes pixels is not a
-                 * diagnostic at all. This one only observes. */
-                if (!(pixel & 0x00FFFFFFu) &&
-                    (r->efb->pixels[at] & 0x00FFFFFFu)) {
-                    unsigned bx = (unsigned)px / 32u;
-                    ++r->black_over_lit;
-                    if (bx < 20u) ++r->black_over_lit_x[bx];
-                }
-
-                /* Blend and mask, in the hardware's order: the combiner's
-                 * result is the source, the framebuffer is the destination,
-                 * and the update bits decide which channels survive. */
-                if (!(r->blend_enable && !r->blend_noop) &&
-                    r->color_update && r->alpha_update) {
-                    /* The common case by a wide margin: no blending in
-                     * effect and both channels writable. */
-                    r->efb->pixels[at] = pixel;
-                } else {
-                    uint32_t dstp = r->efb->pixels[at];
-                    uint32_t out = pixel;
-
-                    if (r->blend_enable && !r->blend_noop) {
-                        int sa = (int)((pixel >> 24) & 0xFFu);
-                        int da = (int)((dstp  >> 24) & 0xFFu);
-                        unsigned ch;
-                        out = pixel & 0xFF000000u;
-                        for (ch = 0; ch < 3u; ++ch) {
-                            unsigned sh = ch * 8u;
-                            int sc = (int)((pixel >> sh) & 0xFFu);
-                            int dc = (int)((dstp  >> sh) & 0xFFu);
-                            int sf = blend_factor(r->blend_src, sc, dc, sa, da, 1);
-                            int df = blend_factor(r->blend_dst, sc, dc, sa, da, 0);
-                            int v = r->blend_sub
-                                  ? (dc * df - sc * sf) / 255
-                                  : (sc * sf + dc * df) / 255;
-                            if (v < 0) v = 0;
-                            if (v > 255) v = 255;
-                            out |= (uint32_t)v << sh;
-                        }
-                        ++r->blended;
-                    }
-
-                    if (!r->color_update) out = (out & 0xFF000000u)
-                                              | (dstp & 0x00FFFFFFu);
-                    if (!r->alpha_update) out = (out & 0x00FFFFFFu)
-                                              | (dstp & 0xFF000000u);
-                    if (!r->color_update && !r->alpha_update) ++r->write_masked;
-
-                    r->efb->pixels[at] = out;
-                }
-            }
-
-            if (r->depth_update) r->depth[at] = z;
-            ++r->pixels;
-        }
+    /* The weights' setup, done once instead of once per pixel. */
+    {
+        RasterSpan sp;
+        sp.gx = gx; sp.r = r;
+        sp.vin[0] = vin[0]; sp.vin[1] = vin[1]; sp.vin[2] = vin[2];
+        sp.tex = tex; sp.tex_coord = tex_coord;
+        sp.wrap_s = wrap_s; sp.wrap_t = wrap_t; sp.bilinear = bilinear;
+        sp.alpha_always = alpha_always; sp.tev = tev;
+        memcpy(sp.sx, sx, sizeof sx); memcpy(sp.sy, sy, sizeof sy);
+        memcpy(sp.sz, sz, sizeof sz); memcpy(sp.iw, iw, sizeof iw);
+        sp.area = area;
+        sp.inv_area = 1.0f / area;
+        sp.dw0dx = -(sy[2] - sy[1]) * sp.inv_area;
+        sp.dw1dx = -(sy[0] - sy[2]) * sp.inv_area;
+        sp.x0 = x0; sp.x1 = x1;
+        raster_dispatch(r, &sp, y0, y1);
     }
 }

@@ -23,6 +23,7 @@ add_library(mgs_runtime STATIC
   os/patch_table.c
   platform/jobs.c
   platform/mmio.c
+  platform/profile.c
   dvd/fst.c
   dvd/disc.c
   dvd/disc_locate.c

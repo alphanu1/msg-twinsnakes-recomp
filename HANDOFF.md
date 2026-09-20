@@ -417,6 +417,26 @@ renderer.
   has `__CARDIsWritable` inlined into it, so its head signature names the
   wrong function. Read to the `blr`, and treat a callee that disagrees with
   the match as evidence rather than noise.
+- **Judging a rendering change by one headless run (F162).** Runs are not
+  deterministic — the same binary completes 271 or 287 DVD reads, because
+  reads finish on host worker threads — and it intermittently wedges in
+  `gp_poll_once` at exactly 13,060 GX commands. A wedged run looks exactly
+  like a catastrophic regression: 109 triangles instead of 3.7 million.
+  **This has already produced one confidently wrong conclusion.** Two wedged
+  runs were read as proof that the rasteriser is chaotically sensitive to
+  floating-point rounding — that replacing `edge/area` with a multiply by
+  the reciprocal, a one-ULP change, broke the boot. It does not, and it did
+  not; a valid optimisation was rejected on that basis. Before believing any
+  rendering result, check the triangle count against the ~3.7M baseline and
+  re-run at least three times.
+- **Optimising a hot loop by reading it.** Three rounds chosen that way
+  bought about 6% between them and missed that `combine` was 36% of the whole
+  program (F160). Building the sampling profiler took less time than the
+  round that failed. `MGS_PROFILE=1`.
+- **Comparing wall-clock times between builds without normalising.** The
+  workload is not fixed: the guest runs a step budget, and how much it draws
+  within it varies run to run. Compare Mpx/s over the pixels actually drawn,
+  and confirm the MEM1 hash is unchanged.
 
 ---
 
@@ -5984,6 +6004,100 @@ A live `[video]` line now prints in an ordinary run, every 120 frames and on
 any crossing between clean and noisy: frame, size, roughness, lit percentage,
 scan-out address, and the last texture sampled with its address and roughness.
 That is what identified this in seconds instead of another instrumented build.
+
+### F160 — the renderer's cost, measured instead of read
+
+Three rounds of inner-loop optimisation chosen by reading the code bought
+about 6% between them. Building a profiler took less time than the third
+round and produced a different answer immediately.
+
+`perf` is not installed on this host, so `runtime/platform/profile.c` samples
+the program counter from a `SIGPROF` handler on the **process CPU clock** —
+time spent descheduled while another process runs is not sampled, which is
+the property the wall-clock ablations lacked. The handler stores a raw PC and
+nothing else; addresses are resolved offline against the binary's symbol
+table. `MGS_PROFILE=1` enables it.
+
+The first profile, over a full boot:
+
+| share | function |
+|---|---|
+| 40.8% | `mgs_raster_triangle` |
+| 36.1% | `combine` (tev.c) |
+| 21.5% | `mgs_tex_sample` |
+| 1.6% | `mgs_tev_run_compiled` |
+
+`combine` being 36% of the **whole program** was not something reading the
+code had suggested. It is nine lines of integer arithmetic, but it was an
+out-of-line call taking eight arguments, made four times per pixel — three
+colour components and alpha. The compiler declined to inline it because it
+is called from four separate sites. Marking it `inline` and dropping `long`
+for `int` (the widest intermediate is about 1.07e9, inside a 32-bit int):
+**41.8s → 39.3s**, framebuffer bit-identical.
+
+Two divides per pixel also survived in `mgs_raster_triangle` — `edge(...)
+/ area`, evaluated from scratch for every pixel — which is what put that
+function at 40%.
+
+### F161 — the rasteriser was handed a worker pool that was then cleared
+
+Band-parallel rasterisation was built, measured, and reported **no speedup at
+all**: 13.5 Mpx/s serial against 13.6, 12.9 and 11.1 Mpx/s threaded. The
+obvious reading was that the split does not pay.
+
+It was never running. `main` creates the job pool during start-up and handed
+it to the rasteriser there, but `mgs_raster_init` is not called until the
+guest first configures the video interface — much later — and that init sets
+`jobs = NULL`. The pointer was wiped before a single triangle was drawn.
+`display.c` now remembers the pool and re-applies it after init.
+
+With the pool actually attached, the same code, same binary, same boot:
+
+| bands | throughput |
+|---|---|
+| serial | 13.5 Mpx/s |
+| 32-row minimum | 34.5 Mpx/s |
+| 16-row minimum | 44.5 Mpx/s |
+| 8-row minimum | 49.7 Mpx/s |
+| 4-row minimum | **51.4 Mpx/s** |
+
+Wall clock for a full boot: **40.3s → 10.6s**. Every variant produces a
+bit-identical framebuffer (MEM1 `0x8C8E2DB54E773E25`) and identical raster
+counters, which is the check that makes the result trustworthy: bands own
+disjoint scanlines, so nothing is shared and no arithmetic changes.
+
+The 32-row minimum — the obvious-looking choice — was the worst of the four.
+A 448-row quad splits into only 14 bands, leaving 18 of the machine's 32
+cores idle. The size histogram is why this works at all: 1,538 triangles
+cover 94.3% of all pixels while 1.6 million tiny ones cover 3.8%, so the work
+is concentrated in a few hundred full-screen quads, which is exactly the
+shape that bands well. Small triangles stay inline.
+
+**This is a stopgap, not the plan.** The design document (§ GX, and the phase
+3 row) specifies a TEV-to-GLSL shader generator on a Vulkan backend. The
+software rasteriser is what lets phases 1–2 run at all, and threading it buys
+time until that exists. It does not substitute for it.
+
+### F162 — the intermittent boot freeze is the pad poll, and it is not new
+
+A freeze after the `Dolphin SDK - CARD` banner, reported from an ordinary
+run. The same failure appears headless: the guest wedges and the run reports
+**exactly 13,060 GX commands**.
+
+That number is already written down in `runtime/platform/mmio.c`, in the
+comment above `si_poll_frame`, as the signature of a serial-interface failure
+fixed earlier — PAD waiting forever for poll data that never arrives. The
+wedge PC confirms it: `0x8004C9D4` is `gp_poll_once + 0x74`, called from
+`gp_poll_thread`. So this is a recurrence of a known failure mode, now
+intermittent rather than constant.
+
+It is intermittent because **runs are not deterministic**. The same binary
+completes 271 or 287 DVD reads across runs, because reads finish on host
+worker threads. Two consecutive runs wedged; the three after them booted
+normally.
+
+**Not yet fixed.** `si_poll_frame` is driven from the frame tick every 2000
+steps, which is deterministic, so the race is elsewhere in the SI path.
 
 ---
 

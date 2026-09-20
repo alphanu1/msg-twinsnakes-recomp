@@ -1,3 +1,4 @@
+#include <string.h>
 #include "tev.h"
 
 /* How many stages the general-mode register says are active. */
@@ -83,27 +84,110 @@ static int alpha_input(unsigned sel, const int reg[4][4], const MgsTevInput* in,
  * hardware's fixed set, and `compare` mode replaces the whole expression with
  * a comparison - which is how games do stencil-like effects without a
  * stencil buffer. */
-static int combine(int a, int b, int c, int d, unsigned op, unsigned bias,
-                   unsigned scale, unsigned clamp_out)
+/* INLINE, AND 32-BIT.
+ *
+ * This was 36% of the whole program in a sampling profile - not because the
+ * arithmetic is heavy but because it was an out-of-line call with eight
+ * arguments, made four times for every pixel (three colour components and
+ * alpha). It is small enough to inline; the compiler declined to because it
+ * is called from four separate sites.
+ *
+ * "long" bought nothing: the widest intermediate is an input at full scale
+ * times 256 plus a bias and a x4 scale, which is about 1.07e9 and inside a
+ * 32-bit int. Signed division by a power of two is not a shift, so the two
+ * divides stay written as divides for exactness rather than being "optimised"
+ * into shifts that would round the wrong way for negative values.
+ */
+static inline int combine(int a, int b, int c, int d, unsigned op, unsigned bias,
+                          unsigned scale, unsigned clamp_out)
 {
     int bias_v = (bias == 1u) ? 128 : (bias == 2u) ? -128 : 0;
-    long v;
+    int cc = c + (c >> 7);      /* 0-255 read as 0-256 so 255 reaches a full one */
+    int v;
 
-    /* c is a 0-255 interpolation factor, but the hardware treats it as 0-256
-     * so that 255 reaches a full one. Using 255 leaves a one-level gap that
-     * shows as a faint seam where two fully-interpolated surfaces meet. */
-    v = (long)d * 256 + (long)a * (256 - (c + (c >> 7))) + (long)b * (c + (c >> 7));
+    v = d * 256 + a * (256 - cc) + b * cc;
     v = v / 256;
 
-    v = (op == 1u) ? (long)d - (v - (long)d) : v;
+    v = (op == 1u) ? d - (v - d) : v;
     v += bias_v;
 
     if (scale == 1u) v *= 2;
     else if (scale == 2u) v *= 4;
     else if (scale == 3u) v /= 2;
 
-    if (clamp_out) return clamp255((int)v);
-    return (int)v;
+    if (clamp_out) return clamp255(v);
+    return v;
+}
+
+
+void mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out)
+{
+    unsigned i, s;
+    out->stages = stage_count(bp);
+    if (out->stages > 16u) out->stages = 16u;
+    out->configured = bp->written[BP_GEN_MODE] != 0;
+    for (i = 0; i < 4u; ++i) tev_register(bp, i, out->reg[i]);
+    for (s = 0; s < out->stages; ++s) {
+        out->ce[s] = mgs_bp_get(bp, (uint8_t)(BP_TEV_COLOR_ENV + s * 2u));
+        out->ae[s] = mgs_bp_get(bp, (uint8_t)(BP_TEV_ALPHA_ENV + s * 2u));
+    }
+}
+
+uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
+{
+    int reg[4][4];
+    unsigned s, i;
+
+    memcpy(reg, t->reg, sizeof reg);
+
+    if (!t->configured) {
+        if (!in->has_texture) return in->raster;
+        {
+            uint32_t out = 0;
+            for (i = 0; i < 4u; ++i) {
+                int tx = (int)((in->texture >> (i * 8)) & 0xFFu);
+                int r  = (int)((in->raster  >> (i * 8)) & 0xFFu);
+                out |= (uint32_t)clamp255(tx * r / 255) << (i * 8);
+            }
+            return out;
+        }
+    }
+
+    for (s = 0; s < t->stages; ++s) {
+        uint32_t ce = t->ce[s], ae = t->ae[s];
+        int a[3], b[3], c[3], d[3];
+        int out[4];
+        unsigned dst_c = (ce >> 22) & 3u, dst_a = (ae >> 22) & 3u;
+        int konst_c = 255, konst_a = 255;
+
+        color_input((ce >> 12) & 0xFu, reg, in, konst_c, a);
+        color_input((ce >> 8)  & 0xFu, reg, in, konst_c, b);
+        color_input((ce >> 4)  & 0xFu, reg, in, konst_c, c);
+        color_input((ce >> 0)  & 0xFu, reg, in, konst_c, d);
+
+        for (i = 0; i < 3u; ++i)
+            out[i] = combine(a[i], b[i], c[i], d[i],
+                             (ce >> 18) & 1u, (ce >> 16) & 3u,
+                             (ce >> 20) & 3u, (ce >> 19) & 1u);
+
+        {
+            int aa = alpha_input((ae >> 13) & 7u, reg, in, konst_a);
+            int ab = alpha_input((ae >> 10) & 7u, reg, in, konst_a);
+            int ac = alpha_input((ae >> 7)  & 7u, reg, in, konst_a);
+            int ad = alpha_input((ae >> 4)  & 7u, reg, in, konst_a);
+            out[3] = combine(aa, ab, ac, ad,
+                             (ae >> 18) & 1u, (ae >> 16) & 3u,
+                             (ae >> 20) & 3u, (ae >> 19) & 1u);
+        }
+
+        for (i = 0; i < 3u; ++i) reg[dst_c][i] = out[i];
+        reg[dst_a][3] = out[3];
+    }
+
+    return ((uint32_t)clamp255(reg[0][3]) << 24) |
+           ((uint32_t)clamp255(reg[0][0]) << 16) |
+           ((uint32_t)clamp255(reg[0][1]) << 8) |
+           (uint32_t)clamp255(reg[0][2]);
 }
 
 uint32_t mgs_tev_run(const MgsGxBp* bp, const MgsTevInput* in)
@@ -170,6 +254,23 @@ uint32_t mgs_tev_run(const MgsGxBp* bp, const MgsTevInput* in)
            ((uint32_t)clamp255(reg[0][0]) << 16) |
            ((uint32_t)clamp255(reg[0][1]) << 8) |
            (uint32_t)clamp255(reg[0][2]);
+}
+
+/* Can this alpha configuration reject anything at all?
+ *
+ * Both comparisons ALWAYS, or the register never written, means every pixel
+ * passes - and then testing per pixel is a function call for nothing. This
+ * game sets exactly that: ALPHA_COMPARE = 0x3F0000, and 0 pixels are killed
+ * in a whole run.
+ */
+int mgs_tev_alpha_test_always(const MgsGxBp* bp);
+int mgs_tev_alpha_test_always(const MgsGxBp* bp)
+{
+    uint32_t r;
+    if (!bp->written[BP_ALPHA_COMPARE]) return 1;
+    r = mgs_bp_get(bp, BP_ALPHA_COMPARE);
+    return ((r >> 16) & 7u) == 7u && ((r >> 19) & 7u) == 7u
+           && ((r >> 22) & 3u) == 0u;          /* ALWAYS and ALWAYS, AND */
 }
 
 int mgs_tev_alpha_test(const MgsGxBp* bp, uint32_t argb)

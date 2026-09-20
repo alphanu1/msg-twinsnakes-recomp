@@ -11,6 +11,7 @@
 #include "dvd/dvd.h"
 #include "dvd/dol.h"
 #include "os/os_runtime.h"
+#include "platform/profile.h"
 #include "os/patch_table.h"
 #include "platform/jobs.h"
 #include "module.h"
@@ -986,7 +987,15 @@ int main(int argc, char** argv)
     else
         printf("disc 2: not mounted (the swap will be refused until it is)\n");
 
+    mgs_profile_start();
     jobs = mgs_jobs_create(0u);
+    {
+        /* The rasteriser is the one piece of runtime work heavy enough to be
+         * worth splitting across cores, and the only one on the frame's
+         * critical path. */
+        void mgs_display_set_jobs(void* pool);
+        mgs_display_set_jobs(jobs);
+    }
     printf("worker pool: %u threads\n", mgs_jobs_worker_count(jobs));
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
     overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));
@@ -1346,6 +1355,19 @@ int main(int argc, char** argv)
                                        (unsigned long long)g->dl_calls,
                                        (unsigned long long)g->dl_ragged,
                                        (unsigned long long)g->dl_truncated);
+                            }
+                            {
+                                unsigned k; uint64_t tot = 0;
+                                for (k = 0; k < 20u; ++k) tot += rs->area_px[k];
+                                printf("  triangle sizes (bbox area, and the "
+                                       "share of all pixels they cover):\n");
+                                for (k = 0; k < 20u; ++k)
+                                    if (rs->area_tris[k])
+                                        printf("    <=%7u px  %10llu tris  "
+                                               "%5.1f%% of pixels\n", 1u << k,
+                                               (unsigned long long)rs->area_tris[k],
+                                               tot ? 100.0 * (double)rs->area_px[k]
+                                                     / (double)tot : 0.0);
                             }
                             printf("  blend: %llu pixels blended, "
                                    "%llu writes masked off entirely\n",
@@ -1825,6 +1847,7 @@ int main(int argc, char** argv)
                         }
                         mgs_dump_threads(cpu, NULL);
                         patch_report();
+                        mgs_profile_report();
                         mgs_mmio_report_hot(mgs_host_mmio(), 6u);
                         printf("host instructions handled: %lu  (unhandled: %lu)\n",
                                mgs_host_spr_handled(), mgs_host_spr_unknown());

@@ -30,7 +30,23 @@
 #include "texture.h"
 #include "tev.h"
 
+/* Per-band counters, folded into the totals when the bands rejoin.
+ *
+ * A band owns a disjoint set of scanlines, so the framebuffer and the depth
+ * buffer need no locking. The tallies are the only shared state in the inner
+ * loop, and the cheapest way to keep them shared-free is not to share them.
+ */
+typedef struct MgsRasterTally {
+    uint64_t covered, depth_failed, alpha_killed, pixels_lit, pixels;
+    uint64_t blended, write_masked, black_over_lit;
+    uint64_t black_over_lit_x[20];
+} MgsRasterTally;
+
 typedef struct MgsGxRaster {
+    void*    jobs;           /* MgsJobPool: bands of a large triangle */
+    unsigned max_bands;      /* 1 disables threading (MGS_RASTER_THREADS) */
+    MgsRasterTally tally;    /* the inner loop's counters, folded per triangle */
+
     MgsEfb* efb;
     MgsTexCache tex;
     float   depth[MGS_EFB_WIDTH * MGS_EFB_HEIGHT];
@@ -49,6 +65,9 @@ typedef struct MgsGxRaster {
     int      color_update, alpha_update;
     unsigned blend_src, blend_dst;
     uint64_t blended, write_masked;
+    uint64_t area_tris[20], area_px[20];  /* triangles and pixels by size */
+    int      find_turn, turn_found, count_black;
+    int      skip_all;       /* MGS_NO_RASTER: count and return */
     int      trace_noisy;    /* MGS_TRACE_NOISY: score bound textures */
     unsigned noisy_logged;
     /* The last draws, each with the texture it sampled: addr, format, size
@@ -109,5 +128,9 @@ void mgs_raster_reset_depth(MgsGxRaster* r);
 /* The triangle callback for MgsGx. `gx->user` must be the MgsGxRaster. */
 void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                          const MgsGxVertex* b, const MgsGxVertex* c);
+
+/* Hand the rasteriser the host worker pool. Until this is called it runs
+ * every triangle on the calling thread, which is what the unit tests want. */
+void mgs_raster_set_jobs(MgsGxRaster* r, void* pool);
 
 #endif

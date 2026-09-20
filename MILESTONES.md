@@ -449,6 +449,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       depth buffer with the full comparison set, back-face culling by area
       sign, perspective-correct Gouraud interpolation. Tested end to end from
       raw command bytes to a known pixel (`tests/test_gx.c`).
+- [x] **The rasteriser runs on every core** (F160, F161). A sampling profiler
+      (`MGS_PROFILE=1`, built because `perf` is not on this host) put 36% of
+      the whole program in `combine` — nine lines of integer arithmetic that
+      were an out-of-line call made four times per pixel. Inlining it took a
+      boot from 42.3s to 39.3s; splitting large triangles into bands of
+      scanlines across the host worker pool took it to **10.6s**, 13.5 to
+      51.4 Mpx/s. Bands own disjoint rows, so nothing is shared, no
+      arithmetic changes, and the framebuffer stays bit-identical
+      (MEM1 `0x8C8E2DB54E773E25`) — which is what makes the number
+      believable. `MGS_RASTER_THREADS=1` is the serial control. This is a
+      stopgap for phases 1–2, not a substitute for the design document's
+      Vulkan backend.
 - [x] **The route to the screen** — an EFB that GX clears, `GXCopyDisp`
       executed for real from the pixel engine's copy registers, BT.601
       conversion to YUV 4:2:2 at the address the game programmed, and
@@ -642,6 +654,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       work rather than stall. Keyboard maps to the button word in
       `sdl_video.c`; `MGS_PAD_SCRIPT` drives a run through a menu unattended.
       **The intro video plays.**
+- [ ] **The intermittent freeze in the pad poll** (F162). A boot wedges in
+      `gp_poll_once + 0x74`, reached from `gp_poll_thread`, at exactly 13,060
+      GX commands — the number `mgs_mmio.c` already records as the signature
+      of a serial-interface stall fixed once before. Intermittent because
+      runs are not deterministic: DVD reads finish on host worker threads, so
+      the same binary completes 271 or 287 of them. `si_poll_frame` runs off
+      the step-counted frame tick, so the race is elsewhere in the SI path.
 - [ ] **A memory card.** Low difficulty in the design document's SDK table.
       The warning screen can now be dismissed without one.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in

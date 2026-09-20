@@ -48,6 +48,24 @@ const MgsGx* mgs_display_gx(void) { return &s_gx; }
 const MgsGxRaster* mgs_display_raster(void);
 const MgsGxRaster* mgs_display_raster(void) { return &s_raster; }
 
+/* The pool is owned by main, the rasteriser lives here. */
+/* REMEMBERED, NOT APPLIED IMMEDIATELY.
+ *
+ * main creates the pool during start-up but the display - and with it
+ * mgs_raster_init - is not brought up until the guest first configures the
+ * video interface, and that init clears the pointer. Handing the pool
+ * straight to the rasteriser therefore set a field that was zeroed again
+ * before the first triangle, and the split across cores silently never
+ * happened: measurably, 13.5 Mpx/s either way. */
+static void* s_jobs;
+
+void mgs_display_set_jobs(void* pool);
+void mgs_display_set_jobs(void* pool)
+{
+    s_jobs = pool;
+    mgs_raster_set_jobs(&s_raster, pool);
+}
+
 /* The command stream's destination. Bound to the MMIO layer so every byte the
  * game writes to the write-gather pipe is parsed rather than counted. */
 static GuestMemory* s_mem;
@@ -127,6 +145,7 @@ void mgs_display_init(GuestMemory* mem)
     mgs_efb_init(&s_efb);
     mgs_gx_init(&s_gx, mem);
     mgs_raster_init(&s_raster, &s_efb);
+    mgs_raster_set_jobs(&s_raster, s_jobs);
     /* So a run that is mid-draw can still be stopped and still report what it
      * drew. mgs_raster_triangle explains why the run loop's own check is not
      * enough. */
@@ -321,7 +340,9 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
                         (unsigned long long)s_efb.copies);
                 fprintf(stderr, "[turn] the last large textures sampled, "
                         "oldest first:\n");
-                for (k = 48u; k > 0u; --k) {
+                fprintf(stderr, "[turn]   (untextured draws are not listed; "
+                        "an empty list means nothing sampled was noisy)\n");
+                for (k = 64u; k > 0u; --k) {
                     unsigned i2 = (rr->drawlog_at - k) & 63u;
                     if (!rr->drawlog_w[i2]) continue;
                     fprintf(stderr, "[turn]   %ux%u fmt 0x%X at 0x%08X "
@@ -371,7 +392,10 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
             }
         }
 
-        if (!getenv("MGS_NO_COPY")) {
+        /* MGS_NO_RASTER skips triangle rasterisation, to measure its share of
+     * the wall clock. Everything else still runs: the guest executes, the
+     * FIFO parses, copies happen. */
+    if (!getenv("MGS_NO_COPY")) {
             /* A copy to TEXTURE is not a copy to the screen, and both arrive
              * through this one command. The source rectangle's top-left
              * matters here in a way it does not for the framebuffer: a

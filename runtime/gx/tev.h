@@ -41,6 +41,26 @@ uint32_t mgs_tev_run(const MgsGxBp* bp, const MgsTevInput* in);
 /* Does the alpha test, as configured, let this pixel through? The test runs
  * after the combiner and is what makes cut-out foliage and text work at all;
  * ignoring it draws every transparent texel as an opaque black square. */
+
+/* THE COMBINER'S STATE, DECODED ONCE.
+ *
+ * mgs_tev_run reloaded all four TEV registers and re-fetched every stage's
+ * configuration for EVERY PIXEL, none of which changes while a triangle is
+ * being drawn. At roughly 320 cycles a pixel that is most of the cost of the
+ * renderer. Compile it per draw, then the per-pixel path is arithmetic on the
+ * rasterised colour and the texel.
+ */
+typedef struct MgsTevCompiled {
+    int      reg[4][4];        /* prev, c0, c1, c2 - rgb then alpha */
+    uint32_t ce[16], ae[16];   /* each stage's colour and alpha environment */
+    unsigned stages;
+    int      configured;       /* GEN_MODE written: false means the default */
+} MgsTevCompiled;
+
+void     mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out);
+uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in);
+
+int mgs_tev_alpha_test_always(const MgsGxBp* bp);
 int mgs_tev_alpha_test(const MgsGxBp* bp, uint32_t argb);
 
 #endif
