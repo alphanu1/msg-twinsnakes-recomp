@@ -50,6 +50,8 @@
 
 typedef void (*MgsFifoSink)(void* user, uint32_t value, unsigned size);
 
+#include "exi_card.h"
+
 typedef struct MgsMmio {
     /* One flat store for the whole region. Modelled registers are special
      * cased on access; everything else reads back what was written. */
@@ -59,6 +61,17 @@ typedef struct MgsMmio {
      * reads, so a guest that polls it sees time pass at the rate the host is
      * actually running rather than as fast as it can spin. */
     uint16_t vi_half_line;
+
+    /* The memory card in slot A, answered as a device on the external
+     * interface rather than by shimming the SDK's CARD API. See exi_card.h
+     * and HANDOFF F166 for why that distinction decides whether it works. */
+    MgsExiCard   card;
+    GuestMemory* exi_mem;        /* for the card's DMA transfers */
+    int          card_ready;
+    uint8_t      exi_cs;
+    uint64_t     exi_transfers, exi_to_card;
+    int          trace_exi;
+    unsigned     exi_traced;         /* which device the last CSR write selected */
 
     /* GX command FIFO bytes written through the write-gather pipe. Counted
      * rather than stored: phase 3 will consume them, and until then knowing
@@ -215,6 +228,12 @@ int      mgs_mmio_recording(const MgsMmio* m);
  * does nothing - which is the right behaviour for a runtime test that has no
  * guest memory to speak of. */
 void     mgs_mmio_attach_aram(MgsMmio* m, GuestMemory* mem);
+
+/* Put a card in slot A, backed by `path`. Creates a formatted one if the
+ * file is absent. Without this the slot reads empty, which is what the
+ * hardware reports and what the game shows a notice about. */
+void     mgs_mmio_attach_card(MgsMmio* m, GuestMemory* mem, const char* path);
+void     mgs_mmio_card_flush(MgsMmio* m);
 
 /* Tell the audio interface how much guest time has passed.
  *

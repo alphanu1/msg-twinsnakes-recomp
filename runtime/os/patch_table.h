@@ -49,13 +49,5 @@ void mgs_DVDReadAbsAsyncPrio(CPUState* ctx);
 void mgs_DVDGetCommandBlockStatus(CPUState* ctx);
 void mgs_DVDGetCurrentDiskID(CPUState* ctx);
 void mgs_DVDCompareDiskID(CPUState* ctx);
-void mgs_CARDInit(CPUState* ctx);
-void mgs___CARDSync(CPUState* ctx);
-void mgs_CARDCheckExAsync(CPUState* ctx);
-void mgs_CARDProbeEx(CPUState* ctx);
-void mgs_CARDMountAsync(CPUState* ctx);
-void mgs_CARDMount(CPUState* ctx);
-void mgs_CARDUnmount(CPUState* ctx);
-void mgs_CARDGetStatus(CPUState* ctx);
 
 #endif

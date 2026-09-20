@@ -43,8 +43,86 @@
  * set-a-bit-and-wait shape.
  */
 #define EXI_CHANNEL_STRIDE 0x14u
+#define EXI_CSR            0x00u   /* status: chip select, and bit 12 EXT */
+#define EXI_MAR            0x04u   /* DMA address */
+#define EXI_LENGTH         0x08u   /* DMA length */
 #define EXI_CR             0x0Cu   /* control: bit 0 = TSTART */
+#define EXI_DATA           0x10u   /* immediate transfer data */
 #define EXI_TSTART         0x01u
+#define EXI_DMA            0x02u
+#define EXI_EXT            0x1000u /* a device is present in this slot */
+
+static uint32_t exi_reg(const MgsMmio* m, uint32_t off)
+{
+    const uint8_t* p = &m->regs[off];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
+}
+
+static void exi_set_reg(MgsMmio* m, uint32_t off, uint32_t v)
+{
+    uint8_t* p = &m->regs[off];
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
+/* ONE TRANSFER, RUN TO COMPLETION.
+ *
+ * There is no bus on the other side, so the transfer finishes within the
+ * store that started it - the same model the disc and serial interfaces use.
+ * Immediate transfers carry up to four bytes in EXIxDATA, most significant
+ * first; DMA transfers move EXIxLENGTH bytes through guest memory at EXIxMAR.
+ * The direction is in the control register: 0 reads from the device, 1 writes
+ * to it.
+ */
+static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
+{
+    uint32_t base = (MMIO_EXI - MMIO_BASE) + chan * EXI_CHANNEL_STRIDE;
+    unsigned rw   = (cr >> 2) & 3u;
+    unsigned tlen = ((cr >> 4) & 3u) + 1u;
+    unsigned i;
+
+    ++m->exi_transfers;
+    /* Only slot A carries a card, and only while it is the selected device. */
+    if (chan != 0u || !m->card_ready || !(m->exi_cs & 1u)) return;
+    ++m->exi_to_card;
+
+    if (cr & EXI_DMA) {
+        uint32_t mar = exi_reg(m, base + EXI_MAR) & 0x03FFFFFFu;
+        uint32_t len = exi_reg(m, base + EXI_LENGTH);
+        if (m->trace_exi && m->exi_traced < 40u) {
+            ++m->exi_traced;
+            fprintf(stderr, "[exi] dma rw=%u len=%u -> 0x%08X (cmd 0x%02X)\n",
+                    rw, len, mar, m->card.command);
+        }
+        for (i = 0u; i < len; ++i) {
+            uint8_t b = 0xFFu;
+            uint32_t a = 0x80000000u | (mar + i);
+            if (rw == 1u && m->exi_mem) b = guest_read8(m->exi_mem, a);
+            mgs_exi_card_byte(&m->card, &b);
+            if (rw == 0u && m->exi_mem) guest_write8(m->exi_mem, a, b);
+        }
+        return;
+    }
+
+    {
+        uint32_t data = exi_reg(m, base + EXI_DATA);
+        uint32_t out  = 0u;
+        for (i = 0u; i < tlen; ++i) {
+            unsigned sh = 24u - i * 8u;
+            uint8_t  b  = (rw == 0u) ? 0xFFu : (uint8_t)(data >> sh);
+            mgs_exi_card_byte(&m->card, &b);
+            out |= (uint32_t)b << sh;
+        }
+        if (rw != 1u) exi_set_reg(m, base + EXI_DATA, out);
+        if (m->trace_exi && m->exi_traced < 40u) {
+            ++m->exi_traced;
+            fprintf(stderr, "[exi] imm rw=%u len=%u  in 0x%08X -> out 0x%08X  "
+                            "(pos now %u, cmd 0x%02X)\n",
+                    rw, tlen, data, out, m->card.position, m->card.command);
+        }
+    }
+}
 
 /* Serial interface: SICOMCSR bit 0 is likewise a transfer-start the hardware
  * clears. */
@@ -109,6 +187,7 @@ void mgs_mmio_init(MgsMmio* m)
 
         m->trace_si = e != NULL;
         m->trace_vi = getenv("MGS_TRACE_VI") != NULL;
+        m->trace_exi = getenv("MGS_TRACE_EXI") != NULL;
         m->si_trace_cap = 200u;
         if (e && *e) {
             unsigned long n = strtoul(e, NULL, 0);
@@ -742,8 +821,28 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         uint32_t exi = MMIO_EXI - MMIO_BASE;
         if (off >= exi && off < exi + 3u * EXI_CHANNEL_STRIDE) {
             uint32_t within = (off - exi) % EXI_CHANNEL_STRIDE;
-            if (within == EXI_CR && (value & EXI_TSTART))
+            unsigned chan = (off - exi) / EXI_CHANNEL_STRIDE;
+
+            /* Chip select lives in the status register's bits 7-9. Letting go
+             * of it is what ends a card command, so it has to be watched as
+             * closely as asserting it. */
+            if (within == EXI_CSR && chan == 0u) {
+                uint8_t cs = (uint8_t)((value >> 7) & 7u);
+                if (cs != m->exi_cs) {
+                    m->exi_cs = cs;
+                    if (m->card_ready) mgs_exi_card_select(&m->card, (cs & 1u) != 0u);
+                }
+                /* EXT is the slot's own answer about whether anything is
+                 * plugged in - hardware status, not something software sets.
+                 * Restoring it after every write keeps a guest that rewrites
+                 * the whole register from accidentally unplugging the card. */
+                if (m->card_ready) m->regs[off - within + EXI_CSR + 2u] |= 0x10u;
+            }
+
+            if (within == EXI_CR && (value & EXI_TSTART)) {
+                exi_transfer(m, chan, value);
                 m->regs[off + size - 1u] &= (uint8_t)~EXI_TSTART;
+            }
         }
 
         /* DSP reset: self-clearing, like EXI's transfer start. */
@@ -1007,6 +1106,23 @@ int mgs_mmio_recording(const MgsMmio* m)
 void mgs_mmio_attach_aram(MgsMmio* m, GuestMemory* mem)
 {
     mgs_aram_init(&m->aram, mem);
+}
+
+void mgs_mmio_attach_card(MgsMmio* m, GuestMemory* mem, const char* path)
+{
+    uint32_t csr = (MMIO_EXI - MMIO_BASE) + EXI_CSR;
+    if (!m) return;
+    m->exi_mem = mem;
+    m->card_ready = mgs_exi_card_init(&m->card, path, 16u);
+    /* Announce the slot as occupied from the outset: the SDK reads EXT before
+     * it touches anything else, and a card that appears later looks like one
+     * the player pushed in mid-boot. */
+    if (m->card_ready) m->regs[csr + 2u] |= 0x10u;
+}
+
+void mgs_mmio_card_flush(MgsMmio* m)
+{
+    if (m && m->card_ready) mgs_exi_card_flush(&m->card);
 }
 
 /* ---- the audio interface's sample counter ------------------------------

@@ -54,6 +54,25 @@ Two things still apply:
 | `ww` (Wind Waker recomp) | **MIT** | reference | The shape of a true native port: own recompiler, GX→D3D11, TEV→HLSL. MIT, so lifting from it is actually permitted — the one reference here without a licence cost. |
 | `RecompCore` | **GPL-2.0+/GPLv3-compatible** | liftable | Dolphin fork with static-recomp core and interpreter fallback. The fallback design can now be taken, not just read. 102 MB, the largest entry. |
 
+### The memory card's wire protocol
+
+`runtime/platform/exi_card.c` implements the card as an EXI device. The
+protocol it answers — the command opcodes, the status bits, and the way a
+read or program address is packed across four bytes — was established from
+Dolphin's implementation of the same device
+(`Source/Core/Core/HW/EXI/EXI_DeviceMemoryCard.cpp` and
+`Source/Core/Core/HW/GCMemcard/`) at the pinned commit
+`ee018d00e60b9eb727489908a8daec5c537f44a8`. Dolphin is GPL-2.0-or-later and
+this project is GPL-3.0, so lifting is permitted under project rule 10;
+in the event the code here is our own, written to the same hardware
+behaviour, and the card's on-disc format is generated rather than copied.
+
+The SDK-side expectations it has to satisfy — that `CARDProbeEx` reads the
+size out of `id & 0xFC` and the sector size from a table indexed by
+`(id & 0x3800) >> 11`, and that `__EXIProbe` debounces presence for about
+300 ms — were read from `dolsdk2004`, for behaviour only, per the note
+below. See HANDOFF F166 and F167.
+
 ### Why `dolsdk2004` is not a rule 9 problem, and where it is still exposed
 
 Rule 9 forbids leaked source, **including a leaked copy of Nintendo's Dolphin

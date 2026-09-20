@@ -48,17 +48,9 @@ static const MgsPatch k_patches[] = {
     {0x80029360u, mgs_DVDGetCommandBlockStatus},   /* DVDGetCommandBlockStatus */
     {0x80029804u, mgs_DVDGetCurrentDiskID},   /* DVDGetCurrentDiskID */
     {0x80029DE8u, mgs_DVDCompareDiskID},   /* DVDCompareDiskID */
-    {0x8003905Cu, mgs_CARDInit},   /* CARDInit */
-    {0x80039438u, mgs___CARDSync},   /* __CARDSync */
-    {0x8003B9ECu, mgs_CARDCheckExAsync},   /* CARDCheckExAsync */
-    {0x8003C09Cu, mgs_CARDProbeEx},   /* CARDProbeEx */
-    {0x8003C760u, mgs_CARDMountAsync},   /* CARDMountAsync */
-    {0x8003C900u, mgs_CARDMount},   /* CARDMount */
-    {0x8003C9E4u, mgs_CARDUnmount},   /* CARDUnmount */
-    {0x8003E7E8u, mgs_CARDGetStatus},   /* CARDGetStatus */
 };
 
-#define MGS_PATCH_COUNT 47u
+#define MGS_PATCH_COUNT 39u
 
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {

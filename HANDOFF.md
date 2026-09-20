@@ -6247,6 +6247,56 @@ movie, but the queue is the mechanism an EXI card will need for its
 interrupts, and the trace above is what any future attempt should start from
 rather than rediscover.
 
+### F167 — a memory card that answers as a device, and where it still stops
+
+Following F166, the card is now emulated on EXI rather than shimmed at the
+SDK's API: `runtime/platform/exi_card.c`, with the register side in
+`mmio.c`. The CARD API shims are **removed** — with the device answering, the
+SDK's own code must run, and a shim above it would hide whether it does.
+
+**What works, measured on the bus** (`MGS_TRACE_EXI=1`):
+
+| the SDK does | the device answers |
+|---|---|
+| writes `0x00` + a dummy byte | the dummy, `0x80` |
+| reads four bytes | `0x00000010` — 16 Mbit |
+| `0x89` ClearStatus, `0x83` ReadStatus | `0x41` — READY, UNLOCKED |
+
+and `EXI CSR chan0 = 0x00001000`, so EXT reads back as a present device.
+
+The card id is a **bitfield, not a count**, which is worth writing down
+because a plain integer happens to work by accident at 16 and would not at
+other sizes: `IsCard` takes the size from `id & 0xFC` and requires one of
+4/8/16/32/64/128, and the sector size from a table indexed by
+`(id & 0x3800) >> 11`. Ours passes: size 16, index 0 → 8192 bytes, 256
+blocks, comfortably over the 8-block minimum.
+
+The image is created already formatted — header, two directories, two
+block-allocation tables, each with the checksum pair the SDK verifies — and
+persisted to `saves/slot_a.raw` (2,097,152 bytes, `MGS_CARD_PATH` to move
+it, git-ignored). A blank card would read as broken and the game would offer
+to format it, which is another screen needing a button press, which is the
+thing this exists to avoid.
+
+**Where it stops.** The SDK identifies the card and then never mounts it —
+three bus commands in a 200,000,000-step run, and the boot still halts in
+the same place. Two candidates were checked and cleared: the card-disable
+low global at `0x800030E3` reads `00` (enabled), and the probe's start-time
+global at `0x800030C0` is populated, so `__EXIProbe`'s ~300 ms debounce is
+running rather than stuck.
+
+**The next thing to look at** is `__CARDBlock[0]` at `0x80208E00`, because
+`CARDProbeEx` has a branch that can deadlock in exactly this shape: if
+`card->attached` is set while `card->mountStep` is still 0 it returns BUSY,
+and a game that waits for READY before mounting never gets there. Reading
+those two fields out of guest memory decides it, and is cheaper than any
+further reasoning about the bus.
+
+**The reference used** was `extern/dolsdk2004`, the doldecomp community
+decompilation, for behaviour only — THIRD_PARTY.md records why that is not a
+rule 9 problem, and no code was copied from it. The card's wire protocol
+came from Dolphin's device implementation, recorded there against its pin.
+
 ---
 
 *Record further findings here as they are established — including the ones that

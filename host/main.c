@@ -1141,6 +1141,13 @@ int main(int argc, char** argv)
                          * can use it, and the boot stops in __ARChecksize
                          * without it. */
                         mgs_mmio_attach_aram(mgs_host_mmio(), &rt.mem);
+                        {
+                            /* Slot A. MGS_CARD_PATH moves it; the default
+                             * keeps saves out of the tree's way. */
+                            const char* cp = getenv("MGS_CARD_PATH");
+                            mgs_mmio_attach_card(mgs_host_mmio(), &rt.mem,
+                                                 cp && *cp ? cp : "saves/slot_a.raw");
+                        }
                     s_display_mem = &rt.mem;
                     s_display_windowed = !headless;
                     /* Armed before the run, because the frame worth keeping
@@ -1905,6 +1912,25 @@ int main(int argc, char** argv)
                                  * exactly these. */
                                 uint32_t c0 = mgs_mmio_read(mm, 0xCC006800u, 4);
                                 uint32_t c1 = mgs_mmio_read(mm, 0xCC006814u, 4);
+                                /* THE TWO LOW GLOBALS THE EXI PROBE TURNS ON.
+                                 *
+                                 * 0x800030C0 is the per-channel time at which
+                                 * a card was first seen; the probe reports
+                                 * "busy" until roughly 300ms have passed
+                                 * since it, so a stale value there keeps the
+                                 * card permanently pending. 0x800030E3 bit 7
+                                 * is __CARDDisable's flag, which short-cuts
+                                 * the probe to "no card" whatever the slot
+                                 * holds. Both are read here rather than
+                                 * guessed at. */
+                                printf("EXI probe globals: 0x800030C0 = "
+                                       "%08X %08X   card-disable flag "
+                                       "0x800030E3 = %02X (%s)\n",
+                                       guest_read32(&rt.mem, 0x800030C0u),
+                                       guest_read32(&rt.mem, 0x800030C4u),
+                                       guest_read8(&rt.mem, 0x800030E3u),
+                                       (guest_read8(&rt.mem, 0x800030E3u) & 0x80u)
+                                           ? "DISABLED" : "enabled");
                                 printf("EXI CSR  chan0 0x%08X (EXT %d, EXTINT %d)"
                                        "  chan1 0x%08X (EXT %d, EXTINT %d)\n",
                                        c0, (c0 >> 12) & 1, (c0 >> 11) & 1,
@@ -1966,6 +1992,7 @@ int main(int argc, char** argv)
         mgs_video_shutdown();
     }
 
+    mgs_mmio_card_flush(mgs_host_mmio());
     if (report != stdout) fclose(report);
     mgs_jobs_destroy(jobs);
     if (disc2.mounted) mgs_disc_unmount(&disc2);

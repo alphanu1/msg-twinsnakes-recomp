@@ -107,11 +107,3 @@ __fill_mem
 # run - the reproducible ones - stops before the intro movie, which is where
 # the outstanding rendering faults are. Real save/load comes later as a
 # pass-through to host files; see card_shims.c.
-CARDInit
-CARDProbeEx
-CARDMountAsync
-CARDCheckExAsync
-CARDGetStatus
-CARDMount
-CARDUnmount
-__CARDSync
