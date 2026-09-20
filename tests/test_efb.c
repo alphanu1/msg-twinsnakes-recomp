@@ -7,6 +7,7 @@
  * texture writing over the display - so those are what is checked.
  */
 #include "gx/efb.h"
+#include "gx/texture.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -32,6 +33,71 @@ static int near(uint32_t a, uint32_t b)
 #define XFB_ADDR 0x80300000u
 #define W 640u
 #define H 16u
+
+/* A COPY TO TEXTURE MUST SURVIVE BEING READ BACK, WITH REAL CONTENT.
+ *
+ * This encoder was checked once before with a uniform source - every pixel
+ * the same value - and it passed, which proves almost nothing: a swapped
+ * tile half, a transposed tile order and a channel rotation are all
+ * invisible when every texel is identical. The video frames the game copies
+ * and samples back are not uniform, and they come out as diagonal green and
+ * magenta banding.
+ *
+ * So the pattern here is deliberately non-uniform in all four channels and
+ * different along both axes, and the comparison is exact: RGBA8 is lossless,
+ * so anything but equality is a layout bug.
+ */
+static void check_copy_tex_roundtrip(MgsEfb* efb, GuestMemory* mem, int* failures)
+{
+    enum { TW = 16u, TH = 12u, TADDR = 0x00400000u };
+    uint32_t want[TW * TH], got[TW * TH];
+    unsigned x, y, i;
+    int mismatches = 0, first = -1;
+
+    for (y = 0; y < TH; ++y) {
+        for (x = 0; x < TW; ++x) {
+            /* Distinct per pixel, and distinct per channel, so a swap of any
+             * two channels or any two texels shows up. */
+            uint32_t a = 0xFFu;
+            uint32_t r = (x * 16u + 1u) & 0xFFu;
+            uint32_t g = (y * 20u + 3u) & 0xFFu;
+            uint32_t b = (x * 3u + y * 7u + 5u) & 0xFFu;
+            uint32_t argb = (a << 24) | (r << 16) | (g << 8) | b;
+            efb->pixels[y * MGS_EFB_WIDTH + x] = argb;
+            want[y * TW + x] = argb;
+        }
+    }
+
+    /* The stride here is the distance between ROWS OF TILES, not between
+     * rows of pixels: tiles_x * tile_bytes, which for a 16-wide RGBA8
+     * target is 4 * 64 = 256. Passing the pixel pitch instead overlaps the
+     * tile rows and makes a correct encoder look transposed - which it did,
+     * on the first run of this test. */
+    mgs_efb_set_dest(efb, 0x80000000u | TADDR, (TW / 4u) * 64u);
+    mgs_efb_copy_tex(efb, mem, 0u, 0u, TW, TH, 0x6u);   /* RGBA8 */
+
+    memset(got, 0, sizeof got);
+    if (!mgs_tex_decode(mem, 0x80000000u | TADDR, 0x6u, TW, TH, NULL, 0u, got)) {
+        printf("FAIL %s:%d: RGBA8 copy did not decode\n", __FILE__, __LINE__);
+        ++*failures;
+        return;
+    }
+
+    for (i = 0; i < TW * TH; ++i) {
+        if (got[i] != want[i]) {
+            if (first < 0) first = (int)i;
+            ++mismatches;
+        }
+    }
+    if (mismatches) {
+        printf("FAIL %s:%d: RGBA8 copy-to-texture round trip: %d of %u texels "
+               "differ; first at (%u,%u) wrote 0x%08X read 0x%08X\n",
+               __FILE__, __LINE__, mismatches, (unsigned)(TW * TH),
+               (unsigned)first % TW, (unsigned)first / TW,
+               want[first], got[first]);
+        ++*failures;
+    }
+}
 
 int main(void)
 {
@@ -89,6 +155,8 @@ int main(void)
 
     /* An unreadable address is refused rather than crashed on. */
     CHECK(!mgs_xfb_to_rgb(&mem, 0u, W * 2u, W, H, out));
+
+    check_copy_tex_roundtrip(&efb, &mem, &failures);
 
     guest_memory_free(&mem);
     printf(failures ? "efb: FAILED\n" : "efb: ok\n");

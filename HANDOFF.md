@@ -6158,6 +6158,45 @@ screen — `512x512 fmt 0x0`, the I4 text page — at roughness 2 indefinitely.
 Several `MGS_PAD_SCRIPT` variants advanced it but none reached the movie, so
 this is currently diagnosed from windowed runs only.
 
+### F165 — the RGBA8 copy encoder is correct, and the old test proved nothing
+
+The corrupted video frames are `512x448 fmt 0x6` — RGBA8, 917 KB. That is not
+movie data; it is an EFB copy-to-texture our own encoder produced and the
+game then sampled back. RGBA8 tiles are 4x4 in two 32-byte halves, alpha/red
+then green/blue, and getting those halves or the tile order wrong gives
+green-and-magenta banding, which is what F164 describes.
+
+That encoder had been "verified to round-trip" — with a **uniform** source,
+every pixel the same value. That proves essentially nothing: a swapped tile
+half, a transposed tile order and a channel rotation are all invisible when
+every texel is identical. `tests/test_efb.c` now round-trips a pattern that
+differs per pixel and per channel, and compares exactly, RGBA8 being
+lossless.
+
+**It passes. The encoder is correct.** An intermediate result said otherwise
+— 176 of 192 texels differing, in a pattern that looked exactly like a
+transposed tile order — and that was the test's fault, not the encoder's: it
+programmed the destination stride as the pixel pitch. The stride is the
+distance between **rows of tiles**, `tiles_x * tile_bytes`, which for a
+16-wide RGBA8 target is 256 and not 64. Getting that wrong overlaps the tile
+rows and makes a correct encoder look transposed.
+
+**What the mistake was worth.** It names the single condition under which the
+encoder does scramble: tile rows are spaced by `copy_stride`, so the layout
+is right only while the game's stride equals `tiles_x * tile_bytes`. Every
+copy observed so far satisfies it — 8192 for a 512-wide RGBA8 target, 1024
+for a 64-wide one — but the stride register is **shared with the framebuffer
+path**, and an XFB copy of the same 512-wide frame carries stride 1024. A
+texture copy inheriting that pitch would overlap its tile rows eightfold and
+produce regular diagonal banding rather than noise, which is the shape the
+corruption actually has.
+
+`mgs_efb_copy_tex` now prints `[copytex] STRIDE MISMATCH` once per distinct
+shape whenever it sees that, so an ordinary run answers the question without
+a special build. It does not fire during a boot, and the headless MEM1 hash
+is unchanged at `0x8C8E2DB54E773E25`; whether it fires during the movie is
+the open question.
+
 ---
 
 *Record further findings here as they are established — including the ones that

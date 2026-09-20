@@ -126,6 +126,42 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
     tex_tile_shape(fmt, &tw, &th, &bpp);
     tiles_x = (width + tw - 1u) / tw;
 
+    /* THE ONE CONDITION THAT SCRAMBLES A CORRECT ENCODER.
+     *
+     * Tile rows are spaced by copy_stride, and that is right only while the
+     * stride the game programmed equals tiles_x * tile_bytes - the packed
+     * distance between rows of tiles. Every copy observed so far satisfies
+     * it: 8192 for a 512-wide RGBA8 target, 1024 for a 64-wide one.
+     *
+     * If one does not, the tile rows overlap and a correctly encoded texture
+     * lands in a scrambled layout - which looks like regular diagonal
+     * banding, not like noise, and is exactly the shape the corrupted video
+     * frames have. The stride register is shared with the framebuffer path,
+     * so a texture copy inheriting the external buffer's line pitch is a
+     * plausible way for that to happen.
+     *
+     * Say so loudly and once per distinct shape rather than per copy: this
+     * is a question that a normal run should be able to answer without a
+     * special build. */
+    {
+        static uint32_t seen[16]; static unsigned seen_n;
+        uint32_t packed = tiles_x * (tw * th * bpp / 8u);
+        if (efb->copy_stride && efb->copy_stride != packed) {
+            uint32_t key = (width << 12) ^ (fmt << 8) ^ efb->copy_stride;
+            unsigned i; int known = 0;
+            for (i = 0; i < seen_n; ++i) if (seen[i] == key) known = 1;
+            if (!known && seen_n < 16u) {
+                seen[seen_n++] = key;
+                fprintf(stderr,
+                        "[copytex] STRIDE MISMATCH: %ux%u fmt 0x%X -> 0x%08X  "
+                        "stride %u but tiles need %u (rows overlap %ux)\n",
+                        width, height, fmt, efb->copy_dest,
+                        efb->copy_stride, packed,
+                        efb->copy_stride ? packed / efb->copy_stride : 0u);
+            }
+        }
+    }
+
     for (ty = 0; ty < (height + th - 1u) / th; ++ty) {
         for (tx = 0; tx < tiles_x; ++tx) {
             unsigned tile_bytes = tw * th * bpp / 8u;
