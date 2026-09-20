@@ -179,6 +179,7 @@ long mgs_disc_read(MgsDisc* disc, const char* path,
         if (fseek(f, (long)offset, SEEK_SET) != 0) { fclose(f); return -1; }
         n = fread(out, 1, length, f);
         fclose(f);
+
         return (long)n;
     }
 }
@@ -202,6 +203,7 @@ long mgs_disc_read(MgsDisc* disc, const char* path,
  */
 long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t length)
 {
+    long got;
     uint32_t i;
 
     if (!disc->mounted || !out) return -1;
@@ -225,9 +227,31 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
             fprintf(stderr, "[disc] abs 0x%08X -> %s + 0x%X (file at 0x%08X, %u bytes)\n",
                     offset, path, offset - e.offset_or_parent,
                     e.offset_or_parent, e.length_or_next);
-        /* A read may legitimately be shorter than asked for; mgs_disc_read
-         * already clamps to the file's length. */
-        return mgs_disc_read(disc, path, out, offset - e.offset_or_parent, length);
+        /* AN ABSOLUTE READ IS NOT A FILE READ, AND MUST NOT BE CLAMPED.
+         *
+         * mgs_disc_read trims a request to the end of the file it names,
+         * which is right when a game reads a file: the SDK returns a length
+         * and the game checks it. It is wrong here. This is a read by DISC
+         * OFFSET, and on real media the bytes after a file are its alignment
+         * padding, so the drive returns everything that was asked for and the
+         * caller is never told the file ended.
+         *
+         * The intro movie is what this cost. Five of its 406 reads were
+         * trimmed, by four to twenty-six bytes, and each time the game
+         * resumed from where the trim left it - so every frame boundary after
+         * that point was shifted, the decoder lost the stream, and playback
+         * stopped after eleven frames. A frozen picture is a long way from a
+         * disc read being two dozen bytes light, which is why this took a
+         * trace of every read to find rather than a guess.
+         *
+         * So the tail is zeroed, which is what that padding holds.
+         */
+        got = mgs_disc_read(disc, path, out, offset - e.offset_or_parent, length);
+        if (got >= 0 && (uint32_t)got < length) {
+            memset((uint8_t*)out + got, 0, length - (uint32_t)got);
+            got = (long)length;
+        }
+        return got;
     }
     return -1;
 }

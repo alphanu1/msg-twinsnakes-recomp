@@ -6650,6 +6650,30 @@ run, with 614 of its interrupts refused against 294 delivered.
 format, the copy encoder and DVD delivery. All were suspected across this
 session and none of them is it.
 
+### F174 — absolute disc reads were being trimmed to the end of a file
+
+Tracing every read of the intro movie found five of 406 coming back short,
+by four to twenty-six bytes, and the game resuming each time from where the
+trim left it — so every frame boundary after that point was shifted.
+
+`mgs_disc_read` clamps a request to the end of the file it names, which is
+right when a game reads a file: the SDK returns a length and the game checks
+it. `mgs_disc_read_abs` reached that clamp too, and there it is wrong. An
+absolute read is by **disc offset**, and on real media the bytes after a file
+are its alignment padding, so the drive returns everything asked for and the
+caller is never told a file ended. A folder layout has no padding, so the
+request was trimmed instead. The tail is now zeroed, which is what that
+padding holds.
+
+**Fixed and verified: 0 short reads of 406, and 78 more bytes delivered.**
+
+**It did not fix the movie.** Still eleven decoded frames, still roughness 0,
+still frozen. So this was a real defect on the streaming path and not the
+cause of the freeze — worth having found, and not the answer.
+
+What it does remove is a whole class of doubt: the movie's data now arrives
+byte-exact, so anything still wrong with playback is downstream of the disc.
+
 ---
 
 *Record further findings here as they are established — including the ones that
