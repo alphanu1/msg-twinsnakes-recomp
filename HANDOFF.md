@@ -6891,6 +6891,48 @@ next such backtrace as memory corruption.
 start-up against a bus that now has a card, a clock and settings on it, and
 something it reads keeps it retrying.
 
+### F180 — the engine parks itself for the movie, and never unparks
+
+The 406 disc reads in a run are not a stream that stopped part way: they are
+the **whole loading phase**, finishing as the first video frame appears, with
+zero reads after it. The movie fills a 256 KB prebuffer, shows frame one, and
+never enters a streaming loop. So the question is not what stopped the reads
+but what should be **draining that buffer**.
+
+The engine's own task table answers it. At boot:
+
+```
+engine tasks (table 0x7F4BD2A8, global mask 0x00000000)
+31 tasks across the table; 0 levels gated off
+```
+
+At the freeze:
+
+```
+engine tasks (table 0x7F4BD2A8, global mask 0x00000008)
+229 tasks; 9 levels gated off, 17 nodes that would not run
+  level 0   gate 0x00000000           runs
+  level 1   gate 0x00000000           runs
+  levels 2-10  gate 0x19 or 0x1F      SKIPPED, gate & mask is set
+  level 11  gate 0x00000000           runs
+```
+
+**Bit 3 of the global mask gates nine of the twelve levels off.** That is not
+a fault: it is what a cutscene does — park ordinary gameplay while a movie
+runs, leaving only the few levels that draw. The game is *paused for the
+movie*, which is precisely why the picture is frozen, the engine still
+renders, and the whole game's progression stops with it. The mask is cleared
+when the movie finishes; the movie never finishes; the mask never clears.
+
+**This gives a clean success signal for any future fix.** `global mask` back
+to `0x00000000` means the movie completed and the engine resumed. That is a
+much better test than watching a picture, and it needs no eyes on a window.
+
+**And it narrows the search.** Whatever advances the movie must live on level
+0, 1 or 11 — the only ones still running — so it is not simply "a task got
+gated off". Something those levels do each frame is waiting on a condition
+that never becomes true, and audio remains the best candidate for it.
+
 ---
 
 *Record further findings here as they are established — including the ones that
