@@ -183,6 +183,40 @@ static void format_card(MgsExiCard* c, unsigned mbit, const uint8_t* flash_id)
     c->dirty = 1;
 }
 
+/* IS THIS IMAGE ONE THIS MACHINE CAN USE?
+ *
+ * A card file survives between runs, so a stale or foreign one is loaded in
+ * preference to a good one - and an invalid image presents as the game
+ * calling the card damaged, not as an error here. That cost an hour of
+ * debugging a file while reading the code, so the load is checked rather
+ * than trusted: the size, the header's checksum, and the serial against this
+ * machine's flash id, which is what the SDK itself will check.
+ */
+static int card_image_valid(const MgsExiCard* c, unsigned mbit,
+                            const uint8_t* flash_id)
+{
+    const uint8_t* hdr = c->image;
+    uint16_t sum, inv;
+    int64_t rand = 0;
+    unsigned i;
+
+    if (((hdr[0x20u] << 8) | hdr[0x21u]) != 0u) return 0;
+    if (((hdr[0x22u] << 8) | hdr[0x23u]) != (int)mbit) return 0;
+
+    card_checksum(hdr, HDR_CHECKSUM, &sum, &inv);
+    if (((hdr[HDR_CHECKSUM] << 8) | hdr[HDR_CHECKSUM + 1u]) != sum) return 0;
+    if (((hdr[HDR_CHECKSUM + 2u] << 8) | hdr[HDR_CHECKSUM + 3u]) != inv) return 0;
+
+    for (i = 0u; i < 8u; ++i) rand = (rand << 8) | hdr[12u + i];
+    for (i = 0u; i < 12u; ++i) {
+        uint8_t flash = flash_id ? flash_id[i] : 0u;
+        rand = (rand * 1103515245 + 12345) >> 16;
+        if (hdr[i] != (uint8_t)(flash + (uint8_t)rand)) return 0;
+        rand = ((rand * 1103515245 + 12345) >> 16) & 0x7FFF;
+    }
+    return 1;
+}
+
 int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit,
                       const uint8_t* flash_id)
 {
@@ -211,12 +245,17 @@ int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit,
         fseek(f, 0, SEEK_SET);
         if (have == (long)c->size && fread(c->image, 1u, c->size, f) == c->size) {
             fclose(f);
-            fprintf(stderr, "[card] loaded %s (%u Mbit)\n", c->path, mbit);
-            return 1;
+            if (card_image_valid(c, mbit, flash_id)) {
+                fprintf(stderr, "[card] loaded %s (%u Mbit)\n", c->path, mbit);
+                return 1;
+            }
+            fprintf(stderr, "[card] %s is not a card this machine can read "
+                            "- reformatting\n", c->path);
+        } else {
+            fclose(f);
+            fprintf(stderr, "[card] %s is %ld bytes, not %u - reformatting\n",
+                    c->path, have, c->size);
         }
-        fclose(f);
-        fprintf(stderr, "[card] %s is %ld bytes, not %u - reformatting\n",
-                c->path, have, c->size);
     }
 
     format_card(c, mbit, flash_id);

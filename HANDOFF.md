@@ -6478,6 +6478,15 @@ with no game running. The serial rule is written out in the test from the
 specification rather than from the code that generates it, so an arithmetic
 slip cannot hide in both. It passes.
 
+**The image on disc is now checked rather than trusted.** A card file
+survives between runs, so a stale or foreign one loads in preference to a
+good one — and it presents as the game calling the card damaged, not as an
+error in the runtime. That is exactly what wasted an hour in F170. The load
+path now verifies the size, the header checksum and the serial against this
+machine's flash id, and reformats when any of them disagree. Corrupting a
+byte of the image and re-running shows it: "not a card this machine can read
+- reformatting", then a clean load next time.
+
 **Not yet confirmed against the game.** Headless runs still stop after three
 card commands (F170's instability), so they never reach the block reads where
 this is verified; the windowed path reaches the message reliably and is the
