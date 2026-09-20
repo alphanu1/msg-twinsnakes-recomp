@@ -6285,12 +6285,31 @@ low global at `0x800030E3` reads `00` (enabled), and the probe's start-time
 global at `0x800030C0` is populated, so `__EXIProbe`'s ~300 ms debounce is
 running rather than stuck.
 
-**The next thing to look at** is `__CARDBlock[0]` at `0x80208E00`, because
-`CARDProbeEx` has a branch that can deadlock in exactly this shape: if
-`card->attached` is set while `card->mountStep` is still 0 it returns BUSY,
-and a game that waits for READY before mounting never gets there. Reading
-those two fields out of guest memory decides it, and is cheaper than any
-further reasoning about the bus.
+**Why it stops: the card is fine, the rest of the bus is empty.** Reading
+`__CARDBlock[0]` at `0x80208E00` settled it — `attached 0, result -5, size 16
+Mbit, sector 8192, mountStep 0`. The SDK stored our geometry correctly, so
+identification fully succeeded, and then failed with `CARD_RESULT_IOERROR`
+before attaching. The deadlock theory above was wrong: `attached` is 0, not 1.
+
+Counting transfers rather than reasoning about them found it. **Nine EXI
+transfers are started in a boot and only five reach the card**; the other
+four are addressed to devices that are not there:
+
+| chip select | device | what it is |
+|---|---|---|
+| 4 | channel 0, device 2 | AD16, probed once at start-up |
+| 2 | channel 0, device 1 | **the RTC and SRAM** |
+
+`DoMount` reads SRAM while mounting, so a slot that answers nothing there
+fails the mount however sound the card is. That is the next piece to build,
+and it is small: SRAM is a 64-byte block with a checksum, and the RTC a
+counter. Nothing further about the card protocol needs changing.
+
+A trap worth keeping: `exi_transfer` silently returns when chip select does
+not name the card, so a device that is missing looks exactly like a device
+that is working. The started-versus-delivered counters exist now, and the
+`[exi] DROPPED` line under `MGS_TRACE_EXI=1` names the chip select, because
+the silence was what made this take as long as it did.
 
 **The reference used** was `extern/dolsdk2004`, the doldecomp community
 decompilation, for behaviour only — THIRD_PARTY.md records why that is not a

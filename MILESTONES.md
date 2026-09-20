@@ -672,8 +672,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
       SDK shims: the SDK identifies it correctly — 16 Mbit, sectors of 8192,
       status READY and UNLOCKED, EXT set — off a pre-formatted 2 MB image
       persisted to `saves/slot_a.raw`. It does not yet mount; next is
-      `__CARDBlock[0]` at `0x80208E00`, where an `attached` set against a
-      `mountStep` of 0 would return BUSY forever. Superseded detail below.
+      the RTC/SRAM device on channel 0 device 1, which `DoMount` reads while
+      mounting: four of nine EXI transfers in a boot go to devices that are
+      not implemented, and the mount fails with IOERROR because of it.
 - [ ] **A memory card, mounting** (F166). Not low difficulty after all, and not
       stubbable at the SDK's API: the SDK reads the card's header, directory
       and FAT directly out of the work area, so answering READY to

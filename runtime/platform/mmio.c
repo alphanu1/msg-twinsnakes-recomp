@@ -84,7 +84,14 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
 
     ++m->exi_transfers;
     /* Only slot A carries a card, and only while it is the selected device. */
-    if (chan != 0u || !m->card_ready || !(m->exi_cs & 1u)) return;
+    if (chan != 0u || !m->card_ready || !(m->exi_cs & 1u)) {
+        if (m->trace_exi && m->exi_traced < 40u) {
+            ++m->exi_traced;
+            fprintf(stderr, "[exi] DROPPED: chan %u cs %u rw %u len %u "
+                            "(no device there)\n", chan, m->exi_cs, rw, tlen);
+        }
+        return;
+    }
     ++m->exi_to_card;
 
     if (cr & EXI_DMA) {

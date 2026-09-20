@@ -1923,6 +1923,29 @@ int main(int argc, char** argv)
                                  * the probe to "no card" whatever the slot
                                  * holds. Both are read here rather than
                                  * guessed at. */
+                                /* THE SDK'S OWN VIEW OF THE CARD.
+                                 * __CARDBlock[0] at 0x80208E00: attached at
+                                 * +0x00, result +0x04, size +0x08,
+                                 * sectorSize +0x0C, mountStep +0x24. If
+                                 * attached is set while mountStep is still 0,
+                                 * CARDProbeEx answers BUSY for ever and a
+                                 * game that waits for READY before mounting
+                                 * never gets to. */
+                                printf("EXI transfers: %llu started, %llu "
+                                       "reached the card%s\n",
+                                       (unsigned long long)mgs_host_mmio()->exi_transfers,
+                                       (unsigned long long)mgs_host_mmio()->exi_to_card,
+                                       mgs_host_mmio()->exi_transfers >
+                                       mgs_host_mmio()->exi_to_card
+                                           ? "  <- the rest were dropped, chip select was not seen"
+                                           : "");
+                                printf("__CARDBlock[0]: attached %u  result %d"
+                                       "  size %u Mbit  sector %u  mountStep %d\n",
+                                       guest_read32(&rt.mem, 0x80208E00u),
+                                       (int)guest_read32(&rt.mem, 0x80208E04u),
+                                       guest_read16(&rt.mem, 0x80208E08u),
+                                       guest_read32(&rt.mem, 0x80208E0Cu),
+                                       (int)guest_read32(&rt.mem, 0x80208E24u));
                                 printf("EXI probe globals: 0x800030C0 = "
                                        "%08X %08X   card-disable flag "
                                        "0x800030E3 = %02X (%s)\n",
