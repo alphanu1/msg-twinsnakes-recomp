@@ -52,6 +52,9 @@
 #define EXI_DMA            0x02u
 #define EXI_EXT            0x1000u /* a device is present in this slot */
 #define EXI_TCINT          0x08u   /* a transfer finished */
+#define EXI_TCINTMSK       0x04u   /* ...and the guest asked to be told */
+#define PI_EXI             (1u << 4)
+#define EXI_TCINT          0x08u   /* a transfer finished */
 #define EXI_TCINTMSK       0x04u   /* ...and the guest wants to hear about it */
 #define PI_EXI             (1u << 4)
 
@@ -69,6 +72,48 @@
  * clears it by writing a one and a plain register store cannot tell that from
  * any other write.
  */
+/* Defined with the rest of the interrupt plumbing, further down. */
+static uint32_t pi_cause(const MgsMmio* m);
+static void     pi_set_cause(MgsMmio* m, uint32_t cause);
+
+/* CLEARING THE START BIT IS NOT HOW A TRANSFER FINISHES.
+ *
+ * The lesson the serial interface already cost us (F153). Hardware also
+ * raises a transfer-complete interrupt, and a guest that waits for one rather
+ * than polling waits forever without it. The card's mount is such a guest: it
+ * reaches step 1, issues a read, and waits - which is why no ReadArray
+ * command ever reaches the device and why the mount ends in an I/O error
+ * rather than a refusal.
+ *
+ * The line is only asserted when the guest has unmasked it, and the flag is
+ * kept beside the register because a guest clears it by writing a one, which
+ * a plain register store cannot distinguish from any other write.
+ *
+ * DELIVERY IS NOT FORCED FROM HERE. Asserting the PI line marks the interrupt
+ * pending; the run loop delivers it at a point it chooses, the same as every
+ * other source.
+ */
+static void exi_sync_tcint(MgsMmio* m, unsigned chan)
+{
+    uint32_t off = (MMIO_EXI - MMIO_BASE) + chan * EXI_CHANNEL_STRIDE + EXI_CSR;
+    if (m->exi_tcint[chan]) m->regs[off + 3u] |= (uint8_t)EXI_TCINT;
+    else                    m->regs[off + 3u] &= (uint8_t)~EXI_TCINT;
+}
+
+static void exi_refresh_line(MgsMmio* m)
+{
+    uint32_t cause = pi_cause(m);
+    unsigned c;
+    int asserted = 0;
+
+    for (c = 0; c < 3u; ++c) {
+        uint32_t off = (MMIO_EXI - MMIO_BASE) + c * EXI_CHANNEL_STRIDE + EXI_CSR;
+        if (m->exi_tcint[c] && (m->regs[off + 3u] & EXI_TCINTMSK)) asserted = 1;
+    }
+    if (asserted) pi_set_cause(m, cause | PI_EXI);
+    else          pi_set_cause(m, cause & ~PI_EXI);
+}
+
 static uint32_t exi_reg(const MgsMmio* m, uint32_t off)
 {
     const uint8_t* p = &m->regs[off];
@@ -876,6 +921,9 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                  * Restoring it after every write keeps a guest that rewrites
                  * the whole register from accidentally unplugging the card. */
                 if (m->card_ready) m->regs[off - within + EXI_CSR + 2u] |= 0x10u;
+                if (value & EXI_TCINT) m->exi_tcint[chan] = 0u;  /* write-one-to-clear */
+                exi_sync_tcint(m, chan);
+                exi_refresh_line(m);
 
             }
 
@@ -889,16 +937,19 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
             if (within == EXI_CR && (value & EXI_TSTART)) {
                 exi_transfer(m, chan, value);
                 m->regs[off + size - 1u] &= (uint8_t)~EXI_TSTART;
-                /* TCINT IS NOT RAISED HERE, THOUGH HARDWARE RAISES IT.
-                 * Tried: it made the boot strictly worse - EXI transfers in
-                 * a boot fell from 9 to 4, the card's geometry was never
-                 * stored at all, and the mount's error moved from IOERROR to
-                 * NOCARD. Delivering an interrupt from inside the store that
-                 * started the transfer re-enters the guest at a point it did
-                 * not choose; module.c's run loop already warns that raising
-                 * one moves the pc. If this is revisited it needs queueing to
-                 * a safe point the way DVD completions are, not asserting
-                 * from here. */
+                if (chan < 3u) {
+                    m->exi_tcint[chan] = 1u;
+                    exi_sync_tcint(m, chan);
+                    exi_refresh_line(m);
+                }
+                /* PREVIOUSLY NOT RAISED HERE, AND THAT WAS MEASURED WRONG.
+                 * The first attempt appeared to make the boot strictly
+                 * worse - transfers falling from 9 to 4, the geometry never
+                 * stored, IOERROR becoming NOCARD - and it was reverted on
+                 * that basis. Those runs were against a stale card image,
+                 * before the load was validated, so the comparison was
+                 * worthless: the image was failing the boot, not the
+                 * interrupt. Retried against a validated card. */
             }
         }
 

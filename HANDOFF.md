@@ -6530,7 +6530,38 @@ In the 2004 reference nothing on that path can produce IOERROR: clear-status
 and read-status return NOCARD when they fail, and the probe that follows
 returns NOCARD too. Another reason to think the 2003 build differs there.
 
-**The strongest remaining hypothesis** is the transfer-complete interrupt.
+**The mount reaches step 1**, which a windowed run showed and headless does
+not:
+
+```
+[card] slot A: attached, mount step 0, result -1 (BUSY)
+[card] slot A: attached, mount step 1, result -1 (BUSY)
+[card] slot A: not attached, mount step 0, result -5 (IOERROR)
+```
+
+Step 0 therefore completes - the status is read, the card is taken as already
+unlocked, and `mountStep` advances. Step 1 is where the system blocks are
+read, and no `ReadArray` command has ever reached the device. So step 1
+issues a read and waits for something that never arrives, which is the shape
+of a timeout rather than a refusal.
+
+**The transfer-complete interrupt is now implemented**, asserted when a
+transfer finishes and only while the guest has unmasked it, cleared by the
+write-one the guest uses. Delivery is left to the run loop rather than forced
+from the store that started the transfer.
+
+**And the earlier verdict on it was wrong.** F170 recorded that raising it
+made the boot strictly worse — transfers 9 down to 4, geometry never stored,
+IOERROR becoming NOCARD — and reverted it on that basis. Those runs were
+against a stale card image, before the load was validated, so they measured
+the image and not the interrupt. Retried against a validated card it changes
+nothing headless and breaks nothing: same card sequence, same 9 transfers,
+14/14 tests, and a healthy boot of 8,389,420 triangles.
+
+It does not fix the mount **in a headless run, which never reaches step 1**.
+The windowed path does, and is where it has to be judged.
+
+**The older hypothesis, now confirmed as the mechanism to pursue:**
 After `mountStep = 1` the SDK's mount continues from a completion, and we
 never signal one; a mount that stalls and then times out would report an I/O
 error. That was tried (F170) and reverted because asserting it from inside

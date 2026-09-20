@@ -97,6 +97,24 @@ static void card_watch(void)
     printf("[card] slot A: %s, mount step %u, result %d (%s)\n",
            attached ? "attached" : "not attached", step,
            (int)result, card_result_name(result));
+
+    /* NOCARD IS THE PROBE'S ANSWER, NOT THE CARD'S.
+     *
+     * It means EXIProbe refused, and EXIProbe refuses for exactly two
+     * reasons: the slot's presence bit is clear, or the card has not been
+     * present for long enough - it wants roughly 300ms of guest time between
+     * first seeing a card and believing in it, measured through a per-channel
+     * start time in the low globals at 0x800030C0. Printing all three makes
+     * the difference between "we are not reporting a card" and "we are, and
+     * it has not been long enough yet" readable instead of inferred. */
+    if (result == -3) {
+        uint32_t csr = mgs_mmio_read(mgs_host_mmio(), 0xCC006800u, 4u);
+        uint32_t start = guest_read32(s_display_mem, 0x800030C0u);
+        printf("[card]   probe: EXT %u, EXTINT %u, start time %u, "
+               "guest time %llu ticks\n",
+               (csr >> 12) & 1u, (csr >> 11) & 1u, start,
+               (unsigned long long)mgs_runtime_ticks(mgs_runtime_from(NULL)));
+    }
     fflush(stdout);
 }
 
