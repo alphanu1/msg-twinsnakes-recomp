@@ -1062,11 +1062,26 @@ static const char* find_module(const char* argv0, char* out, size_t out_size)
 
     exe_directory(argv0, dir, sizeof dir);
 
+    /* Beside the binary first - that is where a player's module goes - then
+     * the binary's own folder, then the working directory, then the build
+     * tree this repository uses, reached both from here and from the
+     * executable. The upward walk is what lets the binary be started from
+     * anywhere rather than only from the checkout root. */
     snprintf(cand, sizeof cand, "%s/module", dir);
     if (dir_find_module(cand, out, out_size)) return out;
     if (dir_find_module(dir, out, out_size)) return out;
     if (dir_find_module("module", out, out_size)) return out;
     if (dir_find_module("build/phase1/module", out, out_size)) return out;
+    {
+        static const char* const ups[] = { "..", "../..", "../../.." };
+        unsigned k;
+        for (k = 0; k < 3u; ++k) {
+            snprintf(cand, sizeof cand, "%s/%s/phase1/module", dir, ups[k]);
+            if (dir_find_module(cand, out, out_size)) return out;
+            snprintf(cand, sizeof cand, "%s/%s/build/phase1/module", dir, ups[k]);
+            if (dir_find_module(cand, out, out_size)) return out;
+        }
+    }
     return NULL;
 }
 
@@ -1076,6 +1091,7 @@ int main(int argc, char** argv)
     const char* disc2_arg = NULL;
     const char* report_path = NULL;
     const char* module_path = NULL;
+    char exe_dir_buf[1024];
     int headless = 0;
     char path1[1024], path2[1024];
     MgsDiscSource src1, src2;
@@ -1110,7 +1126,16 @@ int main(int argc, char** argv)
     overlay_line("MEM1 %u MB   ARAM %u MB",
                  GUEST_RAM_SIZE/(1024u*1024u), GUEST_ARAM_SIZE/(1024u*1024u));
 
-    src1 = mgs_disc_locate(1u, disc1_arg, NULL, "GGSPA4", path1, sizeof path1);
+    /* THE EXECUTABLE'S OWN DIRECTORY, WHICH USED TO BE PASSED AS NULL.
+     *
+     * Every search relative to the binary was dead code because of it: the
+     * portable case of dropping the discs beside the executable never
+     * matched, and neither did the build tree once the working directory was
+     * anything but the checkout root. That is why a launcher script was still
+     * required to start the port. */
+    exe_directory(argv[0], exe_dir_buf, sizeof exe_dir_buf);
+
+    src1 = mgs_disc_locate(1u, disc1_arg, exe_dir_buf, "GGSPA4", path1, sizeof path1);
     if (src1 == MGS_DISC_SOURCE_NONE) {
         fprintf(stderr, "no disc 1 found. Pass --disc1 <path>.\n");
         guest_memory_free(&rt.mem);
@@ -1130,7 +1155,7 @@ int main(int argc, char** argv)
     overlay_line("DISC 1: %s  (%u FST ENTRIES)", disc1.game_id, disc1.fst.entry_count);
 
     memset(&disc2, 0, sizeof disc2);
-    src2 = mgs_disc_locate(2u, disc2_arg, NULL, "GGSPA4", path2, sizeof path2);
+    src2 = mgs_disc_locate(2u, disc2_arg, exe_dir_buf, "GGSPA4", path2, sizeof path2);
     if (src2 != MGS_DISC_SOURCE_NONE && mgs_disc_mount(&disc2, path2))
         printf("disc 2: %s  [%s, disc %u]\n", path2, disc2.game_id,
                disc2.disc_number + 1u);

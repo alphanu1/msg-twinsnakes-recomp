@@ -78,12 +78,42 @@ MgsDiscSource mgs_disc_locate(unsigned number, const char* explicit_path,
         return MGS_DISC_SOURCE_REMEMBERED;
     }
 
-    /* 4. The development layout, which is what this repository uses. */
+    /* 4. The development layout, which is what this repository uses.
+     *
+     * SEARCHED RELATIVE TO THE EXECUTABLE AS WELL AS THE WORKING DIRECTORY,
+     * and upwards from it. Looking only in the working directory meant the
+     * binary ran from the repository root and nowhere else - which is the
+     * entire reason a launcher script was still needed - and "it only works
+     * if you start it from the right folder" is not a property an executable
+     * should have. Four levels covers a build tree this deep
+     * (build/runtime/host) reaching a checkout root. */
     if (game_id && *game_id) {
-        snprintf(buf, sizeof buf, "discs/%s/disc%u", game_id, number);
-        if (exists(buf)) {
-            snprintf(out, out_size, "%s", buf);
-            return MGS_DISC_SOURCE_DEV_LAYOUT;
+        const char* bases[5];
+        char up[4][1024];
+        unsigned nb = 0, k;
+
+        bases[nb++] = ".";
+        if (exe_dir && *exe_dir) {
+            bases[nb++] = exe_dir;
+            snprintf(up[0], sizeof up[0], "%s/..", exe_dir);
+            snprintf(up[1], sizeof up[1], "%s/../..", exe_dir);
+            snprintf(up[2], sizeof up[2], "%s/../../..", exe_dir);
+            bases[nb++] = up[0];
+            bases[nb++] = up[1];
+            bases[nb++] = up[2];
+        }
+        for (k = 0; k < nb; ++k) {
+            /* The working directory is spelled without a "./" prefix: it is
+             * what every log line and every test has always shown, and a
+             * gratuitous "./" in front of a path people read is noise. */
+            if (k == 0u)
+                snprintf(buf, sizeof buf, "discs/%s/disc%u", game_id, number);
+            else
+                snprintf(buf, sizeof buf, "%s/discs/%s/disc%u", bases[k], game_id, number);
+            if (exists(buf)) {
+                snprintf(out, out_size, "%s", buf);
+                return MGS_DISC_SOURCE_DEV_LAYOUT;
+            }
         }
     }
 
