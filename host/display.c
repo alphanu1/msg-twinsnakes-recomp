@@ -23,6 +23,8 @@
 #include "platform/mmio.h"
 #include "platform/sdl_video.h"
 
+#include <time.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,10 @@
 static MgsEfb s_efb;
 static MgsGx  s_gx;
 static MgsGxRaster s_raster;
+
+/* Frame pacing. 0 means uncapped, which is what a headless run wants. */
+static unsigned  s_fps_cap;
+static long long s_next_frame_ns;
 static uint64_t s_presented;
 
 MgsEfb* mgs_display_efb(void);
@@ -60,6 +66,17 @@ const MgsGxRaster* mgs_display_raster(void) { return &s_raster; }
 static void* s_jobs;
 
 void mgs_display_set_jobs(void* pool);
+void mgs_display_set_fps_cap(unsigned fps);
+void mgs_display_set_fps_cap(unsigned fps)
+{
+    const char* e = getenv("MGS_FPS_CAP");
+    if (e && *e) fps = (unsigned)strtoul(e, NULL, 10);
+    s_fps_cap = fps;
+    s_next_frame_ns = 0ll;
+    if (fps) fprintf(stderr, "[video] frame rate capped at %u fps "
+                             "(MGS_FPS_CAP=0 to disable)\n", fps);
+}
+
 void mgs_display_set_jobs(void* pool)
 {
     s_jobs = pool;
@@ -275,6 +292,47 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
          * so a run in a terminal says when the picture broke and what it was
          * sampling at the time rather than needing a special build.
          */
+        /* HOLD THE GUEST TO A FRAME RATE.
+         *
+         * The rasteriser running on every core removed the thing that had
+         * been pacing the game by accident: it was slow, so it ran at about
+         * the right speed. With that gone the intro logos play far too fast,
+         * because nothing in the runtime ever limited how quickly the guest
+         * could finish a frame.
+         *
+         * An XFB copy is one finished game frame - that is what the guest
+         * does when it has drawn everything and wants it shown - so it is
+         * the honest place to wait, and waiting here throttles the guest
+         * itself rather than just the presentation.
+         *
+         * OFF BY DEFAULT IN HEADLESS RUNS. Sleeping on the host clock makes
+         * a run unreproducible, and reproducibility is what the headless
+         * path exists for; main turns this on only for a window. The
+         * deadline is carried forward rather than reset each frame, so an
+         * occasional slow frame is absorbed instead of accumulating drift,
+         * and a frame that overruns by more than one period resynchronises
+         * rather than trying to catch up forever. */
+        if ((cmd & COPY_TO_XFB) && s_fps_cap) {
+            struct timespec now;
+            long long period = 1000000000ll / (long long)s_fps_cap;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            {
+                long long t = (long long)now.tv_sec * 1000000000ll + now.tv_nsec;
+                if (s_next_frame_ns == 0ll || t > s_next_frame_ns + period)
+                    s_next_frame_ns = t + period;          /* first frame, or resync */
+                else {
+                    long long wait = s_next_frame_ns - t;
+                    if (wait > 0ll) {
+                        struct timespec ts;
+                        ts.tv_sec  = (time_t)(wait / 1000000000ll);
+                        ts.tv_nsec = (long)(wait % 1000000000ll);
+                        nanosleep(&ts, NULL);
+                    }
+                    s_next_frame_ns += period;
+                }
+            }
+        }
+
         if (cmd & COPY_TO_XFB) {
             static unsigned vn; static int was_noisy = -1;
             unsigned yy, cnt = 0u, rough = 0u, lit = 0u;

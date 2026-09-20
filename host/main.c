@@ -994,7 +994,12 @@ int main(int argc, char** argv)
          * worth splitting across cores, and the only one on the frame's
          * critical path. */
         void mgs_display_set_jobs(void* pool);
+        void mgs_display_set_fps_cap(unsigned fps);
         mgs_display_set_jobs(jobs);
+        /* A window gets paced to a frame rate; a headless run does not,
+         * because sleeping on the host clock would make it unreproducible
+         * and reproducibility is the whole point of the headless path. */
+        mgs_display_set_fps_cap(headless ? 0u : 60u);
     }
     printf("worker pool: %u threads\n", mgs_jobs_worker_count(jobs));
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");

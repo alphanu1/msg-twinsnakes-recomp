@@ -654,6 +654,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       work rather than stall. Keyboard maps to the button word in
       `sdl_video.c`; `MGS_PAD_SCRIPT` drives a run through a menu unattended.
       **The intro video plays.**
+- [x] **A frame rate cap** (F163). Splitting the rasteriser across cores
+      removed the thing that had been pacing the game by accident, and the
+      intro logos ran far too fast. Capped on the XFB copy — one finished
+      game frame — rather than on the retrace tick, which fires seventeen
+      times more often. `MGS_FPS_CAP`; headless stays uncapped so it stays
+      reproducible. The windowed default of 60 is a guess and the correct
+      figure for this PAL build is not yet established.
 - [ ] **The intermittent freeze in the pad poll** (F162). A boot wedges in
       `gp_poll_once + 0x74`, reached from `gp_poll_thread`, at exactly 13,060
       GX commands — the number `mgs_mmio.c` already records as the signature

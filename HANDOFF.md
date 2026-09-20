@@ -6099,6 +6099,65 @@ normally.
 **Not yet fixed.** `si_poll_frame` is driven from the frame tick every 2000
 steps, which is deterministic, so the race is elsewhere in the SI path.
 
+### F163 — the renderer was the frame limiter, and nothing replaced it
+
+With the rasteriser split across cores the intro logos play far too fast.
+Nothing in the runtime ever limited how quickly the guest could finish a
+frame; being slow was doing that job by accident, and removing the slowness
+removed the pacing with it.
+
+The cap goes on the XFB copy, not on the retrace tick. Retrace fires every
+2,000 steps — 13,611 of them in a boot against 800 presented frames — so
+pacing it would have throttled the guest by a factor of seventeen. An XFB
+copy is one finished game frame, which is the honest unit, and waiting there
+throttles the guest itself rather than only the presentation.
+
+`MGS_FPS_CAP` sets it; 0 disables. **Headless runs are uncapped by default**,
+because sleeping on the host clock makes a run unreproducible and
+reproducibility is what the headless path is for — verified: the headless
+MEM1 hash is unchanged at `0x8C8E2DB54E773E25`. The default for a window is
+60, which is a guess: this is the PAL build (GGSPA4), so 50 may be the
+correct figure for its default video mode and the right value has not yet
+been established from VI's own registers.
+
+### F164 — the video corruption is structured, and the text over it is not
+
+A screenshot of the fault, rather than a roughness number, narrows this
+considerably. The corrupted video frame is **not random noise**: it is
+regular diagonal banding in green and magenta with fine per-pixel vertical
+striping. That is the signature of real data being misread — a stride or
+channel-phase error — not of uninitialised memory.
+
+Two things are ruled out by the same image. The subtitle "Alaska - Bering
+Sea" renders **cleanly on top of the corruption**, so geometry, the TEV
+combiner, the rasteriser and the C8 paletted text path are all working; only
+the video frame's own content is wrong. And the letterbox bars above and
+below stay black, so whatever writes the noise respects the draw's bounds.
+
+Green-and-magenta with alternating bright and dark columns is what YUV 4:2:2
+looks like when the luma/chroma phase is off, which is worth holding onto:
+the XFB is YUV 4:2:2, and the 512x448 buffers the game hands us as RGBA8
+textures (`0x800EA480`, `0x805DC7A0`, roughness 33 and 45) sit near it.
+
+**Also established, and unexplained:** every XFB copy lands one scanline
+below where VI scans out. Copies go to `0x80066480` / `0x8015A480` with
+stride 1024 bytes — 512 pixels, one row — and VI reads `0x80066880` /
+`0x8015A880`, a constant 0x400 further on. The last row of every displayed
+frame therefore comes from past the end of the copy. A one-row shift cannot
+produce the banding above, so this is a separate defect.
+
+**A hypothesis killed.** The two alternating `xfb` addresses looked like the
+game double-buffering with only one buffer ever written, which would have
+explained the garbage flashing on and off rather than being constant. It is
+wrong: both are written (13 copies to one, 11 to the other in a sample), and
+a copy targets whichever buffer VI is *not* currently showing. That is
+correct double-buffering.
+
+**Not reproducible headless.** Without input the run sits on the warning
+screen — `512x512 fmt 0x0`, the I4 text page — at roughness 2 indefinitely.
+Several `MGS_PAD_SCRIPT` variants advanced it but none reached the movie, so
+this is currently diagnosed from windowed runs only.
+
 ---
 
 *Record further findings here as they are established — including the ones that
