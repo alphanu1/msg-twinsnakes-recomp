@@ -1239,6 +1239,32 @@ neighbours within one reference file, which is where the remaining yield is.
 Every name added widens the bounds for its neighbours, so this route pays
 compound interest — it is worth re-running after any other stage lands.
 
+## Stage 5k — String references do not identify SDK functions · **DONE (negative result)**
+
+The engine's self-naming messages worked (stage 5g), so the same idea was
+tried against `main.dol`: a function that references a distinctive string
+might match exactly one function in the reference.
+
+```sh
+# labelled strings in the DOL, and which function references each
+build/phase0/out/asm/*rodata*.s , *data*.s  ->  92 labelled strings
+```
+
+**92 labelled strings; 38 unnamed functions reference one; exactly 1 of those
+strings also appears anywhere in the reference source** — and that one
+address sits past the end of the text section, so it is a parsing artefact
+rather than a match.
+
+The reason is simple in hindsight: this is a **release build**. The assert
+and diagnostic text the reference carries is compiled out, and what survives
+is mostly Konami's own. The route is closed, and recorded so it is not tried
+a third time.
+
+**The reference corpus is not the limit either.** `extern/dolsdk2004` holds
+183 source files defining **2,288 functions**, all of them under `src/` and
+all already walked by stage 5j's matcher, against roughly 1,818 functions in
+our DOL. There is no unused reference to go and find.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.
