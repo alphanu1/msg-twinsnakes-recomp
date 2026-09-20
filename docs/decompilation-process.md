@@ -1151,6 +1151,94 @@ line numbers run strictly *downwards* as the address rises, so any future
 attempt must reverse the source order, while Konami's own `sd_*.c` units run
 upwards.
 
+## Stage 5j — Name by the company a function keeps · **DONE**
+
+Signature matching is spent and the strings are spent, but an unnamed
+function still carries evidence: **who it calls, and who calls it**. Both
+survive compilation, and both can be compared against the reference.
+
+### The structural fact this rests on, measured first
+
+Within a translation unit the linker emitted functions in **source order**.
+Checked against the CARD module, where 24 names were already confirmed by
+other routes: within a file, **15 consecutive pairs ascend and none
+descend**, and the files themselves are in address order. So an unnamed
+function bounded by two named ones can only be something lying between them
+in the source.
+
+(The Tremor and ogg units run the *other* way — see stage 6f — so this is a
+property to be measured per module, never assumed.)
+
+### The route
+
+```sh
+tools/match-by-callees.py \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --asm 'build/phase0/out/asm/*.s' \
+    --reference extern/dolsdk2004/src
+```
+
+For each unnamed function it takes the candidates lying between its named
+neighbours in the reference, and keeps a candidate only if the binary's known
+callees are a subset of that candidate's. **Two rules do most of the work:**
+
+- **A proposal resting only on `OSDisableInterrupts` and
+  `OSRestoreInterrupts` is discarded.** Bracketing a critical section is
+  near-universal in this SDK; a match rooted only in that says the author was
+  careful, not which function this is.
+- **A name proposed for more than one address is discarded entirely.** Three
+  different functions came back as `Retry`, a static helper name reused
+  across translation units. The evidence had not distinguished the files, so
+  all three go rather than picking one.
+
+**14 proposals before those rules, 8 after** — 3 dropped as duplicate
+`Retry`, 3 more for resting on interrupt furniture alone.
+
+### The second route: who calls it
+
+Every surviving proposal was then checked from the caller side, which shares
+nothing with the callee evidence:
+
+| address | proposed | caller in the binary | reference agrees |
+|---|---|---|---|
+| `0x8002161C` | `__OSCallResetFunctions` | `OSFatal` | yes |
+| `0x8002B988` | `VIConfigurePan` | `ConfigureVideo` | yes |
+| `0x800329B4` | `__AXOutInitDSP` | `__AXOutInit` | yes |
+| `0x80038220` | `__CARDExtHandler` | `CARDMountAsync` | yes |
+| `0x800384B8` | `__CARDUnlockedHandler` | `CARDMountAsync`, `SetupTimeoutAlarm` | yes |
+| `0x80038798` | `TimeoutHandler` | `SetupTimeoutAlarm` | yes |
+| `0x80039200` | `__CARDPutControlBlock` | **ten** named CARD functions | yes |
+
+`__CARDPutControlBlock` is the strongest of them: `CARDCheckExAsync`,
+`CARDCreateAsync`, `CARDGetStatus`, `CARDRenameAsync`, `CARDSetStatusAsync`,
+`CreateCallbackFat`, `DoMount`, `FormatCallback`, `__CARDFormatRegionAsync`
+and `__CARDMountCallback` all call it, which is exactly the shape of a helper
+that releases the control block.
+
+### Withheld, and why
+
+- `__AXDSPDoneCallback` and `GXSetCurrentGXThread` passed the callee test and
+  have **no named callers in the DOL** — one is address-taken as a callback,
+  the other is public API called from the overlay. Absence there is expected
+  rather than disproving, but it is not a second route, so neither is claimed.
+- `CARDFreeBlocks` at `0x80039264` is the only candidate in its gap that
+  calls `__CARDGetDirBlock`, which is good single-route evidence, and it has
+  no named DOL callers for the same reason. Not claimed.
+- `0x800393B4` calls only `__CARDGetControlBlock`, which `CARDGetEncoding`,
+  `CARDGetMemSize` and `CARDGetSectorSize` all do identically. Three
+  candidates, one function, nothing to separate them. Not claimed.
+
+### Result
+
+**Seven symbols**, origin `callees+callers`, each confirmed by callee set and
+by caller. 1,007 named functions to **1,014**.
+
+**What limits it:** 322 of the unnamed functions are not bounded by two named
+neighbours within one reference file, which is where the remaining yield is.
+Every name added widens the bounds for its neighbours, so this route pays
+compound interest — it is worth re-running after any other stage lands.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

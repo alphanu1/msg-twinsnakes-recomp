@@ -1448,3 +1448,10 @@
 # returns one word, so it "must" be GXSetCurrentGXThread. That is resemblance,
 # and resemblance is what the count test exists to refuse. It stays unnamed.
 .text 0x800460CC 0x30 GXLoadPosMtxIndx sdk2004-align
+.text 0x8002161C 0x94 __OSCallResetFunctions callees+callers
+.text 0x8002B988 0x394 VIConfigurePan callees+callers
+.text 0x800329B4 0xCC __AXOutInitDSP callees+callers
+.text 0x80038220 0xD8 __CARDExtHandler callees+callers
+.text 0x800384B8 0x84 __CARDUnlockedHandler callees+callers
+.text 0x80038798 0xA4 TimeoutHandler callees+callers
+.text 0x80039200 0x64 __CARDPutControlBlock callees+callers
