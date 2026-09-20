@@ -20,6 +20,9 @@
 #include "gx/efb.h"
 #include "gx/raster.h"
 #include "gx/fifo.h"
+#include <dirent.h>
+#include <unistd.h>
+
 #include <SDL3/SDL.h>
 
 void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
@@ -999,6 +1002,74 @@ static void usage(const char* argv0)
         argv0);
 }
 
+/* FINDING THE MODULE WITHOUT BEING TOLD WHERE IT IS.
+ *
+ * The recompiled module is not shipped and cannot be: it is generated from
+ * the player's own disc, so it is their file, produced on their machine. That
+ * is the whole reason the executable carries no game code. But "you must pass
+ * --module every time" is a development habit, not a design, and it is the
+ * only reason a launcher script exists at all.
+ *
+ * So the module is looked for where it will actually be: in a `module`
+ * folder beside the executable, then beside the executable itself, then in
+ * the build tree this repository uses. Any file whose name ends in
+ * `_recomp.so` counts, because the name carries the game id and a player has
+ * only one.
+ */
+static int dir_find_module(const char* dir, char* out, size_t out_size)
+{
+    DIR* d;
+    struct dirent* e;
+    int found = 0;
+
+    if (!dir || !*dir) return 0;
+    d = opendir(dir);
+    if (!d) return 0;
+    while (!found && (e = readdir(d)) != NULL) {
+        size_t n = strlen(e->d_name);
+        if (n > 10u && !strcmp(e->d_name + n - 10u, "_recomp.so")) {
+            snprintf(out, out_size, "%s/%s", dir, e->d_name);
+            found = 1;
+        }
+    }
+    closedir(d);
+    return found;
+}
+
+/* The directory the executable itself lives in, so a portable folder works
+ * wherever it is unpacked rather than only from the directory it is run in. */
+static void exe_directory(const char* argv0, char* out, size_t out_size)
+{
+    char buf[1024];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1u);
+    char* slash;
+
+    if (n > 0) buf[n] = '\0';
+    else       snprintf(buf, sizeof buf, "%s", argv0 ? argv0 : ".");
+
+    slash = strrchr(buf, '/');
+    if (slash) *slash = '\0';
+    else       snprintf(buf, sizeof buf, ".");
+    snprintf(out, out_size, "%s", buf);
+}
+
+static const char* find_module(const char* argv0, char* out, size_t out_size)
+{
+    char dir[1024], cand[1024];
+    const char* env = getenv("MGS_MODULE");
+
+    if (env && *env) { snprintf(out, out_size, "%s", env); return out; }
+
+    exe_directory(argv0, dir, sizeof dir);
+
+    snprintf(cand, sizeof cand, "%s/module", dir);
+    if (dir_find_module(cand, out, out_size)) return out;
+    if (dir_find_module(dir, out, out_size)) return out;
+    if (dir_find_module("module", out, out_size)) return out;
+    if (dir_find_module("build/phase1/module", out, out_size)) return out;
+    return NULL;
+}
+
 int main(int argc, char** argv)
 {
     const char* disc1_arg = NULL;
@@ -1133,28 +1204,16 @@ int main(int argc, char** argv)
 
     /* FIND THE MODULE RATHER THAN DEMAND IT.
      *
-     * Needing --module and a step budget on every launch is what a wrapper
-     * script exists to paper over, and a port that cannot be double-clicked
-     * is not really an executable. The usual places, in order: next to this
-     * binary, then the build tree relative to the working directory. */
+     * Needing --module on every launch is what a wrapper script exists to
+     * paper over, and a port that cannot be double-clicked is not really an
+     * executable. find_module has the search order; the short version is a
+     * `module` folder beside the binary first, then the binary's own folder,
+     * then this repository's build tree. */
     if (!module_path) {
         static char found[1024];
-        const char* candidates[] = {
-            "build/phase1/module/gGGSPA4_recomp.so",
-            "../phase1/module/gGGSPA4_recomp.so",
-            "../../phase1/module/gGGSPA4_recomp.so",
-            "gGGSPA4_recomp.so",
-        };
-        unsigned ci;
-        for (ci = 0; ci < sizeof candidates / sizeof candidates[0]; ++ci) {
-            FILE* f = fopen(candidates[ci], "rb");
-            if (f) {
-                fclose(f);
-                snprintf(found, sizeof found, "%s", candidates[ci]);
-                module_path = found;
-                printf("module: found %s\n", module_path);
-                break;
-            }
+        if (find_module(argv[0], found, sizeof found)) {
+            module_path = found;
+            printf("module: found %s\n", module_path);
         }
     }
 

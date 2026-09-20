@@ -94,3 +94,11 @@ memcard/
 # ---- Python bytecode from tools/ ----
 __pycache__/
 *.pyc
+
+# The recompiled module, and anywhere a player is told to put it.
+# GENERATED FROM THE PLAYER'S OWN DISC, so it is game-derived code and must
+# never be committed - that is project rule 8, and it is what lets the
+# executable be distributed at all. Saves are the player's data and are
+# likewise theirs, not ours.
+module/
+*_recomp.so

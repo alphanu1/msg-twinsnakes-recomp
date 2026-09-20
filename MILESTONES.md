@@ -676,6 +676,19 @@ This is the project. ~200 functions and the widest error bars in the plan.
       checksum in SRAM, which the mount verifies and which must be the
       complement of the id's sum. Saving and loading real files is still to
       come; the device and the mount are done.
+- [x] **Launch without a wrapper script.** The module is found rather than
+      demanded: `MGS_MODULE`, then a `module` folder beside the executable,
+      then the executable's own folder, then this repository's build tree —
+      any file ending `_recomp.so`, since its name carries the game id and a
+      player has one. Discs were already located the same way, including
+      beside the executable for a portable folder. Verified from the
+      repository root; the portable-folder case is implemented but not yet
+      exercised end to end, because a run from an unrelated directory stops
+      earlier for want of a disc.
+      **`module/` and `*_recomp.so` are git-ignored** — the module is
+      generated from the player's own disc, so it is game-derived code and
+      rule 8 forbids committing it. That is precisely what lets the
+      executable be distributed.
 - [ ] **A memory card, superseded detail** (F166, F167). Emulated as an EXI *device*, not as
       SDK shims: the SDK identifies it correctly — 16 Mbit, sectors of 8192,
       status READY and UNLOCKED, EXT set — off a pre-formatted 2 MB image
