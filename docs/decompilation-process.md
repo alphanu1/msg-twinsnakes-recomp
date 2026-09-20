@@ -39,7 +39,7 @@ flowchart TD
 
 ## Stage 1 — Extract the disc · **DONE**
 
-**In:** the user's own disc images. **Out:** `discs/GGSPA4/disc{1,2}/`,
+**In:** my own disc images. **Out:** `discs/GGSPA4/disc{1,2}/`,
 git-ignored.
 
 ```sh
@@ -54,7 +54,7 @@ filesystem including `files/shared/mgso_pal.rel`.
 the REL and the apploader. Only assets differ. The recompiler therefore runs
 once, not once per disc.
 
-**Provenance:** the user's own disc. Nothing from this stage is ever committed.
+**Provenance:** my own disc. Nothing from this stage is ever committed.
 
 ## Stage 2 — Hash and pin · **DONE**
 
@@ -87,7 +87,7 @@ present, newest 2003-08-06, all tagged **`0x2301`**.
 Without it there is no way to know which other games' decompilations share this
 exact SDK, and symbol recovery would be pure manual analysis of 380 KB.
 
-**Provenance:** strings in the user's own binary.
+**Provenance:** strings in my own binary.
 
 ## Stage 4 — Signature-match the SDK · **DONE**
 
@@ -310,15 +310,15 @@ is the one that governs the work:
 
 | Measure | | |
 |---|---|---|
-| **1. Functions named** | 717 / 18,485 | **3.9%** |
-| — `main.dol` | 717 / 1,818 | 39.4% |
-| — `mgso_pal.rel` | 0 / 16,667 | 0% |
+| **1. Functions named** | 1,006 / 18,485 | **5.4%** |
+| — `main.dol` | 997 / 1,818 | 54.8% |
+| — `mgso_pal.rel` | 9 / 16,667 | 0.1% |
 | **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
-| **3. SDK entry points the engine calls, named** | 99 / 336 | **29.5%** |
-| — weighted by call sites | 1,882 / 7,078 | **26.6%** |
-| **4. GX surface known to be used** | 69 functions | the renderer's scope |
+| **3. SDK entry points the engine calls, named** | 198 / 336 | **58.9%** |
+| — weighted by call sites | 6,144 / 7,078 | **86.8%** |
+| **4. GX surface the game uses, named** | 81 / 81 | **100.0%** |
 
-**Why 3.9% is the least useful number here.** The engine is translated
+**Why 5.4% is the least useful number here.** The engine is translated
 mechanically — DolRecomp does not care what a function is called. Names in the
 REL buy debugging and hand-written patches, not correctness, which is why 0%
 there is not a blocker. What the runtime must replace is the **SDK boundary**,
@@ -1207,7 +1207,7 @@ tools/ghidra.sh <project-dir> twinsnakes \
 Use `PowerPC:BE:32:Gekko_Broadway`, not `PowerPC:BE:32:default` — the stock
 variant mis-decodes the paired-single instructions.
 
-**Provenance:** our own analysis, with our own tools, of the user's own binary.
+**Provenance:** my own analysis, with my own tools, of my own binary.
 `tools/classify-rel.py` is committed so every claim here can be re-derived.
 
 ## Stage 7 — Translate to C · **DONE**
@@ -1305,7 +1305,7 @@ SDK symbols are **not** translated: they are routed to the patch table and
 replaced by the native runtime.
 
 The generated C is a **build artefact**. It is never hand-edited and never
-committed — it is regenerated from the user's own disc on every build, which is
+committed — it is regenerated from your own disc on every build, which is
 also why no game code enters this repository.
 
 ## Stage 8 — Boot under ModernGekko (phase 1) · **IN PROGRESS**

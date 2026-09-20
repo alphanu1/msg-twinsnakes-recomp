@@ -1505,6 +1505,25 @@ int main(int argc, char** argv)
                                            rs->tex.shape_key[k] & 0xFFFu,
                                            (unsigned long long)rs->tex.shape_hit[k]);
                             }
+                            {
+                                unsigned k;
+                                printf("texture roughness by shape "
+                                       "(a few = artwork, tens = noise):\n");
+                                for (k = 0; k < rs->tex.rough_n; ++k)
+                                    printf("    fmt 0x%X %ux%u  mean %llu  max %u\n",
+                                           rs->tex.rough_key[k] >> 24,
+                                           (rs->tex.rough_key[k] >> 12) & 0xFFFu,
+                                           rs->tex.rough_key[k] & 0xFFFu,
+                                           (unsigned long long)
+                                             (rs->tex.rough_sum[k] /
+                                              (rs->tex.rough_cnt[k] ? rs->tex.rough_cnt[k] : 1)),
+                                           rs->tex.rough_max[k]);
+                                    if (rs->tex.rough_addr[k])
+                                        printf("        noisy at 0x%08X..0x%08X\n",
+                                               rs->tex.rough_addr[k],
+                                               rs->tex.rough_addr[k] +
+                                                 rs->tex.rough_bytes[k]);
+                            }
                             printf("textures: %llu decoded, %llu hits, "
                                    "%llu misses, %llu refused, %llu evicted\n",
                                    (unsigned long long)rs->tex.decodes,

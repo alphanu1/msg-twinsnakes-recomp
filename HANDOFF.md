@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 997 / 18,485 | 5.4% |
+| Functions named | 1,006 / 18,485 | 5.4% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 198 / 336 | 58.9% |
 | SDK call sites covered | 6,144 / 7,078 | 86.8% |
@@ -270,7 +270,7 @@ renderer.
 - **Skipping phase 1.** Running under the Dolphin-derived runtime first is
   deliberately throwaway work, and it is what makes every phase-2 bug have one
   possible cause instead of two.
-- **Hand-editing generated C.** It is regenerated from the user's disc on every
+- **Hand-editing generated C.** It is regenerated from my disc on every
   build. A hand-written replacement goes in `patches/`, for one named function,
   only when a port feature needs it.
 - **A matching decompilation.** No public decomp exists for Twin Snakes; it
@@ -543,7 +543,7 @@ mbedtls3: /usr/lib/libmbedcrypto.so.16 exists in filesystem (owned by mbedtls)
 Upstream split `mbedtls` (now 4.2.0) from a `mbedtls3` compat package, and the
 installed `mbedtls` 3.6.5 owns those sonames. Installing anyway would be a
 partial upgrade, which Arch does not support; the only clean pacman fix is a
-full `pacman -Syu` of ~800 packages, **which is the user's call and was not
+full `pacman -Syu` of ~800 packages, **which was my call and was not
 taken** — this machine also carries Quartus and FPGA toolchains that a big
 upgrade could disturb.
 
@@ -835,7 +835,7 @@ similar to the *game*. Always argue interoperability, never substitution.
 
 *Where we are exposed regardless, and this stays in the document:* trademark is
 separate from copyright (name the game, never use logos or imply endorsement);
-these provisions protect our analysis, not our users' copies; **Konami is
+these provisions protect the analysis, not anyone's copy of the game; **Konami is
 actively litigating** over the leaked source of this game's engine; and a DMCA
 takedown does not require the sender to be right — careful projects have been
 taken down anyway.
@@ -1627,7 +1627,7 @@ development path, and the FST gives the path-to-file mapping either way.
 **F42 — the disc layer: one seam, two backends.**
 `runtime/dvd/disc.c` mounts either an image (`.iso`/`.gcm`) or an extracted
 folder, and **detects which rather than being told**, so the caller passes
-whatever the user gave it. Both resolve paths through the same FST, so
+whatever it was given. Both resolve paths through the same FST, so
 `DVDOpen` never learns the difference — which is what stops the development
 path and the shipped path drifting apart.
 
@@ -1646,9 +1646,9 @@ Verified against the real disc: mounts as `GGSPA4`, disc number 0, 1,653 FST
 entries, and the REL reads back at its recorded 5,737,716 bytes with the
 module id `1` in its first word.
 
-**F43 — where the user's disc images live, and why not the program folder.**
+**F43 — where my disc images live, and why not the program folder.**
 `runtime/dvd/disc_locate.c`. The program folder is **supported but last**: the
-images are the user's property and should not be tied to an install that
+images are mine and should not be tied to an install that
 updates or is reinstalled under them, and the design document specifies a
 launcher that asks for them and hash-checks them.
 
@@ -1659,16 +1659,16 @@ repository's layout), then beside the executable.
 *Three deliberate choices:*
 
 - **An explicit path is returned even if it does not exist.** The useful error
-  is "that path did not mount", naming what the user asked for — not silently
+  is "that path did not mount", naming what was asked for — not silently
   falling through to something they did not choose.
 - **A remembered path is honoured only if it still exists**, so an image the
-  user has moved does not resolve to a stale location.
+  I have moved does not resolve to a stale location.
 - **Nothing ever searches the filesystem for a disc image.** A port that goes
-  hunting for game data it was not pointed at is doing something the user did
+  hunting for game data it was not pointed at is doing something I did
   not ask for.
 
-The remembered path goes in the user's config directory (XDG), never into the
-install. We write the *path*; the image itself is the user's and is never
+The remembered path goes in my config directory (XDG), never into the
+install. Only the *path* is written; the image itself is mine and is never
 copied or moved.
 
 *Bug found by the tests:* `mkdir` created only the last directory level, so
@@ -5562,7 +5562,7 @@ outright. The key is now the copy count combined with the scan-out address.
 **A measurement that was worthless, and why.** `ps -o pcpu` was read as "98.8%
 CPU, so it is compute bound". That field is the **average since process
 start**, not the current rate, and the live figure was about 10% - the
-opposite conclusion. The user's observation corrected it. For a running
+opposite conclusion. Watching the live figure corrected it. For a running
 process the instantaneous rate is the only number that means anything.
 
 ### F155 — the video corruption is NOT a scan-out geometry problem
@@ -5832,8 +5832,8 @@ Boot is unchanged: 2,338,178 commands, **0 desyncs**.
 them in a run that reaches the movie**, every one discarded. Whatever the game
 composited into a scratch target and sampled back was uninitialised memory,
 which renders as noise. A 64x64 target written 21,000 times is a compositor,
-and it starts running when captions appear - which is exactly when the user
-had been reporting the corruption from the beginning.
+and it starts running when captions appear - which is exactly when the
+corruption showed up from the beginning.
 
 Implemented with the hardware's tiling: 4x4 texels for the 16-bit formats,
 8x4 for the 8-bit ones, tiles left to right then top to bottom. Writing
@@ -5843,7 +5843,7 @@ rectangle's top-left is read as well: render-to-texture takes a small box out
 of the embedded buffer, often the scratch strip right of the visible area,
 not the origin.
 
-**Confirmed by the user: the captions render correctly.**
+**Confirmed on screen: the captions render correctly.**
 
 **Two of my own changes were wrong, and both were caught by measurement.**
 

@@ -418,20 +418,34 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
      * be told from the screen, because both end as noise. Looking at the
      * texture itself separates them. */
     {
-        static int want_w = -1, want_h, dumped;
+        static int want_w = -1, want_h, want_fmt, dumped;
         if (want_w < 0) {
+            /* "<w>x<h>" or "<fmt>:<w>x<h>" - the format matters, because two
+             * different textures share 512x448 here and only one is the
+             * video frame. Matching on size alone picked the wrong one and
+             * produced a confident wrong conclusion. */
+            /* MGS_DUMP_TEX=<w>x<h> and optionally MGS_DUMP_TEXFMT=<hex>.
+             * The format matters: two different textures share 512x448 here
+             * and only one is the video frame. Matching on size alone picked
+             * the wrong one and produced a confident wrong conclusion. */
             const char* e = getenv("MGS_DUMP_TEX");
+            const char* ef = getenv("MGS_DUMP_TEXFMT");
             want_w = 0;
+            want_fmt = ef ? (int)strtoul(ef, NULL, 16) : -1;
             if (e && sscanf(e, "%dx%d", &want_w, &want_h) != 2) want_w = 0;
+            if (e) fprintf(stderr, "[tex] dump armed: %dx%d fmt %d\n",
+                           want_w, want_h, want_fmt);
         }
         if (want_w && (int)width == want_w && (int)height == want_h &&
-            dumped < 4) {
+            (want_fmt < 0 || (int)format == want_fmt) && dumped < 4) {
             char path[256];
             FILE* f;
             snprintf(path, sizeof path, "%s/tex_%d.ppm",
                      getenv("MGS_DUMP_DIR") ? getenv("MGS_DUMP_DIR") : ".",
                      dumped);
             f = fopen(path, "wb");
+            fprintf(stderr, "[tex] dumping %ux%u fmt 0x%X -> %s (%s)\n",
+                    width, height, format, path, f ? "ok" : "FAILED");
             if (f) {
                 unsigned px;
                 fprintf(f, "P6\n%u %u\n255\n", width, height);
@@ -442,7 +456,77 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
                     fputc(c & 0xFF, f);
                 }
                 fclose(f);
+                /* THE SOURCE BYTES, alongside the decoded result.
+                 *
+                 * A decoded frame of uniform grey means one of two very
+                 * different things: the bytes were a picture and we detiled
+                 * them wrongly, or the bytes were never a picture. Only the
+                 * source settles it - structure at 64-byte tile boundaries
+                 * says the former, uncorrelated bytes the latter. */
+                {
+                    unsigned nb = texture_bytes(format, width, height);
+                    const uint8_t* src = guest_ptr(mem, addr, nb);
+                    char rp[256];
+                    snprintf(rp, sizeof rp, "%s/raw_%d.bin",
+                             getenv("MGS_DUMP_DIR") ? getenv("MGS_DUMP_DIR") : ".",
+                             dumped);
+                    if (src) {
+                        FILE* rf = fopen(rp, "wb");
+                        if (rf) { fwrite(src, 1, nb < 65536u ? nb : 65536u, rf);
+                                  fclose(rf); }
+                    }
+                    fprintf(stderr, "[tex]   source 0x%08X %u bytes %s\n",
+                            addr, nb, src ? "mapped" : "UNMAPPED");
+                }
                 ++dumped;
+            }
+        }
+    }
+
+    /* IS THIS TEXTURE A PICTURE OR IS IT NOISE?
+     *
+     * The screen shows noise of 9,000-odd colours while the video frame and
+     * the render-to-texture target both decode as clean images. Something
+     * else supplies it. Roughness - the mean difference between horizontally
+     * adjacent texels - separates the two by an order of magnitude: artwork
+     * scores a few, uncorrelated bytes score tens. Scored here, per shape, so
+     * the culprit names itself instead of being dumped one guess at a time. */
+    {
+        unsigned yy, rough = 0u, cnt = 0u;
+        for (yy = 0; yy < height; yy += 4u) {
+            unsigned xx;
+            for (xx = 1u; xx < width; xx += 2u) {
+                uint32_t a = t->texels[yy * width + xx - 1u];
+                uint32_t b = t->texels[yy * width + xx];
+                int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) / 3;
+                int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
+                rough += (unsigned)(va > vb ? va - vb : vb - va);
+                ++cnt;
+            }
+        }
+        if (cnt) {
+            unsigned k, r = rough / cnt;
+            uint32_t shape = (format << 24) | ((width & 0xFFFu) << 12)
+                           | (height & 0xFFFu);
+            for (k = 0; k < c->rough_n; ++k)
+                if (c->rough_key[k] == shape) break;
+            if (k == c->rough_n && c->rough_n < 24u) {
+                c->rough_key[c->rough_n] = shape;
+                ++c->rough_n;
+            }
+            if (k < 24u) {
+                c->rough_sum[k] += r;
+                ++c->rough_cnt[k];
+                if (r > c->rough_max[k]) c->rough_max[k] = r;
+                /* WHERE the noisy one lives. A texture that decodes as noise
+                 * either never had a picture written to it, or had one
+                 * written and then overwritten by something else. Knowing its
+                 * address lets the second be checked against every other
+                 * writer's destination. */
+                if (r > 20u) {
+                    c->rough_addr[k] = addr;
+                    c->rough_bytes[k] = texture_bytes(format, width, height);
+                }
             }
         }
     }

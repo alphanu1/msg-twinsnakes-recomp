@@ -44,6 +44,9 @@ typedef struct MgsTexture {
 typedef struct MgsTexCache {
     MgsTexture entry[MGS_TEX_CACHE_ENTRIES];
     uint32_t shape_key[16]; uint64_t shape_hit[16]; unsigned shape_n;
+    uint32_t rough_key[24]; uint64_t rough_sum[24], rough_cnt[24];
+    unsigned rough_max[24], rough_n;
+    uint32_t rough_addr[24], rough_bytes[24];
     uint64_t   clock;
     uint64_t   hits, misses, decodes, evictions, refused;
     /* Why a lookup was refused, split out: a size we will not take, a texel

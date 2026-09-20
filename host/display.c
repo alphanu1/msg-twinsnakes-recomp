@@ -250,6 +250,9 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
         if ((cmd & COPY_TO_XFB) && getenv("MGS_TRACE_XFBPAIR")) {
             static unsigned n;
             if (n++ < 24u) {
+                uint32_t tl0 = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
+                fprintf(stderr, "[xfb] source box top-left (%u,%u) %ux%u\n",
+                        tl0 & 0x3FFu, (tl0 >> 10) & 0x3FFu, copy_w, copy_h);
                 uint32_t shown = mgs_mmio_xfb_address(mgs_host_mmio());
                 fprintf(stderr, "[xfb] copy -> 0x%08X   VI shows 0x%08X   %s\n",
                         s_efb.copy_dest, shown,
@@ -292,10 +295,25 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
                 mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
             } else if (!getenv("MGS_NO_RTT")) {
+                /* A TEXTURE COPY, BUT NOT OVER THE SCREEN.
+                 *
+                 * These arrive in two sizes and only one was designed for.
+                 * The small ones - 64x64, 21,041 a movie - are the caption
+                 * compositor, and writing them is what made captions appear.
+                 * The others are 512x448 with the FRAMEBUFFER as their
+                 * destination, and encoding those as tiled texels deposits
+                 * 458 KB of scrambled data over the picture: the video
+                 * rectangle turns to noise while the letterbox around it
+                 * stays clean, which is exactly what was reported.
+                 *
+                 * What such a copy is FOR is not yet established, so it is
+                 * left alone rather than guessed at. Doing nothing is what
+                 * the code did before render-to-texture existed, and the
+                 * screen was better for it. */
                 uint32_t tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
                 mgs_efb_copy_tex(&s_efb, mem, tl & 0x3FFu,
                                  (tl >> 10) & 0x3FFu,
-                                 copy_w, copy_h, (cmd >> 3) & 0xFu);
+                                 copy_w, copy_h, (cmd >> 4) & 0xFu);
                 if (cmd & COPY_CLEAR)
                     mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 0, 1);
             }

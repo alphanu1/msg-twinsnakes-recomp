@@ -28,6 +28,18 @@ def main():
     for l in open(P('config/symbols/main.dol.symbols.txt')):
         m = re.match(r'^\S+ 0x([0-9A-Fa-f]+) 0x\S+ (\S+)', l)
         if m: named[int(m.group(1), 16)] = m.group(2)
+
+    # THE OVERLAY'S NAMES COUNT TOO, and only toward row 1.
+    #
+    # Row 1's denominator spans BOTH modules, so a numerator taken from
+    # main.dol alone undercounts by however many REL symbols exist - it read
+    # 997 while the maps held 1,006. Rows 3 and 4 are deliberately left on
+    # main.dol: their call sites are the overlay calling INTO the DOL, so a
+    # REL-local name is not an SDK entry point and must not inflate them.
+    rel_named = {}
+    for l in open(P('config/symbols/mgso_pal.rel.symbols.txt')):
+        m = re.match(r'^\S+ 0x([0-9A-Fa-f]+) 0x\S+ (\S+)', l)
+        if m: rel_named[int(m.group(1), 16)] = m.group(2)
     sites = collections.Counter()
     for l in open(P('build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s')):
         for t in re.findall(r'\bbl fn_(80[0-9A-Fa-f]{6})', l):
@@ -52,7 +64,8 @@ def main():
 
     total = len(dol) + len(rel)
     rows = [
-        ("Functions named",                          len(named.keys() & dol.keys()), total),
+        ("Functions named",                          len(named.keys() & dol.keys()) +
+                                                     len(rel_named.keys() & rel.keys()), total),
         ("Function boundaries recovered",            total, total),
         ("SDK entry points the engine calls, named", len([a for a in sites if a in named]), len(sites)),
         ("SDK call sites covered",                   sum(sites[a] for a in sites if a in named), sum(sites.values())),

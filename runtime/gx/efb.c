@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include "efb.h"
 
 #include <string.h>
@@ -51,6 +53,7 @@ static void tex_tile_shape(unsigned fmt, unsigned* tw, unsigned* th,
                            unsigned* bpp)
 {
     switch (fmt) {
+        case 0x6u: *tw = 4; *th = 4; *bpp = 32; break;   /* RGBA8 */
         case 0x0u: *tw = 8; *th = 8; *bpp = 4;  break;   /* I4  */
         case 0x1u: case 0x8u: case 0x9u: case 0xAu:
                    *tw = 8; *th = 4; *bpp = 8;  break;   /* I8, R8, G8, B8 */
@@ -88,6 +91,36 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
     unsigned tw, th, bpp, tiles_x, tx, ty, x, y;
 
     if (!efb->copy_dest || !mem || !width || !height) return;
+
+    /* WHAT IS IN THE EMBEDDED BUFFER AT THE MOMENT OF THE COPY?
+     *
+     * A texture copy can only be as good as what it copies. If the video is
+     * drawn into the EFB as noise then every stage after this one is faithful
+     * and the fault is upstream, in the drawing. Roughness separates the two:
+     * a picture scores a few, uncorrelated pixels score tens. Measured over
+     * the source rectangle, not the whole buffer. */
+    if (getenv("MGS_TRACE_COPYSRC")) {
+        static unsigned n;
+        if (n++ < 12u) {
+            unsigned yy, cnt = 0u, rough = 0u, lit = 0u;
+            for (yy = 0; yy < height && yy + sy < MGS_EFB_HEIGHT; yy += 4u) {
+                unsigned xx;
+                for (xx = 1u; xx < width && xx + sx < MGS_EFB_WIDTH; xx += 2u) {
+                    uint32_t a = efb->pixels[(sy + yy) * MGS_EFB_WIDTH + sx + xx - 1u];
+                    uint32_t b = efb->pixels[(sy + yy) * MGS_EFB_WIDTH + sx + xx];
+                    int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) / 3;
+                    int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
+                    rough += (unsigned)(va > vb ? va - vb : vb - va);
+                    if (b & 0x00FFFFFFu) ++lit;
+                    ++cnt;
+                }
+            }
+            fprintf(stderr, "[copysrc] %ux%u at (%u,%u) -> 0x%08X  "
+                    "EFB roughness %u  lit %u%%\n",
+                    width, height, sx, sy, efb->copy_dest,
+                    cnt ? rough / cnt : 0u, cnt ? lit * 100u / cnt : 0u);
+        }
+    }
     tex_tile_shape(fmt, &tw, &th, &bpp);
     tiles_x = (width + tw - 1u) / tw;
 
@@ -108,8 +141,13 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
              * 16 KB where the texture is 8 KB, over whatever follows: that
              * took a run from 0 desyncs to 26,323,104, because what follows
              * includes display lists. Tried, measured, reverted. */
-            uint32_t base = efb->copy_dest +
-                            (ty * tiles_x + tx) * tile_bytes;
+            /* The stride is the distance between rows of TILES, and for
+             * these copies it is exactly tiles_x * tile_bytes - 8192 for a
+             * 512-wide RGBA8 target, 1024 for a 64-wide one. Both match what
+             * the game programmes, which is what confirmed the format. */
+            uint32_t row = efb->copy_stride ? efb->copy_stride
+                                            : tiles_x * tile_bytes;
+            uint32_t base = efb->copy_dest + ty * row + tx * tile_bytes;
             for (y = 0; y < th; ++y) {
                 for (x = 0; x < tw; ++x) {
                     unsigned px = tx * tw + x, py = ty * th + y;
@@ -122,7 +160,26 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
                     if (ex >= MGS_EFB_WIDTH || ey >= MGS_EFB_HEIGHT) continue;
                     argb = efb->pixels[ey * MGS_EFB_WIDTH + ex];
 
-                    if (bpp == 16u) {
+                    if (bpp == 32u) {
+                        /* RGBA8 IS TWO HALVES, NOT ONE BLOCK.
+                         *
+                         * A 4x4 tile is 64 bytes: sixteen alpha/red pairs,
+                         * then sixteen green/blue pairs. Written as one run
+                         * of 32-bit texels it produces a plausible wrong
+                         * image rather than an obviously wrong one, which is
+                         * the failure that hides. */
+                        unsigned t_i = y * tw + x;
+                        p = guest_ptr(mem, base + t_i * 2u, 2u);
+                        if (p) {
+                            p[0] = (uint8_t)(argb >> 24);        /* A */
+                            p[1] = (uint8_t)(argb >> 16);        /* R */
+                        }
+                        p = guest_ptr(mem, base + 32u + t_i * 2u, 2u);
+                        if (p) {
+                            p[0] = (uint8_t)(argb >> 8);         /* G */
+                            p[1] = (uint8_t)argb;                /* B */
+                        }
+                    } else if (bpp == 16u) {
                         uint16_t t = encode_texel(fmt, argb);
                         p = guest_ptr(mem, base + (y * tw + x) * 2u, 2u);
                         if (!p) continue;

@@ -87,8 +87,19 @@ art, and any presentation implying endorsement are not.
 about whether end users have lawfully obtained their copy.
 
 **Konami is actively litigating** over MGS2's leaked source, and this game runs
-Konami's MGS2 engine. That raises the practical risk well above the theoretical
-baseline, independently of how well the copyright argument holds.
+an engine derived from MGS2. That raises the practical risk well above the
+theoretical baseline, independently of how well the copyright argument holds.
+
+It is worth being precise about the relationship, in both directions. The
+engine was adapted by Silicon Knights for the GameCube — different console,
+different SDK, different compiler — so the machine code on the disc is not the
+code that leaked, and every reference this project matches against is a
+GameCube one: Dolphin SDK signatures and other GameCube games' published symbol
+maps. That is a statement about OUR method, which is checkable, and it is the
+only form in which the point is worth making. **It is not a defence**, and it
+should not be relied on as one: I have never seen the leaked material and am
+in no position to characterise it, a rightsholder need not accept the
+distinction, and none of it affects whether a takedown arrives.
 
 **A DMCA takedown does not require being right.** Hosts act on notices, not
 merits. Several careful, well-behaved decompilation projects have been taken
@@ -96,7 +107,7 @@ down. Correctness reduces the odds; it does not eliminate them.
 
 **Circumvention is a separate question.** 17 U.S.C. §1201(f) has an
 interoperability exemption, but it is narrower than fair use. This project does
-not circumvent anything — it reads a disc image the user already has — and it
+not circumvent anything — it reads a disc image you already have — and it
 should stay that way. Do not add DRM circumvention.
 
 ---
@@ -111,9 +122,9 @@ What it does do:
   *purpose*. A statement written before any dispute is better evidence of
   purpose than one written after.
 - **Gives a reviewer the facts fast.** Whoever reads a takedown notice decides
-  quickly; a clear statement that no game code or assets are distributed and the
-  user supplies their own copy is the single most useful thing they can find.
-- **Binds our own behaviour.** The statement is only worth anything while it is
+  quickly; a clear statement that no game code or assets are distributed and
+  that you supply your own copy is the single most useful thing they can find.
+- **Binds my own behaviour.** The statement is only worth anything while it is
   true, which makes it a standing constraint on what may be committed. That is
   its most useful property.
 

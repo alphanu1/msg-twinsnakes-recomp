@@ -106,7 +106,7 @@ This machine is **~800 packages behind**, and `pacman -S dolphin-emu` fails on
 an `mbedtls`/`mbedtls3` file conflict — the distribution split the package and
 the installed 3.6.5 owns the sonames the compat package now ships. Installing
 through it would be a partial upgrade, which Arch does not support; the clean
-pacman route is a full `pacman -Syu` of ~800 packages. **That is the user's
+pacman route is a full `pacman -Syu` of ~800 packages. **That is your
 call and was not taken**, not least because this machine carries Quartus and
 FPGA toolchains that a large upgrade could disturb.
 

@@ -27,13 +27,22 @@ project's rules, not a preference.
 
 The same applies to any leaked copy of Nintendo's Dolphin SDK.
 
+**The binary analysed here is a GameCube build.** The Twin Snakes is a remake of
+Metal Gear Solid, developed by Silicon Knights on an engine adapted from Metal
+Gear Solid 2 and substantially reworked for the GameCube — a different console,
+a different SDK, and a different compiler. What is on the disc is therefore
+GameCube machine code built against Nintendo's Dolphin SDK, and that is what
+every method below is matching against: Dolphin SDK byte signatures, and symbol
+maps published by decompilation projects for *other GameCube games*. Nothing in
+the toolchain takes, or could take, a PlayStation 2 codebase as a reference.
+
 Everything in this repository is derived by our own analysis of a legally owned
 copy of the game, by **full decompilation and recompilation**:
 
-1. The user's own disc is extracted, and its executables are hashed.
+1. I extract my own disc and hash its executables.
 2. Those executables are disassembled and analysed — function boundaries,
    control flow, data-versus-code — with open tools: Ghidra, `decomp-toolkit`,
-   and our own scripts.
+   and my own scripts.
 3. Nintendo SDK functions are identified by **byte-signature matching against
    public clean-room decompilation projects**, which recover the SDK's public
    API by analysis of retail binaries. Those projects' symbol *names* are the
@@ -57,7 +66,7 @@ checkable per symbol rather than in the aggregate.
 **No game code. No game assets. Ever.**
 
 - No `main.dol`, no `.rel`, no disc image, no extracted textures, audio or video
-- No generated C — it is produced at build time from the user's own disc and is
+- No generated C — it is produced at build time from your own disc and is
   never committed
 - No memory-card saves, no ripped data of any kind
 
@@ -135,17 +144,20 @@ claim can be checked rather than taken on trust.
   code can interoperate is transformative fair use. That is what this runtime
   does.
 - **17 U.S.C. §1201** is not engaged: nothing here circumvents any technical
-  protection measure. The software reads a disc image the user already has.
+  protection measure. It reads a disc image you already have.
 
-**None of this is legal advice**, and invoking a provision is not the same as
-being covered by it — each depends on this project continuing to behave as
-described above. The reasoning, the conditions in full, and an honest account of
-where this project is exposed regardless, are in
-[docs/legal-position.md](docs/legal-position.md).
+**I am not a lawyer and none of this is legal advice.** Citing a provision is
+not the same as being covered by it. Each one holds only for as long as I keep
+this project
+behaving the way I have described. I have written up the reasoning, the
+conditions in full, and an honest account of where I am exposed anyway in
+[docs/legal-position.md](docs/legal-position.md) — including the parts that do
+not favour me.
 
-**Rights holders:** if you believe something here exceeds the above, please open
-an issue or contact the maintainer. The intent is to stay within these
-provisions, and anything that does not will be removed.
+**If you hold rights in this game** and think something here goes further than
+what I have set out above, open an issue or write to me. I would rather hear it
+from you and fix it than find out any other way, and anything that oversteps
+comes out.
 
 ## Licence
 
