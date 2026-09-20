@@ -676,6 +676,28 @@ This is the project. ~200 functions and the widest error bars in the plan.
       checksum in SRAM, which the mount verifies and which must be the
       complement of the id's sum. Saving and loading real files is still to
       come; the device and the mount are done.
+- [ ] **`verify-hash`, a native binary.** The hashes are recorded in
+      `config/GGSPA4.toml` and **nothing checks them**: project rule 8 and
+      the design document both describe this tool as though it exists, and it
+      does not, so the build currently accepts any `main.dol` it is pointed
+      at. Closing that makes a claim the project already makes about itself
+      true. It hashes the extracted executables rather than the disc image,
+      so container format does not matter and only a different revision is
+      refused — which is correct, since every address in `config/symbols/` is
+      keyed to GGSPA4.
+- [ ] **`extract-disc`, a native binary.** Pulls `main.dol` and
+      `mgso_pal.rel` out of an image so `verify-hash` and the recompiler have
+      something to work on.
+- [ ] **A first-run launcher** (design document, phase 6). Asks for the two
+      images, hash-checks them, runs the recompile, and leaves the module in
+      `module/` beside the executable — where the app already finds it. Not
+      first-run generation inside the game process: recompiling emits 50-150
+      MB of C and then compiles it, which needs a toolchain and minutes, and
+      does not belong behind a game window.
+      **These three are native binaries, not Python**, because they ship to
+      people with a game and a computer rather than a development
+      environment. The scripts under `tools/` stay scripts — different
+      audience, one that already has the toolchain.
 - [x] **Launch without a wrapper script.** The module is found rather than
       demanded: `MGS_MODULE`, then a `module` folder beside the executable,
       then the executable's own folder, then this repository's build tree —

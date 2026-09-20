@@ -264,6 +264,27 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
 
+**The player-facing tools are native binaries, not scripts.** `verify-hash`,
+`extract-disc` and the launcher ship to people who have a game and a
+computer, not a development environment. Requiring Python to get past setup
+would make the first five minutes the hardest part of the port, and on
+Windows it is a non-starter. They are written in C against the same runtime
+the port already builds, so they inherit the disc, FST and hashing code
+rather than reimplementing it, and ship as ordinary executables in the same
+folder. The scripts under `tools/` stay scripts: those are development
+tooling and their audience already has the toolchain.
+
+**What the hash check is actually checking, since a player's dump will differ
+from ours.** It hashes the **extracted executables** — `main.dol` and
+`mgso_pal.rel` — and never the disc image, which is what makes it
+independent of the container: NKit, redump, GCM, compressed or not, all
+yield the same executables. What it does reject is a different **revision**,
+and that rejection is the point rather than a limitation. Every address in
+`config/symbols/`, the whole patch table and the generated module are keyed
+to GGSPA4's exact layout, so another revision would load and then fail in
+ways indistinguishable from our own bugs. Refusing at setup, naming the
+mismatch, is far kinder than that.
+
 **The interim software rasteriser, and why it is not phase 3.** Phase 3 above
 specifies a TEV-to-GLSL shader generator on a Vulkan backend, and that remains
 the plan. But phases 1 and 2 need pixels on screen to be debuggable at all, so
