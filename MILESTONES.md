@@ -681,10 +681,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       then the executable's own folder, then this repository's build tree —
       any file ending `_recomp.so`, since its name carries the game id and a
       player has one. Discs were already located the same way, including
-      beside the executable for a portable folder. Verified from the
-      repository root; the portable-folder case is implemented but not yet
-      exercised end to end, because a run from an unrelated directory stops
-      earlier for want of a disc.
+      beside the executable for a portable folder — though that had
+      never actually worked, because `main.c` passed NULL where the locator
+      takes the executable's directory, leaving every search relative to the
+      binary as dead code. Both now take it and walk up from it.
+      **Verified with no arguments from the repository root, from `build/`,
+      and from an unrelated directory**: the disc and the module are found in
+      all three.
       **`module/` and `*_recomp.so` are git-ignored** — the module is
       generated from the player's own disc, so it is game-derived code and
       rule 8 forbids committing it. That is precisely what lets the
