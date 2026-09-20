@@ -176,7 +176,11 @@ int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit)
     memset(c, 0, sizeof *c);
     c->size    = mbit * 1024u * 1024u / 8u;
     c->card_id = mbit;
-    c->status  = MC_STATUS_READY | MC_STATUS_UNLOCKED;
+    /* The power-on status a real card reports, bit for bit: BUSY is set as
+     * well as READY and UNLOCKED. Leaving BUSY out gave 0x41 where hardware
+     * gives 0xC1, and 0x41 is what the SDK read immediately before it
+     * abandoned the mount with an I/O error. */
+    c->status  = MC_STATUS_BUSY | MC_STATUS_READY | MC_STATUS_UNLOCKED;
     c->image   = (uint8_t*)malloc(c->size);
     if (!c->image) return 0;
 

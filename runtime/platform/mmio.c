@@ -51,7 +51,24 @@
 #define EXI_TSTART         0x01u
 #define EXI_DMA            0x02u
 #define EXI_EXT            0x1000u /* a device is present in this slot */
+#define EXI_TCINT          0x08u   /* a transfer finished */
+#define EXI_TCINTMSK       0x04u   /* ...and the guest wants to hear about it */
+#define PI_EXI             (1u << 4)
 
+/* CLEARING THE START BIT IS NOT HOW A TRANSFER FINISHES.
+ *
+ * The same lesson the serial interface already cost us (F153): hardware also
+ * raises a transfer-complete interrupt, and a guest that waits for one rather
+ * than polling waits forever without it. The memory card's mount is exactly
+ * that kind of guest - it sets mountStep to 1 and then advances from the EXI
+ * interrupt, so with no interrupt the mount stops dead after the status read
+ * and eventually reports an I/O error. That is the shape this presented as:
+ * nine transfers in a whole boot and then silence.
+ *
+ * TCINT is kept beside the register rather than in it, because the guest
+ * clears it by writing a one and a plain register store cannot tell that from
+ * any other write.
+ */
 static uint32_t exi_reg(const MgsMmio* m, uint32_t off)
 {
     const uint8_t* p = &m->regs[off];
@@ -859,6 +876,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                  * Restoring it after every write keeps a guest that rewrites
                  * the whole register from accidentally unplugging the card. */
                 if (m->card_ready) m->regs[off - within + EXI_CSR + 2u] |= 0x10u;
+
             }
 
             if (m->trace_exi && m->exi_traced < 400u && chan < 2u) {
@@ -871,6 +889,16 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
             if (within == EXI_CR && (value & EXI_TSTART)) {
                 exi_transfer(m, chan, value);
                 m->regs[off + size - 1u] &= (uint8_t)~EXI_TSTART;
+                /* TCINT IS NOT RAISED HERE, THOUGH HARDWARE RAISES IT.
+                 * Tried: it made the boot strictly worse - EXI transfers in
+                 * a boot fell from 9 to 4, the card's geometry was never
+                 * stored at all, and the mount's error moved from IOERROR to
+                 * NOCARD. Delivering an interrupt from inside the store that
+                 * started the transfer re-enters the guest at a point it did
+                 * not choose; module.c's run loop already warns that raising
+                 * one moves the pc. If this is revisited it needs queueing to
+                 * a safe point the way DVD completions are, not asserting
+                 * from here. */
             }
         }
 

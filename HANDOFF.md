@@ -6352,10 +6352,61 @@ is a trace of the bus during the mount rather than more reading: no
 `ReadArray` (`0x52`) and no vendor-id (`0x85`) command has ever reached the
 device, so whatever fails, fails before the first real card read.
 
+### F170 — the card does mount, and the boot is too unstable to tell
+
+F169 below concluded the notice is not gated on the card. **That conclusion
+was reached against poisoned data and should not be relied on.** Two things
+were wrong with how it was measured.
+
+**The card image persists between runs, and a bad run poisons every run
+after it.** `saves/slot_a.raw` is written back on exit. The first run
+formats it and the SDK then writes to it; from the second run onward, that
+modified image is what loads. An hour of "why does the mount fail" was spent
+on a stale file rather than on the code, and deleting it changed EXI
+transfers in a boot from 9 to 100 immediately.
+
+**The boot is nondeterministic enough that none of it was A/B testable.**
+Four identical fresh starts, same binary, card deleted before each:
+
+| run | EXI transfers | `card->result` |
+|---|---|---|
+| 1 | 9 | IOERROR (-5) |
+| 2 | 4 | NOCARD (-3) |
+| 3 | 9 | IOERROR (-5) |
+| 4 | **100** | **READY (0)** |
+
+and three more at a longer budget gave a black screen, a notice screen, and a
+failed card respectively. This is F162's nondeterminism — DVD reads finish on
+host worker threads — reaching the card path.
+
+**What this does establish:** the device implementation is sound enough to
+mount. Run 4 reached `CARD_RESULT_READY` with 98 transfers actually reaching
+the card, which is a real mount, not an identification. What it does not
+establish is whether a mounted card removes the notice, because the runs that
+mount diverge elsewhere.
+
+**So the nondeterminism is now the blocking problem, ahead of the card and
+ahead of the video.** Nothing downstream can be judged while three identical
+runs disagree. That is where the next work belongs.
+
+Also corrected here: the card's power-on status was `0x41`, where hardware
+reports `0xC1` — BUSY is set alongside READY and UNLOCKED. Fixed, though it
+changed nothing on its own.
+
+And tried, and reverted: raising EXI's transfer-complete interrupt when a
+transfer finishes, which hardware does and which the serial interface already
+needed (F153). Asserting it from inside the store that started the transfer
+made the boot strictly worse — 9 transfers down to 4, geometry never stored,
+IOERROR becoming NOCARD — because it re-enters the guest at a point it did
+not choose. If revisited it needs queueing to a safe point the way DVD
+completions are, and the note in `mmio.c` says so where the decision lives.
+
 ### F169 — the notice is not the card, and the headless route past it
 
-**The notice screen is not gated on having a memory card.** With the card
-emulated, identified and formatted, the game still shows it. The guest is not
+**SUPERSEDED BY F170 — measured against a stale card image and an
+unrepeatable boot; the card mounts in some runs.** The notice screen appeared
+to be ungated on having a memory card: with the card emulated, identified and
+formatted, the game still showed it. The guest is not
 blocked while it does: stopped at `0x7F01DC94` in the engine overlay, having
 drawn 20,180,002 triangles and 9,764 frames in 120,000,000 steps. It is
 running its main loop and waiting for a button, which is what a notice does.
