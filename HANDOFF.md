@@ -6790,6 +6790,14 @@ scattered tallies:**
 - `reads refused` counts disc reads that failed, and each one is named as it
   happens. A failed read and a read never issued look identical in a log
   otherwise, and both read as "the game is not loading anything".
+- **Every disc read names its file by default**, which was behind
+  `MGS_TRACE_DVD` and so invisible in an ordinary run. Which file the game is
+  reading, and where in it, is the first question asked when loading looks
+  stuck, and it could previously only be answered by knowing to re-run with a
+  switch set. Reads are few — a boot is about four hundred — so the first
+  hundred are named and then every twentieth, which cannot flood a long
+  session but still leaves a trail through a stall. It is what identified the
+  eight reads of `movie.dat` against 99 of the voice banks.
 
 ---
 

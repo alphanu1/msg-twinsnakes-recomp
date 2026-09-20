@@ -223,10 +223,22 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
             continue;
 
         if (!mgs_fst_path(&disc->fst, i, path, sizeof path)) return -1;
-        if (getenv("MGS_TRACE_DVD"))
-            fprintf(stderr, "[disc] abs 0x%08X -> %s + 0x%X (file at 0x%08X, %u bytes)\n",
-                    offset, path, offset - e.offset_or_parent,
-                    e.offset_or_parent, e.length_or_next);
+        /* NAMED BY DEFAULT, NOT BEHIND A SWITCH.
+         *
+         * Which file the game is reading, and where in it, is the first
+         * question asked whenever loading looks stuck - and it was behind an
+         * environment variable, so an ordinary run showed nothing and the
+         * question could only be answered by knowing to re-run. Reads are
+         * few: a whole boot is about four hundred. The first hundred are
+         * named, then every twentieth, so a long session cannot flood the
+         * log but a stall still leaves a trail. */
+        {
+            static unsigned long seen;
+            ++seen;
+            if (getenv("MGS_TRACE_DVD") || seen <= 100ul || (seen % 20ul) == 0ul)
+                fprintf(stderr, "[disc] read %7u bytes  %s + 0x%X\n",
+                        length, path, offset - e.offset_or_parent);
+        }
         /* AN ABSOLUTE READ IS NOT A FILE READ, AND MUST NOT BE CLAMPED.
          *
          * mgs_disc_read trims a request to the end of the file it names,
