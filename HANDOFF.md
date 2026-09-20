@@ -6754,6 +6754,43 @@ interface starts. A real voice mixer is phase 4 and far larger; this is the
 part the movie needs, and it is testable on its own — the `audio:` line goes
 from STOPPED to playing.
 
+### F177 — two real DSP faults, and the audio init still does not complete
+
+Read what `__OSInitAudioSystem` actually waits on rather than guessing, and
+two of our registers were wrong:
+
+**`0x400` means "ARAM DMA still running", and we set it on completion.** The
+start-up programmes a transfer and then spins until that bit goes *clear*.
+Ours finishes inside the store that starts it, so the bit should never be
+seen set at all. Setting it alongside the completion flag was a
+contradiction, and an endless loop for anything that read it.
+
+**The DSP never reported in.** Start-up loads a small program into the
+coprocessor, takes it out of halt, and waits for mail from the DSP with its
+top bit set, carrying a value the SDK checks arithmetically. Nothing sent it.
+Clearing the halt bit now hands that mail over, which is what a DSP does at
+that point.
+
+Both are corrected and both are right regardless of what they fix.
+
+**They are not enough.** With `__OSInitAudioSystem` un-stubbed the boot still
+produces no output and has to be killed. So the wait that hangs is further in
+than these two, and the stub is restored again.
+
+**What is now in the log, because this was diagnosed by reading four
+scattered tallies:**
+
+- `renderer:` names what actually draws — a software rasteriser on 32 cores
+  presenting through SDL3. **There is no OpenGL and no Vulkan**; that is
+  phase 3's plan, and a log line naming an API we do not use would mislead in
+  the one place someone looks to find out.
+- `pipeline:` is the path from disc to screen on one line — megabytes read,
+  textures decoded, copies made, frames presented. When the picture stops,
+  the question is which of those stopped.
+- `reads refused` counts disc reads that failed, and each one is named as it
+  happens. A failed read and a read never issued look identical in a log
+  otherwise, and both read as "the game is not loading anything".
+
 ---
 
 *Record further findings here as they are established — including the ones that

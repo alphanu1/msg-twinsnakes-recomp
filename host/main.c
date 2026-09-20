@@ -29,6 +29,7 @@ void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
 uint64_t mgs_dvd_completed(void);
 uint64_t mgs_dvd_bytes(void);
 uint64_t mgs_dvd_callbacks(void);
+uint64_t mgs_dvd_errors(void);
 const MgsEfb* mgs_display_efb(void);
 const MgsGx* mgs_display_gx(void);
 const MgsGxRaster* mgs_display_raster(void);
@@ -1177,6 +1178,16 @@ int main(int argc, char** argv)
         mgs_display_set_fps_cap(headless ? 0u : 60u);
     }
     printf("worker pool: %u threads\n", mgs_jobs_worker_count(jobs));
+    /* SAY WHAT THE RENDERER ACTUALLY IS.
+     *
+     * There is no OpenGL and no Vulkan here: triangles are filled on the CPU
+     * and the finished frame is handed to SDL. The design document's phase 3
+     * replaces this with a shader generator on a Vulkan backend, and until
+     * that exists a log line naming an API we do not use would be a lie in
+     * the one place someone goes to find out. */
+    printf("renderer: software rasteriser on %u cores, %s\n",
+           mgs_jobs_worker_count(jobs) + 1u,
+           headless ? "no presentation (headless)" : "presenting through SDL3");
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
     overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));
 
@@ -1460,6 +1471,24 @@ int main(int argc, char** argv)
                         overlay_line("STOP: %s", why[r.stop]);
                         {
                             const MgsEfb* e = mgs_display_efb();
+                            /* THE PATH FROM DISC TO SCREEN, ON ONE LINE.
+                             *
+                             * Bytes off the disc become decoded textures,
+                             * textures become embedded-buffer copies, and
+                             * copies become frames. When a picture stops
+                             * moving the useful question is which of those
+                             * stopped, and reading it off four separate
+                             * tallies scattered through a long report is how
+                             * that question gets answered slowly. */
+                            printf("pipeline: %llu MB off the disc -> %u "
+                                   "textures decoded -> %llu copies -> "
+                                   "%llu frames presented\n",
+                                   (unsigned long long)(mgs_dvd_bytes() >> 20),
+                                   (unsigned)(mgs_display_raster()
+                                       ? mgs_display_raster()->tex.decodes : 0u),
+                                   (unsigned long long)(mgs_display_efb()
+                                       ? mgs_display_efb()->copies : 0u),
+                                   (unsigned long long)mgs_display_frames());
                             printf("display: %llu EFB copies (%llu with clear), "
                                    "%llu frames presented, XFB 0x%08X\n",
                                    (unsigned long long)e->copies,
@@ -1737,9 +1766,11 @@ int main(int argc, char** argv)
                         printf("DVD bytes delivered: %llu\n",
                                (unsigned long long)mgs_dvd_bytes());
                         printf("DVD reads completed: %llu  callbacks run: %llu"
+                               "  reads refused: %llu\n"
                                "  deferred (guest had interrupts off): %llu\n",
                                (unsigned long long)mgs_dvd_completed(),
                                (unsigned long long)mgs_dvd_callbacks(),
+                               (unsigned long long)mgs_dvd_errors(),
                                (unsigned long long)mgs_dvd_deferred());
                         {
                             /* MGS_SAVE_FRAME=<path> writes the last frame the

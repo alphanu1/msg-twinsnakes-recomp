@@ -801,6 +801,32 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         ++m->dsp_mails_sent;
     }
 
+    /* THE DSP REPORTS IN ONCE IT IS LET RUN.
+     *
+     * Start-up loads a small program into the coprocessor, takes it out of
+     * halt, and then waits to be told it booted - a mail from the DSP with
+     * its top bit set, carrying a fixed value the SDK checks. Nothing here
+     * ever sent it, so the wait never ended and audio never started, which is
+     * why the audio interface reads STOPPED after a whole run.
+     *
+     * Answering is what a DSP does at that point, so it is answered here:
+     * clearing the halt bit hands over the mail. The value is the one the
+     * SDK's own arithmetic tests for.
+     */
+    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
+        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        uint16_t now = (uint16_t)((cr[0] << 8) | cr[1]);
+        if (m->dsp_halted && !(now & 0x0004u)) {
+            uint8_t* hi = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_HI) - MMIO_BASE];
+            uint8_t* lo = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_LO) - MMIO_BASE];
+            hi[0] = 0x80u; hi[1] = 0x54u;      /* top bit: mail is waiting */
+            lo[0] = 0x43u; lo[1] = 0x48u;
+            m->dsp_halted = 0;
+        } else if (now & 0x0004u) {
+            m->dsp_halted = 1;
+        }
+    }
+
     /* THE THREE STATUS BITS ARE WRITE-ONE-TO-CLEAR.
      *
      * `__DSPHandler` acknowledges its interrupt with
@@ -964,7 +990,15 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
             uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
             if (cr) {
                 uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
-                v |= (uint16_t)(DSP_CR_ARINT | DSP_CR_ARDMA_DONE);
+                /* ARINT SAYS "FINISHED"; 0x400 SAYS "STILL RUNNING".
+                 *
+                 * Setting both was a contradiction, and the audio system's
+                 * start-up is where it showed: it programmes a transfer and
+                 * then spins until 0x400 goes CLEAR. Ours finishes inside the
+                 * store that starts it, so that bit should never be seen set
+                 * at all, and leaving it raised is an endless loop. */
+                v |= (uint16_t)DSP_CR_ARINT;
+                v &= (uint16_t)~DSP_CR_ARDMA_DONE;
                 cr[0] = (uint8_t)(v >> 8);
                 cr[1] = (uint8_t)v;
                 m->dsp_status |= (uint16_t)DSP_CR_ARINT;

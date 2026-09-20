@@ -40,6 +40,13 @@
 
 static uint64_t s_completed, s_callbacks, s_deferred;
 static uint64_t s_bytes, s_reads_late;
+static uint64_t s_read_errors;
+
+/* Reads the disc refused. A read that fails returns a negative length and is
+ * otherwise indistinguishable, in a log, from one the game never issued -
+ * and "the game is not loading anything" is how that presents. */
+uint64_t mgs_dvd_errors(void);
+uint64_t mgs_dvd_errors(void) { return s_read_errors; }
 uint64_t mgs_dvd_bytes(void);
 uint64_t mgs_dvd_bytes(void) { return s_bytes; }
 
@@ -75,6 +82,11 @@ void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd)
     for (i = 0; i < n; ++i) {
         uint32_t callback = done[i]->guest_callback;
         ++s_completed;
+        if (done[i]->result < 0) {
+            ++s_read_errors;
+            fprintf(stderr, "[dvd] READ FAILED: %u bytes at 0x%08X -> 0x%08X\n",
+                    done[i]->length, done[i]->offset, done[i]->guest_dest);
+        }
         s_bytes += (done[i]->result > 0) ? (uint64_t)done[i]->result : 0u;
 
         if (callback) {

@@ -71,6 +71,7 @@ typedef struct MgsMmio {
     int          card_ready;
     MgsExiIpl    ipl;            /* the clock and the machine's settings */
     uint8_t      exi_cs;
+    int          dsp_halted;     /* the coprocessor is held, so it owes a mail */
     uint8_t      exi_tcint[3];   /* transfer-complete, per channel */
     uint64_t     exi_transfers, exi_to_card;
     int          trace_exi;
