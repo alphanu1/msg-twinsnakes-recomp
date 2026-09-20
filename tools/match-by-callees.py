@@ -84,9 +84,24 @@ def binary_callers(asm_glob, named, addrs):
     return out
 
 
+def rel_call_sites(path):
+    """Addresses in the DOL that the overlay calls. A function the game
+    reaches across the module boundary is externally visible, which excludes
+    every candidate the reference declares static - a third signal, and one
+    neither the callee nor the caller test can see."""
+    out = set()
+    try:
+        for ln in open(path, errors='ignore'):
+            for t in re.findall(r'\bbl fn_(80[0-9A-Fa-f]{6})', ln):
+                out.add(int(t, 16))
+    except OSError:
+        pass
+    return out
+
+
 def reference(src_dir):
     """Function names in source order per file, with each one's callees."""
-    order, calls = {}, {}
+    order, calls, is_static = {}, {}, {}
     for p in sorted(glob.glob(os.path.join(src_dir, '**', '*.c'), recursive=True)):
         txt = re.sub(r'/\*.*?\*/', '', open(p, errors='ignore').read(), flags=re.S)
         base = os.path.basename(p)
@@ -103,8 +118,9 @@ def reference(src_dir):
                 body = ''
             order.setdefault(name, (base, idx))
             calls[name] = set(re.findall(r'\b([A-Za-z_]\w*)\s*\(', body))
+            is_static[name] = m.group(0).lstrip().startswith('static')
             idx += 1
-    return order, calls
+    return order, calls, is_static
 
 def main():
     ap = argparse.ArgumentParser()
@@ -112,12 +128,14 @@ def main():
     ap.add_argument('--boundaries', required=True)
     ap.add_argument('--asm', required=True)
     ap.add_argument('--reference', required=True)
+    ap.add_argument('--rel-asm', default='')
     ap.add_argument('--max-addr', default='0x8004A000')
     a = ap.parse_args()
 
     named, addrs = dol_functions(a.symbols, a.boundaries)
     callees = binary_callees(a.asm, named)
-    order, ref_calls = reference(a.reference)
+    order, ref_calls, is_static = reference(a.reference)
+    exported = rel_call_sites(a.rel_asm)
     limit = int(a.max_addr, 16)
 
     proposed, ambiguous, unbounded = [], 0, 0
@@ -160,7 +178,22 @@ def main():
         if not (known - GENERIC):
             ambiguous += 1; continue
 
-        hits = [c for c in cands if known <= ref_calls.get(c, set())]
+        # THE TEST RUNS BOTH WAYS.
+        #
+        # "Everything it calls, the candidate also calls" is only half a
+        # match: a candidate that calls a great deal more still passes. So
+        # the converse is required too - anything the candidate calls that we
+        # could have recognised must actually be there. Functions the
+        # compiler inlined will fail this and cost a few real matches, which
+        # is the right way round to be wrong.
+        vocabulary = set(named.values())
+        # Called from the overlay means not static.
+        if addr in exported:
+            cands = [c for c in cands if not is_static.get(c, False)]
+
+        hits = [c for c in cands
+                if known <= ref_calls.get(c, set())
+                and (ref_calls.get(c, set()) & vocabulary) <= known]
         if len(hits) == 1:
             proposed.append((addr, hits[0], lo[0], sorted(known)))
         else:
