@@ -1038,9 +1038,36 @@ int main(int argc, char** argv)
         }
     }
 
+    /* FIND THE MODULE RATHER THAN DEMAND IT.
+     *
+     * Needing --module and a step budget on every launch is what a wrapper
+     * script exists to paper over, and a port that cannot be double-clicked
+     * is not really an executable. The usual places, in order: next to this
+     * binary, then the build tree relative to the working directory. */
     if (!module_path) {
-        printf("\nNo --module given: the runtime is up, but there is no game\n"
-               "code to run. Pass --module <gGGSPA4_recomp.so> to boot.\n");
+        static char found[1024];
+        const char* candidates[] = {
+            "build/phase1/module/gGGSPA4_recomp.so",
+            "../phase1/module/gGGSPA4_recomp.so",
+            "../../phase1/module/gGGSPA4_recomp.so",
+            "gGGSPA4_recomp.so",
+        };
+        unsigned ci;
+        for (ci = 0; ci < sizeof candidates / sizeof candidates[0]; ++ci) {
+            FILE* f = fopen(candidates[ci], "rb");
+            if (f) {
+                fclose(f);
+                snprintf(found, sizeof found, "%s", candidates[ci]);
+                module_path = found;
+                printf("module: found %s\n", module_path);
+                break;
+            }
+        }
+    }
+
+    if (!module_path) {
+        printf("\nNo module found and none given: the runtime is up, but\n"
+               "there is no game code to run. Pass --module <path>.\n");
     } else {
         MgsModule mod;
         void* cpu;
@@ -1198,7 +1225,13 @@ int main(int argc, char** argv)
                          * few seconds of guest time - enough to reach the
                          * first frames - and the ceiling exists to bound a
                          * hang, not to end a healthy run. */
-                        uint64_t limit = 40000000ull;
+                        /* HEADLESS stops early on purpose: it is a
+                         * measurement and wants a bounded, repeatable run.
+                         * A WINDOW is a person watching, and stopping after
+                         * a minute reads as a hang on whatever was on screen
+                         * - which is exactly how it was read. */
+                        uint64_t limit = headless ? 40000000ull
+                                                  : 40000000000ull;
                         {
                             const char* env = getenv("MGS_STEPS");
                             if (env) limit = strtoull(env, NULL, 0);

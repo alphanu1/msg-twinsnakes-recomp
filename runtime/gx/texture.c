@@ -412,6 +412,41 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         }
     }
 
+    /* MGS_DUMP_TEX=<w>x<h> writes the first few decoded textures of that
+     * shape as PPM. The video frame is a 512x448 RGBA8 texture decoded once
+     * per frame; whether the fault is in the game's decode or in ours cannot
+     * be told from the screen, because both end as noise. Looking at the
+     * texture itself separates them. */
+    {
+        static int want_w = -1, want_h, dumped;
+        if (want_w < 0) {
+            const char* e = getenv("MGS_DUMP_TEX");
+            want_w = 0;
+            if (e && sscanf(e, "%dx%d", &want_w, &want_h) != 2) want_w = 0;
+        }
+        if (want_w && (int)width == want_w && (int)height == want_h &&
+            dumped < 4) {
+            char path[256];
+            FILE* f;
+            snprintf(path, sizeof path, "%s/tex_%d.ppm",
+                     getenv("MGS_DUMP_DIR") ? getenv("MGS_DUMP_DIR") : ".",
+                     dumped);
+            f = fopen(path, "wb");
+            if (f) {
+                unsigned px;
+                fprintf(f, "P6\n%u %u\n255\n", width, height);
+                for (px = 0; px < width * height; ++px) {
+                    uint32_t c = t->texels[px];
+                    fputc((c >> 16) & 0xFF, f);
+                    fputc((c >> 8) & 0xFF, f);
+                    fputc(c & 0xFF, f);
+                }
+                fclose(f);
+                ++dumped;
+            }
+        }
+    }
+
     t->hash = hash;
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;

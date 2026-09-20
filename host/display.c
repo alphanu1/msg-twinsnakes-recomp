@@ -145,6 +145,7 @@ static unsigned s_best_lit, s_best_w, s_best_h;
 static const char* s_seq_prefix;
 static int s_seq_init;
 static unsigned s_seq_every = 400u;
+static unsigned s_seq_from;
 
 static int save_efb_ppm(const char* path, unsigned w, unsigned h)
 {
@@ -236,10 +237,31 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
             s_seq_prefix = getenv("MGS_SAVE_SEQ");
             { const char* e = getenv("MGS_SAVE_EVERY");
               if (e && *e) s_seq_every = (unsigned)strtoul(e, NULL, 0);
-              if (!s_seq_every) s_seq_every = 1u; } }
+              if (!s_seq_every) s_seq_every = 1u; }
+            { const char* e = getenv("MGS_SAVE_FROM_COPY");
+              if (e && *e) s_seq_from = (unsigned)strtoul(e, NULL, 0); } }
+        /* WHERE WE WRITE versus WHERE THE SCREEN READS.
+         *
+         * The copy takes its destination from the blitter's address register;
+         * presentation takes its source from the video interface's field base.
+         * With two framebuffers alternating, any disagreement means we fill
+         * one and show the other - which flashes between a good frame and a
+         * never-written one rather than being steadily wrong. */
+        if ((cmd & COPY_TO_XFB) && getenv("MGS_TRACE_XFBPAIR")) {
+            static unsigned n;
+            if (n++ < 24u) {
+                uint32_t shown = mgs_mmio_xfb_address(mgs_host_mmio());
+                fprintf(stderr, "[xfb] copy -> 0x%08X   VI shows 0x%08X   %s\n",
+                        s_efb.copy_dest, shown,
+                        s_efb.copy_dest == shown ? "same" : "DIFFERENT");
+            }
+        }
+
         if ((cmd & COPY_TO_XFB) && s_seq_prefix) {
             static unsigned seq_n, seq_i;
-            if ((seq_n++ % s_seq_every) == 0u && seq_i < 60u) {
+            unsigned idx = seq_n++;
+            if (idx >= s_seq_from && ((idx - s_seq_from) % s_seq_every) == 0u
+                && seq_i < 240u) {
                 char path[512];
                 snprintf(path, sizeof path, "%s_%04u.ppm", s_seq_prefix, seq_i++);
                 save_efb_ppm(path, copy_w, copy_h);
