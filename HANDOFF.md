@@ -6441,6 +6441,48 @@ most useful lead on the video: the two paths differ in the frame-rate cap
 (60 windowed, uncapped headless), in presentation, and in reading a real
 keyboard, and nothing else.
 
+### F171 — "damaged", and the serial that has to be earned
+
+A screenshot settled in one frame what several runs had not: the game does
+not say there is no card, it says **"The Memory Card in Slot A is damaged and
+cannot be used"**, and offers Retry or Continue without saving. So the device
+works, the card is read, and the **format** is what is rejected.
+
+`VerifyID` refuses a card for four reasons, and only three are obvious: the
+device id must be zero, the size in the header must equal the size the card
+reports over the bus, and the header's checksum pair must verify. The fourth
+is the one that cost the time:
+
+**The serial must be derived from the machine's flash id.** Bytes 12 to 19 of
+the serial seed a linear congruential generator; each of the first twelve
+bytes must then equal the matching byte of `OSSramEx::flashID` for that
+channel, plus the next value the generator produces. A card whose serial is
+anything else passes every checksum and is still refused. Ours held twelve
+bytes of `0xA0 + i`, chosen to be recognisable in a hex dump, which is
+precisely the kind of placeholder this check exists to reject.
+
+A consequence worth keeping: **a formatted card is only valid for the machine
+whose SRAM it was made against.** Ours is generated against the flash id the
+IPL device reports, so the two have to be initialised in that order —
+`mgs_mmio_attach_card` does SRAM first and passes `&ipl.sram[0x14]` to the
+card.
+
+The header layout was wrong too, though harmlessly: the serial is 32 bytes,
+and the format time and SRAM fields written at 0x0C-0x1B were landing inside
+it. Those fields do not exist in `CARDID` and are gone.
+
+**`tests/test_card.c` now checks a freshly formatted image against every one
+of those rules** — device id, size, header checksum, the serial derivation,
+and the checksum pairs on both directory copies and both allocation tables —
+with no game running. The serial rule is written out in the test from the
+specification rather than from the code that generates it, so an arithmetic
+slip cannot hide in both. It passes.
+
+**Not yet confirmed against the game.** Headless runs still stop after three
+card commands (F170's instability), so they never reach the block reads where
+this is verified; the windowed path reaches the message reliably and is the
+test that matters.
+
 ---
 
 *Record further findings here as they are established — including the ones that

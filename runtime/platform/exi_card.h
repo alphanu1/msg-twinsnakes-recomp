@@ -40,7 +40,11 @@ typedef struct MgsExiCard {
 /* Loads `path` if it holds a card of the right size, and otherwise creates a
  * formatted one there. Returns 0 if no card could be provided, in which case
  * the interface reports an empty slot. */
-int  mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit);
+/* `flash_id` is the machine's twelve-byte flash id, from SRAM. The card's
+ * serial is generated from it, because the SDK refuses a card whose serial
+ * does not match - see format_card. */
+int  mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit,
+                       const uint8_t* flash_id);
 void mgs_exi_card_free(MgsExiCard* c);
 
 /* Chip select. Deasserting ends whatever command was running, which is how

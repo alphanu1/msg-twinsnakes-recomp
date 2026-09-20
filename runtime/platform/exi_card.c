@@ -69,11 +69,6 @@ static void ensure_dir_for(const char* path)
 #define CMD_CHIP_ERASE     0xF4u
 
 static void put16(uint8_t* p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
-static void put32(uint8_t* p, uint32_t v)
-{
-    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
-    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
-}
 
 /* THE CARD'S CHECKSUM, WHICH THE SDK CHECKS ON EVERY MOUNT.
  *
@@ -108,7 +103,7 @@ static void card_checksum(const uint8_t* p, unsigned len,
 #define BAT_FREE          0x0006u
 #define BAT_LAST_ALLOC    0x0008u
 
-static void format_card(MgsExiCard* c, unsigned mbit)
+static void format_card(MgsExiCard* c, unsigned mbit, const uint8_t* flash_id)
 {
     unsigned total_blocks = c->size / MGS_CARD_SECTOR;
     uint8_t* hdr = c->image;
@@ -119,19 +114,39 @@ static void format_card(MgsExiCard* c, unsigned mbit)
 
     memset(c->image, 0xFF, c->size);
 
-    /* Block 0 - the header. The serial is the card's identity; the SDK reads
-     * it back but does not require any particular value, so it is fixed
-     * rather than random: a reproducible run wants a reproducible card. */
+    /* Block 0 - the header, and the reason a plausible one still reads as
+     * damaged.
+     *
+     * The layout is serial[32], then deviceID, size and encode, then padding
+     * out to a checksum pair in the last four bytes. Getting those right is
+     * necessary and not sufficient: the SDK also demands that the serial be
+     * DERIVED FROM THE MACHINE'S FLASH ID, which lives in SRAM. Each of the
+     * first twelve bytes must equal the corresponding flash-ID byte plus a
+     * value from a linear congruential generator seeded by bytes 12 to 19 of
+     * the serial itself. An arbitrary serial passes every checksum and is
+     * still refused, which is exactly what the game reported: "The Memory
+     * Card in Slot A is damaged and cannot be used."
+     *
+     * So the serial is generated here the same way the SDK generates it when
+     * it formats a card, against the flash ID this machine reports.
+     */
     memset(hdr, 0x00, 0x200u);
-    for (i = 0u; i < 12u; ++i) hdr[i] = (uint8_t)(0xA0u + i);
-    put32(hdr + 0x0Cu, 0u);              /* format time, high word */
-    put32(hdr + 0x10u, 0u);              /* format time, low word  */
-    put32(hdr + 0x14u, 0u);              /* SRAM bias              */
-    put32(hdr + 0x18u, 0u);              /* SRAM language          */
-    put32(hdr + 0x1Cu, 0u);
-    put16(hdr + 0x20u, 0u);              /* device id              */
-    put16(hdr + 0x22u, (uint16_t)mbit);  /* size, in megabits      */
-    put16(hdr + 0x24u, 0u);              /* encoding: ASCII        */
+    {
+        int64_t rand = 0x1234;      /* the seed, stored in serial[12..19] */
+        unsigned k;
+        for (k = 0; k < 8u; ++k)
+            hdr[12u + k] = (uint8_t)((uint64_t)rand >> (56u - k * 8u));
+        for (k = 0; k < 12u; ++k) {
+            uint8_t flash = flash_id ? flash_id[k] : 0u;
+            rand = (rand * 1103515245 + 12345) >> 16;
+            hdr[k] = (uint8_t)(flash + (uint8_t)rand);
+            rand = ((rand * 1103515245 + 12345) >> 16) & 0x7FFF;
+        }
+    }
+    put16(hdr + 0x20u, 0u);              /* device id: 0, or it reads broken */
+    put16(hdr + 0x22u, (uint16_t)mbit);  /* size in megabits, checked against
+                                          * the id the card itself reports   */
+    put16(hdr + 0x24u, 0u);              /* encoding: ASCII                  */
     card_checksum(hdr, HDR_CHECKSUM, &sum, &inv);
     put16(hdr + HDR_CHECKSUM, sum);
     put16(hdr + HDR_CHECKSUM + 2u, inv);
@@ -168,7 +183,8 @@ static void format_card(MgsExiCard* c, unsigned mbit)
     c->dirty = 1;
 }
 
-int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit)
+int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit,
+                      const uint8_t* flash_id)
 {
     FILE* f;
     long have = 0;
@@ -203,7 +219,7 @@ int mgs_exi_card_init(MgsExiCard* c, const char* path, unsigned mbit)
                 c->path, have, c->size);
     }
 
-    format_card(c, mbit);
+    format_card(c, mbit, flash_id);
     mgs_exi_card_flush(c);
     fprintf(stderr, "[card] formatted a new %u Mbit card at %s\n",
             mbit, c->path[0] ? c->path : "(memory only)");

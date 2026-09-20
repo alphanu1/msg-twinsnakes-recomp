@@ -56,3 +56,7 @@ add_test(NAME texture COMMAND test_texture)
 add_executable(test_mem_shims test_mem_shims.c)
 target_link_libraries(test_mem_shims PRIVATE mgs_runtime)
 add_test(NAME mem_shims COMMAND test_mem_shims)
+
+add_executable(test_card test_card.c)
+target_link_libraries(test_card PRIVATE mgs_runtime)
+add_test(NAME card COMMAND test_card)

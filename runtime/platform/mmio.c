@@ -1171,7 +1171,9 @@ void mgs_mmio_attach_card(MgsMmio* m, GuestMemory* mem, const char* path)
     if (!m) return;
     m->exi_mem = mem;
     mgs_exi_ipl_init(&m->ipl);
-    m->card_ready = mgs_exi_card_init(&m->card, path, 16u);
+    /* SRAM first: the card's serial is generated from the flash id it holds,
+     * which sits at offset 0x14 in the block, twelve bytes per channel. */
+    m->card_ready = mgs_exi_card_init(&m->card, path, 16u, &m->ipl.sram[0x14]);
     /* Announce the slot as occupied from the outset: the SDK reads EXT before
      * it touches anything else, and a card that appears later looks like one
      * the player pushed in mid-boot. */
