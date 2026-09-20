@@ -117,12 +117,6 @@ def main():
         if not seq: continue
 
         sig = [calls.get(x, set()) for x in run_addrs]
-        # A RUN OF FUNCTIONS THAT CALL NOTHING PROVES NOTHING.
-        # With empty signatures every constraint is vacuous and the
-        # alignment is decided by counting alone - which is the case
-        # F159 was written about. Require at least one function in the
-        # run to carry a callee we can recognise.
-        if not any(sig): ambiguous += 1; continue
         al = alignments(sig, seq, set() if a.forward_only else vocabulary)
         if len(al) == 1:
             proposed.append((run_addrs, al[0], fname))

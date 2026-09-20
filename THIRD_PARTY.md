@@ -73,6 +73,24 @@ size out of `id & 0xFC` and the sector size from a table indexed by
 300 ms — were read from `dolsdk2004`, for behaviour only, per the note
 below. See HANDOFF F166 and F167.
 
+### `mkdd` as a second naming reference
+
+`mkdd` was pinned for its symbol maps. Stage 5l also reads its **SDK sources**
+— `extern/mkdd/libs/dolphin` and `libs/PowerPC_EABI_Support` — as a second
+reference for function names, source order and call structure, at
+`doldecomp/mkdd` commit `ffc513c5`.
+
+It earns its place by disagreeing usefully. Where `dolsdk2004` left a gap
+ambiguous between two candidates, mkdd's ordering resolved it; and it covers
+translation units `dolsdk2004` does not carry at all, including the
+CodeWarrior standard library that a good deal of `main.dol` consists of. Seven
+of the names in stage 5l came from it.
+
+**Read for names, order and call structure. No code is copied from it**, none
+is compiled into this project, and the same rule 9 reasoning recorded below
+for `dolsdk2004` applies unchanged: it is a community decompilation produced
+from shipped binaries, not a leak.
+
 ### Why `dolsdk2004` is not a rule 9 problem, and where it is still exposed
 
 Rule 9 forbids leaked source, **including a leaked copy of Nintendo's Dolphin

@@ -1341,6 +1341,63 @@ stage 5j's method (the only reference function that calls both
 one). 1,017 named to **1,024**, and the measure that governs the port —
 SDK entry points the engine calls — from 198 to **203 of 336**.
 
+## Stage 5m — A second reference, and the opcode that settles it · **DONE**
+
+Stage 5l ran against `dolsdk2004` alone and stalled. `mkdd` was already
+pinned for its symbol maps and carries **139 Dolphin SDK sources** plus the
+CodeWarrior standard library, which `dolsdk2004` does not have at all. Added
+as a second reference, it took the sequence matcher from one weak alignment
+to **three clean ones with nothing ambiguous**.
+
+```sh
+tools/match-by-sequence.py --reference extern/mkdd/libs   # and match-by-callees.py
+```
+
+### The card's own opcodes, as a third route
+
+Three of the run's names could be checked against something neither the
+reference nor the call graph can see — **the command byte each function
+sends to the memory card**, which this project independently implemented in
+`runtime/platform/exi_card.c` this same session:
+
+| address | constant in the code | command | name |
+|---|---|---|---|
+| `0x8003853C` | `0x8100`, `0x8101` | `0x81` SetInterrupt | `__CARDEnableInterrupt` |
+| `0x800385FC` | `0x8300` | `0x83` ReadStatus | `__CARDReadStatus` |
+| `0x800386EC` | `0x8900` | `0x89` ClearStatus | `__CARDClearStatus` |
+
+Three routes agreeing — sequence position, call pattern, and the hardware
+opcode compiled into the instruction stream. These are the best-evidenced
+names in the map.
+
+### Four more from exact counts in closed regions
+
+```
+binary:     CARDInit -> [0x8 bytes] -> [0x38 bytes] -> __CARDGetControlBlock
+reference:  CARDInit -> __CARDGetFontEncode -> __CARDSetDiskID -> __CARDGetControlBlock
+```
+
+Two slots, two functions, both ends named, correct order. The same shape gave
+`EXI2_Poll` and `EXI2_ReadN`, sitting between `EXI2_EnableInterrupts` and
+`EXI2_WriteN` with sizes matching their neighbours.
+
+And `DummyLen` in `CARDUnlock.c`, by callee and caller both.
+
+### Still refused
+
+`0x8003D22C` is `__CARDFormatRegion` or `CARDFormat` — three reference
+functions for two slots, so one was inlined and the alignment is not forced.
+`0x8003D810` is probably `CARDClose`, on which both references agree, but its
+region holds four unknowns against an unclear tail. Neither is claimed on one
+route.
+
+### Result
+
+**1,024 named to 1,032**, and the measure that governs the port — SDK entry
+points the engine calls — reached **203 of 336 (60.4%)**. Re-running both
+matchers against both references afterwards yields nothing further: the
+routes are exhausted again until new anchors arrive.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

@@ -1465,3 +1465,11 @@
 .text 0x80022D60 0x70 OSCheckStopwatch sequence
 .text 0x8003AE0C 0xD0 WriteCallback sequence
 .text 0x8003AEDC 0xC8 EraseCallback sequence
+.text 0x800397D0 0xC4 DummyLen callees+callers
+.text 0x8003853C 0xC0 __CARDEnableInterrupt sequence+opcode
+.text 0x800385FC 0xF0 __CARDReadStatus sequence+opcode
+.text 0x800386EC 0xAC __CARDClearStatus sequence+opcode
+.text 0x80039108 0x8 __CARDGetFontEncode sequence
+.text 0x80039110 0x38 __CARDSetDiskID sequence
+.text 0x80048034 0x8 EXI2_Poll sequence
+.text 0x8004803C 0x8 EXI2_ReadN sequence

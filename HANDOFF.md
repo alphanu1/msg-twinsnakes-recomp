@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,024 / 18,485 | 5.5% |
+| Functions named | 1,032 / 18,485 | 5.6% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 203 / 336 | 60.4% |
 | SDK call sites covered | 6,149 / 7,078 | 86.9% |
