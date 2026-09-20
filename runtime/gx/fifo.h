@@ -86,6 +86,7 @@ typedef struct MgsGxVertexFormat {
     unsigned pos_format;     /* 0 u8, 1 s8, 2 u16, 3 s16, 4 f32 */
     unsigned pos_shift;      /* fixed-point fractional bits */
     unsigned nrm_count, nrm_format;
+    unsigned nrm_index3;     /* VAT_A bit 31: an indexed normal is THREE indices */
     unsigned clr_count[2];   /* 0 = rgb, 1 = rgba */
     unsigned clr_format[2];  /* 0 565, 1 888, 2 888x, 3 4444, 4 6666, 5 8888 */
     unsigned tex_count[8], tex_format[8], tex_shift[8];
@@ -203,7 +204,7 @@ typedef struct MgsGx {
     uint32_t copy_pending;       /* BP 0x52, the command, or 0 */
 
     uint64_t commands, primitives, vertices, triangles, desyncs;
-    uint8_t  recent[64];     /* the bytes just parsed, for desync reports */
+    uint8_t  recent[512];    /* the bytes just parsed, for desync reports */
     unsigned recent_at;
     uint32_t cmdring[128];   /* opcode<<24 | length, as parsed */
     unsigned cmdring_at;
@@ -212,6 +213,13 @@ typedef struct MgsGx {
     uint64_t dlring[8];
     unsigned dlring_at;
     uint64_t dl_calls, dl_ragged, dl_truncated;
+    uint32_t trace_dl_addr;  /* MGS_TRACE_DLADDR: follow one list */
+    int      dl_follow, dl_followed;
+    unsigned dl_follow_n;
+    const char* why_key[8];  /* desyncs by reason */
+    uint64_t why_hit[8];
+    unsigned why_n;
+    unsigned dl_misaligned_traced;
 } MgsGx;
 
 void mgs_gx_init(MgsGx* gx, GuestMemory* mem);

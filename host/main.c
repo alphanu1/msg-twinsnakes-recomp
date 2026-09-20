@@ -1300,6 +1300,11 @@ int main(int argc, char** argv)
                             }
                             {
                                 const MgsGx* g = mgs_display_gx();
+                                unsigned k;
+                                printf("  desyncs by reason:\n");
+                                for (k = 0; k < g->why_n; ++k)
+                                    printf("    %-44s x%llu\n", g->why_key[k],
+                                           (unsigned long long)g->why_hit[k]);
                                 printf("  display lists: %llu called, "
                                        "%llu with a size that is not a "
                                        "multiple of 32, %llu ending "

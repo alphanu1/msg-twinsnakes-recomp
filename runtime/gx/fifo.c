@@ -38,6 +38,12 @@ void mgs_gx_vertex_format(const MgsGx* gx, unsigned vat, MgsGxVertexFormat* out)
     out->pos_format = (a >> 1) & 7u;
     out->pos_shift  = (a >> 4) & 0x1Fu;
     out->nrm_count  = ((a >> 9) & 1u) ? 3u : 1u;   /* 1 = one normal, 3 = nbt */
+    /* VAT_A bit 31, NormalIndex3. When the normal is INDEXED and this is set,
+     * the vertex carries THREE indices - normal, binormal, tangent - not one.
+     * Reading bits 0..30 and stopping makes every such vertex short by two
+     * indices, which ends the vertex run early and leaves the rest of it to be
+     * parsed as commands. */
+    out->nrm_index3 = (a >> 31) & 1u;
     out->nrm_format = (a >> 10) & 7u;
     out->clr_count[0]  = ((a >> 13) & 1u) ? 1u : 0u;
     out->clr_format[0] = (a >> 14) & 7u;
@@ -99,8 +105,12 @@ unsigned mgs_gx_vertex_size(const MgsGxVertexFormat* f)
     for (i = 0; i < GX_VA_COUNT; ++i) {
         switch (f->kind[i]) {
             case GX_ATTR_NONE:    continue;
-            case GX_ATTR_INDEX8:  n += 1u; continue;
-            case GX_ATTR_INDEX16: n += 2u; continue;
+            case GX_ATTR_INDEX8:
+                n += (i == GX_VA_NRM && f->nrm_index3) ? 3u : 1u;
+                continue;
+            case GX_ATTR_INDEX16:
+                n += (i == GX_VA_NRM && f->nrm_index3) ? 6u : 2u;
+                continue;
             case GX_ATTR_DIRECT:  break;
         }
 
@@ -138,6 +148,8 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
     {
         const char* e;
         gx->trace_teximg = getenv("MGS_TRACE_TEXIMG") != NULL;
+        e = getenv("MGS_TRACE_DLADDR");
+        gx->trace_dl_addr = e ? (uint32_t)strtoull(e, NULL, 0) : 0u;
         e = getenv("MGS_TRACE_GXDESYNC");
         gx->trace_desync = e ? strtoull(e, NULL, 0) : 0u;
         e = getenv("MGS_TRACE_GXCP");
@@ -178,13 +190,29 @@ static uint32_t be32(const uint8_t* p)
 static void desync(MgsGx* gx, const char* why, uint8_t op, unsigned detail)
 {
     ++gx->desyncs;
+
+    /* WHICH desync, not how many. 388,030 of them with one instance examined
+     * says nothing about the other 388,029: the first one found need not be
+     * the common one, and fixing it moved the total by 0.5%. Counting by
+     * reason says where the mass actually is. Reasons are string literals, so
+     * the pointer identifies them. */
+    {
+        unsigned k;
+        for (k = 0; k < gx->why_n; ++k)
+            if (gx->why_key[k] == why) { ++gx->why_hit[k]; break; }
+        if (k == gx->why_n && gx->why_n < 8u) {
+            gx->why_key[gx->why_n] = why;
+            gx->why_hit[gx->why_n] = 1u;
+            ++gx->why_n;
+        }
+    }
     if (!gx->trace_desync || gx->desyncs > gx->trace_desync) return;
     {   /* the 32 bytes leading up to this, oldest first */
         unsigned k;
         fprintf(stderr, "[gx] bytes before desync %llu:",
                 (unsigned long long)gx->desyncs);
-        for (k = 32u; k > 0u; --k)
-            fprintf(stderr, " %02X", gx->recent[(gx->recent_at - k) & 63u]);
+        for (k = 256u; k > 0u; --k)
+            fprintf(stderr, " %02X", gx->recent[(gx->recent_at - k) & 511u]);
         fprintf(stderr, "\n");
     }
     {   /* The last display lists called. A GX display list is 32-byte
@@ -420,8 +448,8 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         /* The operand bytes as they arrived. Lists that declare 83 bytes sit
          * 64 apart and therefore overlap, so either this size or this address
          * is not what the game wrote - and the raw bytes settle which. */
-        if (gx->trace_desync && be32(body + 4) < 256u &&
-            gx->dl_ragged < 6u)
+        if (gx->trace_desync && (be32(body) & 0x1Fu) &&
+            gx->dl_misaligned_traced++ < 8u)
             fprintf(stderr, "[gx] CALL_DL operand: %02X %02X %02X %02X  "
                             "%02X %02X %02X %02X\n",
                     body[0], body[1], body[2], body[3],
@@ -453,6 +481,12 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
     gx->cmdring[gx->cmdring_at & 127u] = ((uint32_t)op << 24) | (len & 0xFFFFFFu);
     ++gx->cmdring_at;
 
+    if (gx->dl_follow && gx->dl_follow_n < 400u) {
+        ++gx->dl_follow_n;
+        fprintf(stderr, "[dl] %4u  op=%02X len=%u\n",
+                gx->dl_follow_n, op, len);
+    }
+
     if (op >= GX_OP_DRAW_FIRST) emit_primitive(gx, op, body, len);
     /* Index loads address transform-unit memory the renderer does not use
      * yet; counted, not acted on. */
@@ -470,7 +504,7 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
          * that could not be an opcode, but the byte alone does not say
          * whether the stream is padded, misaligned, or carrying data we
          * mis-sized upstream - the bytes around it do. */
-        gx->recent[gx->recent_at++ & 63u] = data[i];
+        gx->recent[gx->recent_at++ & 511u] = data[i];
 
         if (!gx->want && !gx->have) {
             gx->opcode = data[i];
@@ -597,6 +631,16 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
      * 841,627,908 desyncs. So the address check stays, the mapped-memory
      * check stays, and a size beyond any plausible list is still refused.
      */
+    /* MGS_TRACE_DLADDR=<addr> follows ONE list command by command, from its
+     * first byte. The desync report shows where the parser noticed, which is
+     * later than where it went wrong; this shows the whole list so the two can
+     * be compared. */
+    if (gx->trace_dl_addr && addr == gx->trace_dl_addr && !gx->dl_followed) {
+        gx->dl_followed = 1;
+        gx->dl_follow = 1;
+        fprintf(stderr, "[gx] following list 0x%08X/%u\n", addr, size);
+    }
+
     gx->dlring[gx->dlring_at & 7u] = ((uint64_t)addr << 32) | (size & 0xFFFFFFFFu);
     ++gx->dlring_at;
 
@@ -682,6 +726,8 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
                 fprintf(stderr, "\n");
             }
         }
+
+        if (gx->dl_follow && addr == gx->trace_dl_addr) gx->dl_follow = 0;
 
         memcpy(gx->buf, saved, saved_have);
         gx->opcode = saved_buf_op;

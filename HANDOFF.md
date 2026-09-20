@@ -308,6 +308,12 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **Fixing the first desync you find (F161).** All 388,030 desyncs in a video
+  run share ONE reason. The first one found was a different, rarer fault, and
+  hours went into it. Count failures by reason BEFORE examining any instance.
+- **Changing a size without changing the reader (F161).** `mgs_gx_vertex_size`
+  and `mgs_gx_decode_vertex` both encode the vertex layout. Fixing one alone
+  just moves which consistency check fires.
 - **"A ragged display-list size proves corruption" (F160).** It does not. The
   game passes non-multiples routinely - 14,717 of 18,000 in a boot - and F137
   had already measured that rounding them up costs 231 desyncs. The refutation
@@ -5759,6 +5765,57 @@ display lists, all dumped at the desync - and the next step is to trace
 commands from that list's start rather than from the point where the parser
 noticed. It noticed late by construction until tonight's fix, and it may still
 notice late for reasons that are not opcode-related.
+
+
+### F161 — NormalIndex3, and a lesson about which desync to look at
+
+`VAT_A` bit 31 is **NormalIndex3**: when the normal is INDEXED and the bit is
+set, the vertex carries **three** indices - normal, binormal, tangent - not
+one. `mgs_gx_vertex_format` read bits 0..30 and stopped, so every such vertex
+was short by four bytes (2 -> 6 for INDEX16).
+
+Caught by following one display list command by command from its first byte
+(`MGS_TRACE_DLADDR`). The list diverged at its **fourth** command, 66 bytes in:
+
+| | before | after |
+|---|---|---|
+| the draw at command 4 | `9B len=50` | **`9B len=66`** |
+| commands 5, 6 | garbage | `9B len=66`, `9B len=66` |
+
+`vat_a[3] = 0xD8F76607` - bit 31 set, so the game genuinely uses it.
+
+**The fix had to be made in two places, and one alone was worse than useless.**
+Fixing only `mgs_gx_vertex_size` moved the desync count by nothing: the size
+said 16 while the decoder still consumed 12, and the parser's own consistency
+check turned "unknown opcode" into "vertex decoded to a different size". The
+decoder skips the normal with `skip_attr`, which consumes exactly one index
+regardless. Both now agree. Same shape as F153's controller: half a fix reads
+as no fix.
+
+**And it is not the video bug.** Desyncs went 389,912 -> 388,030 - half a
+percent. What it did remove is the entire `unknown opcode` class.
+
+**The lesson is about method, not about GX.** Counting desyncs BY REASON should
+have been the first measurement and was close to the last:
+
+```
+display list address is not 32-byte aligned   x388,030
+```
+
+**One cause, all of them.** Every hour spent on the first desync found was
+spent on the rare case. A single instance of 388,030 says nothing about the
+other 388,029, and "fix the first thing that fires" only works when there is
+one fault.
+
+**Where the real bug now stands.** The misalignment is itself a symptom: the
+operand sizes are `0x07`, `0x1A`, `0x57`, and a 7-byte display list does not
+exist, so the parser is reading data as commands. It reports at `dl_depth=0`,
+in the OUTER stream, where the earlier one was `dl_depth=1` inside a list - so
+there are at least two divergence sites. Every check that fires is downstream
+of an earlier silent divergence, which is the third time tonight that has been
+true.
+
+Boot is unchanged: 2,338,178 commands, **0 desyncs**.
 
 ---
 

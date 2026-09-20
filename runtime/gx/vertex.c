@@ -215,7 +215,16 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
      * of bytes is what matters - getting it wrong desynchronises the vertex. */
     if (f->kind[GX_VA_NRM] != GX_ATTR_NONE) {
         unsigned c = (f->nrm_format == 4u) ? 4u : (f->nrm_format >= 2u) ? 2u : 1u;
-        skip_attr(&r, f->kind[GX_VA_NRM], c * (f->nrm_count == 3u ? 9u : 3u));
+        /* NormalIndex3 (VAT_A bit 31): an INDEXED normal carries three
+         * indices - normal, binormal, tangent - not one. The size function
+         * counts them, so this has to skip them, or the two disagree and the
+         * vertex ends in the wrong place. Skipping one index where the stream
+         * holds three is how a whole display list came apart. */
+        unsigned idx = (f->nrm_index3 &&
+                        f->kind[GX_VA_NRM] != GX_ATTR_DIRECT) ? 3u : 1u;
+        while (idx--)
+            skip_attr(&r, f->kind[GX_VA_NRM],
+                      c * (f->nrm_count == 3u ? 9u : 3u));
     }
 
     read_color_attr(gx, &r, f, 0, v);
