@@ -6799,7 +6799,22 @@ scattered tallies:**
   session but still leaves a trail through a stall. It is what identified the
   eight reads of `movie.dat` against 99 of the voice banks.
 
-### F178 — the loader thread suspends itself, and nothing resumes it
+### F178 — WRONG: the suspended thread is normal, and nothing blocks at all
+
+**The conclusion below is wrong and was checked rather than trusted.** The
+main thread is suspended at 20,000,000 and at 60,000,000 steps as well —
+long before the freeze — so it is parked from early boot and runs nothing,
+which is ordinary for a game that works from its own threads.
+
+Worse for the theory: **the thread states are identical before and during the
+freeze.** Same five threads, same queues, same suspended main. Nothing blocks
+and nothing changes. So the freeze is not a thread getting stuck; the engine
+thread keeps running and drawing and simply stops asking for data — a
+decision inside the game's own state machine.
+
+What survives from it is the elimination, which is worth keeping:
+
+
 
 When the picture freezes **every disc read stops**, not only the movie's:
 `stage.dat` is streaming right up to the last `movie.dat + 0x38000` and then
@@ -6835,6 +6850,46 @@ loader parks itself and expects a completion to wake it. If that completion
 is an audio one, audio is still implicated, but the mechanism is a missed
 wake-up rather than a starved buffer, and a missed wake-up can be found
 without building a mixer.
+
+### F179 — un-stubbing the audio init does not hang, it crashes
+
+F176 recorded that removing the `__OSInitAudioSystem` stub made the boot
+"produce no output and have to be killed", and read that as the hang its
+original note predicted. Run under a debugger instead of a timeout, it is a
+**segmentation fault**, and the backtrace says why:
+
+```
+#0  mgs_host_patch_dispatch
+#1  dolrecomp_dispatch_replacement
+#2  func_800195E0          <- EXIGetID + 0x2D0
+#3  mgs_dol_call
+#4  func_800195E0          <- and again, forever
+```
+
+The guest re-enters `EXIGetID` through the dispatch path until the **host**
+stack is exhausted. Each guest call costs a host frame, so a guest loop that
+never terminates is not a spin here — it is a crash.
+
+**This is not caused by the recent EXI work.** F176 saw the same failure
+before the transfer-complete interrupt existed; only its description was
+wrong, because a timeout cannot tell a crash from a hang.
+
+**What it means for audio.** The stub's original note reasoned that the DSP
+flags it waits on could never be raised. That reasoning may well still be
+right, but it is not what stops it today: it never reaches those waits. Only
+one DSP control write happens before the crash, and the run does not even
+print the DSP banner. The blocker is in the EXI path, before any of the audio
+hardware is touched.
+
+**Why a loop becomes a crash, which is the reusable part.** Guest calls nest
+on the host stack. Anywhere the guest retries indefinitely — waiting on a
+device that answers wrongly — the symptom is a segfault deep in
+`mgs_dol_call`, not a visible spin. That is worth knowing before reading the
+next such backtrace as memory corruption.
+
+**Next:** find why `EXIGetID` does not terminate. It is called during
+start-up against a bus that now has a card, a clock and settings on it, and
+something it reads keeps it retrying.
 
 ---
 

@@ -271,6 +271,7 @@ void mgs_mmio_init(MgsMmio* m)
         m->trace_si = e != NULL;
         m->trace_vi = getenv("MGS_TRACE_VI") != NULL;
         m->trace_exi = getenv("MGS_TRACE_EXI") != NULL;
+        m->trace_dsp = getenv("MGS_TRACE_DSP") != NULL;
         m->si_trace_cap = 200u;
         if (e && *e) {
             unsigned long n = strtoul(e, NULL, 0);
@@ -816,6 +817,13 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
     if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
         uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
         uint16_t now = (uint16_t)((cr[0] << 8) | cr[1]);
+        /* MGS_TRACE_DSP names every control write, which is how a spin in the
+         * audio start-up is identified: it waits on several bits in turn, and
+         * the last value written before the log goes quiet says which. */
+        if (m->trace_dsp && m->dsp_traced < 80u) {
+            ++m->dsp_traced;
+            fprintf(stderr, "[dsp] control <- 0x%04X\n", now);
+        }
         if (m->dsp_halted && !(now & 0x0004u)) {
             uint8_t* hi = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_HI) - MMIO_BASE];
             uint8_t* lo = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_LO) - MMIO_BASE];
