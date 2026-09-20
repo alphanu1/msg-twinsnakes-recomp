@@ -103,6 +103,50 @@ int main(void)
         }
     }
 
+    /* DOES A READ RETURN THE BYTES WE WROTE?
+     *
+     * Every checksum above can be right and the card still read as damaged,
+     * because what the SDK verifies is what comes back over the bus, not
+     * what is in the file. The address a read command carries is packed
+     * across four bytes - seven bits of offset, two more, then the page -
+     * and a mistake there returns real bytes from the wrong place, which
+     * fails every checksum exactly as a bad format would.
+     *
+     * So a read is driven here the way the SDK drives one: the command, four
+     * address bytes, four the card ignores, then the data.
+     */
+    {
+        static const uint32_t probes[] = { 0u, 0x200u, 8192u, 3u * 8192u, 0x1FC00u };
+        unsigned k;
+        for (k = 0; k < sizeof probes / sizeof probes[0]; ++k) {
+            uint32_t addr = probes[k];
+            uint8_t b;
+            unsigned j;
+            int wrong = 0;
+
+            mgs_exi_card_select(&card, 1);
+            b = 0x52u;                          mgs_exi_card_byte(&card, &b);
+            b = (uint8_t)(addr >> 17);          mgs_exi_card_byte(&card, &b);
+            b = (uint8_t)(addr >> 9);           mgs_exi_card_byte(&card, &b);
+            b = (uint8_t)((addr >> 7) & 3u);    mgs_exi_card_byte(&card, &b);
+            b = (uint8_t)(addr & 0x7Fu);        mgs_exi_card_byte(&card, &b);
+            for (j = 0; j < 4u; ++j) { b = 0xFFu; mgs_exi_card_byte(&card, &b); }
+
+            for (j = 0; j < 64u; ++j) {
+                b = 0xFFu;
+                mgs_exi_card_byte(&card, &b);
+                if (b != card.image[addr + j]) ++wrong;
+            }
+            mgs_exi_card_select(&card, 0);
+
+            if (wrong) {
+                printf("FAIL %s:%d: reading 0x%06X returned %u of 64 bytes "
+                       "from the wrong place\n", __FILE__, __LINE__, addr, wrong);
+                ++failures;
+            }
+        }
+    }
+
     mgs_exi_card_free(&card);
     printf(failures ? "card: FAILED\n" : "card: ok\n");
     return failures ? 1 : 0;

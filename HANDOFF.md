@@ -6487,10 +6487,35 @@ machine's flash id, and reformats when any of them disagree. Corrupting a
 byte of the image and re-running shows it: "not a card this machine can read
 - reformatting", then a clean load next time.
 
-**Not yet confirmed against the game.** Headless runs still stop after three
-card commands (F170's instability), so they never reach the block reads where
-this is verified; the windowed path reaches the message reliably and is the
-test that matters.
+**The format is now provably right, and the game still says damaged.**
+`tests/test_card.c` also drives a read the way the SDK drives one — the
+command, four address bytes, four ignored, then data — and confirms the bytes
+that come back are the bytes that were written, at page and block boundaries
+alike. So the format, the checksums, the serial and the read addressing are
+all correct, and the message persists.
+
+**Which means "damaged" is most likely not a format complaint.** Every
+headless run ends with `CARD_RESULT_IOERROR` after three card commands, with
+`mountStep 0` — the mount never reaches the block reads where any of the
+above would be examined. A game that asks for a card and gets an I/O error
+has to say something, and this is plausibly what it says. The format work
+was worth doing and is not the fix.
+
+**Where the I/O error comes from is still open, and the 2004 reference does
+not explain it.** In that code the operations we see — clear status, read
+status — return NOCARD on failure, never IOERROR, and the path after them
+sets `mountStep = 1`. We observe IOERROR with `mountStep` still 0, which
+those branches cannot produce. The game's SDK is build 0x2301 from 2003 and
+the reference is 2004-04-20, so this is a place where they plausibly differ
+and reading the reference further will not settle it.
+
+**The strongest remaining hypothesis** is the transfer-complete interrupt.
+After `mountStep = 1` the SDK's mount continues from a completion, and we
+never signal one; a mount that stalls and then times out would report an I/O
+error. That was tried (F170) and reverted because asserting it from inside
+the store that starts the transfer re-enters the guest at a point it did not
+choose. Doing it properly means queueing the interrupt to a safe point the
+way DVD completions are, and that is the next thing to build.
 
 ---
 

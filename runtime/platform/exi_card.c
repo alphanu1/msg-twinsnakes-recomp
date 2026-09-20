@@ -363,6 +363,20 @@ void mgs_exi_card_byte(MgsExiCard* c, uint8_t* byte)
         case 4u: c->address |= (uint32_t)(in & 0x7Fu); break;
         default: break;
         }
+        if (c->position == 4u && getenv("MGS_TRACE_CARD")) {
+            /* WHICH BLOCK, AND IS IT THE ONE ASKED FOR?
+             *
+             * A mount reads the five system blocks, a 512-byte page at a
+             * time. If the address packing here is wrong the SDK gets real
+             * bytes from the wrong place, every checksum fails, and the game
+             * reports a damaged card - which is indistinguishable from a
+             * badly formatted one unless the addresses are visible. */
+            static unsigned n;
+            if (n++ < 24u)
+                fprintf(stderr, "[card] read block %u page %u (address 0x%06X)\n",
+                        c->address / MGS_CARD_SECTOR,
+                        (c->address % MGS_CARD_SECTOR) / 512u, c->address);
+        }
         if (c->position > 1u) {
             uint32_t a = c->address & (c->size - 1u);
             *byte = c->image[a];
