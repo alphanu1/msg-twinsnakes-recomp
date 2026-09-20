@@ -99,7 +99,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
     ++m->exi_transfers;
     /* Only slot A carries a card, and only while it is the selected device. */
     if (chan != 0u || !exi_has_device(m)) {
-        if (m->trace_exi && m->exi_traced < 40u) {
+        if (m->trace_exi && m->exi_traced < 400u) {
             ++m->exi_traced;
             fprintf(stderr, "[exi] DROPPED: chan %u cs %u rw %u len %u "
                             "(no device there)\n", chan, m->exi_cs, rw, tlen);
@@ -111,7 +111,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
     if (cr & EXI_DMA) {
         uint32_t mar = exi_reg(m, base + EXI_MAR) & 0x03FFFFFFu;
         uint32_t len = exi_reg(m, base + EXI_LENGTH);
-        if (m->trace_exi && m->exi_traced < 40u) {
+        if (m->trace_exi && m->exi_traced < 400u) {
             ++m->exi_traced;
             fprintf(stderr, "[exi] dma rw=%u len=%u -> 0x%08X (cmd 0x%02X)\n",
                     rw, len, mar, m->card.command);
@@ -136,7 +136,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
             out |= (uint32_t)b << sh;
         }
         if (rw != 1u) exi_set_reg(m, base + EXI_DATA, out);
-        if (m->trace_exi && m->exi_traced < 40u) {
+        if (m->trace_exi && m->exi_traced < 400u) {
             ++m->exi_traced;
             fprintf(stderr, "[exi] imm rw=%u len=%u  in 0x%08X -> out 0x%08X  "
                             "(pos now %u, cmd 0x%02X)\n",
@@ -861,6 +861,13 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 if (m->card_ready) m->regs[off - within + EXI_CSR + 2u] |= 0x10u;
             }
 
+            if (m->trace_exi && m->exi_traced < 400u && chan < 2u) {
+                static const char* nm[5] = { "CSR", "MAR", "LEN", "CR ", "DATA" };
+                ++m->exi_traced;
+                fprintf(stderr, "[exi] w ch%u %s = 0x%08X (size %u)\n",
+                        chan, within / 4u < 5u ? nm[within / 4u] : "???",
+                        value, size);
+            }
             if (within == EXI_CR && (value & EXI_TSTART)) {
                 exi_transfer(m, chan, value);
                 m->regs[off + size - 1u] &= (uint8_t)~EXI_TSTART;

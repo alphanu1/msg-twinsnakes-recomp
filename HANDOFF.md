@@ -6352,6 +6352,44 @@ is a trace of the bus during the mount rather than more reading: no
 `ReadArray` (`0x52`) and no vendor-id (`0x85`) command has ever reached the
 device, so whatever fails, fails before the first real card read.
 
+### F169 — the notice is not the card, and the headless route past it
+
+**The notice screen is not gated on having a memory card.** With the card
+emulated, identified and formatted, the game still shows it. The guest is not
+blocked while it does: stopped at `0x7F01DC94` in the engine overlay, having
+drawn 20,180,002 triangles and 9,764 frames in 120,000,000 steps. It is
+running its main loop and waiting for a button, which is what a notice does.
+
+A formatted card is still an *empty* card, and this reads as a "no save data"
+notice rather than a "no card" one. So the whole premise of F166-F168 — stub
+or emulate the card and the screen goes away — was wrong, though the work it
+produced is not: the card is needed for saves regardless, and the EXI bus is
+better understood for it.
+
+**What actually gets past it: Down, then A.** Not A on its own, which is what
+several attempts this session used. The dialog has a default the cursor must
+be moved off first, which is recorded in this file already from an earlier
+session and was not read carefully enough:
+
+```
+MGS_PAD_SCRIPT="20000:0004,20040:0000,20400:0100,20440:0000,\
+60000:0004,60040:0000,60400:0100,60440:0000,\
+120000:0004,120040:0000,120400:0100,120440:0000"
+```
+
+40-tick holds, in `mgs_mmio_tick_frame` units. With this the intro movie is
+reached headless — `lit 71%` from video frame 2280 — and the reproducible
+path finally covers the part of the boot where the rendering faults live.
+
+**The corruption does not reproduce there.** Zero noisy frames through video
+frame 4440, and no `[copytex]` stride warning ever fires. Roughness sits at
+**0**, though, where a moving picture scores 1-5, so this is more likely the
+frozen flat frame than real playback. Whatever makes the picture break in a
+window is absent, or not yet reached, headless. That difference is now the
+most useful lead on the video: the two paths differ in the frame-rate cap
+(60 windowed, uncapped headless), in presentation, and in reading a real
+keyboard, and nothing else.
+
 ---
 
 *Record further findings here as they are established — including the ones that
