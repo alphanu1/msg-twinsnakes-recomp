@@ -27,10 +27,10 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,032 / 18,485 | 5.6% |
+| Functions named | 1,034 / 18,485 | 5.6% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 203 / 336 | 60.4% |
-| SDK call sites covered | 6,149 / 7,078 | 86.9% |
+| SDK entry points the engine calls, named | 204 / 336 | 60.7% |
+| SDK call sites covered | 6,151 / 7,078 | 86.9% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
 | **Average of the five** | | **70.6%** |
 

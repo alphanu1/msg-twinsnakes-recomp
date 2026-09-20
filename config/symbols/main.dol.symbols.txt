@@ -1473,3 +1473,5 @@
 .text 0x80039110 0x38 __CARDSetDiskID sequence
 .text 0x80048034 0x8 EXI2_Poll sequence
 .text 0x8004803C 0x8 EXI2_ReadN sequence
+.text 0x800247A8 0x50 PSMTXTranspose closed-region
+.text 0x80029F6C 0x70 DVDSetAutoFatalMessaging closed-region

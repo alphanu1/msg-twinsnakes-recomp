@@ -1398,6 +1398,57 @@ points the engine calls — reached **203 of 336 (60.4%)**. Re-running both
 matchers against both references afterwards yields nothing further: the
 routes are exhausted again until new anchors arrive.
 
+## Stage 5n — Closed regions, and a count match that would have lied · **DONE**
+
+The best-evidenced names so far all had the same shape: two named functions
+with N unknowns between them, and a reference file with exactly N functions
+between those two names. Nothing inlined, nothing stripped, no guess about
+where a file begins — the region is closed at both ends and there is exactly
+one way to fill it. `tools/match-closed-regions.py` looks for that shape
+everywhere rather than by hand.
+
+```sh
+tools/match-closed-regions.py \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --asm 'build/phase0/out/asm/*.s' \
+    --reference extern/mkdd/libs extern/dolsdk2004/src
+```
+
+**Two names, both forced single slots:** `PSMTXTranspose` between
+`PSMTXConcat` and `PSMTXInverse`, and `DVDSetAutoFatalMessaging` between
+`ShowMessage` and `__DVDPrintFatalMessage`. One unknown, one reference
+function, both ends pinned.
+
+### The refusal is the interesting part
+
+One region is exactly the right size, closed at both ends, and **still
+wrong**. Between `__CARDPutControlBlock` and `__CARDSync` sit two unknowns,
+and the reference has exactly two functions there — `CARDGetResultCode` then
+`CARDFreeBlocks`. A count match would have assigned both. The calls say
+otherwise:
+
+| address | slot it would take | what it actually calls |
+|---|---|---|
+| `0x80039264` | `CARDGetResultCode` | `__CARDGetControlBlock`, `__CARDGetDirBlock` |
+| `0x800393B4` | `CARDFreeBlocks` | interrupts only |
+
+Counting free blocks needs the directory; returning a result code does not.
+The evidence is the wrong way round, so either this build orders the file
+differently or something between them was inlined. **Both names are refused**
+— and F159's rule now has a worked example rather than a warning: a matching
+count inside a closed region, with both ends pinned, can still be a lie.
+
+The tool prints every refusal with the call that contradicted it, because a
+region that is the right size but disagrees is also how a wrong name already
+in the map would announce itself.
+
+### Result
+
+**1,032 named to 1,034**; SDK entry points the engine calls, **204 of 336**.
+Re-running yields nothing further — closed regions are exhausted along with
+the other two routes until new anchors arrive.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.
