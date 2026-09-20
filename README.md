@@ -53,10 +53,8 @@ is counted together rather than spread across the others.
 
 <!-- progress:end -->
 
-Regenerate with `python3 tools/progress.py --readme`. Nothing here is typed by
-hand: every square is counted from `config/symbols/` and the recovered function
-boundaries, because a remembered figure drifts and a stale one is worse than
-none.
+Every square is counted from `config/symbols/` and the recovered function
+boundaries, not typed by hand.
 
 ## Provenance
 
