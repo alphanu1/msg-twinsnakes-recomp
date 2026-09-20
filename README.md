@@ -92,6 +92,23 @@ copy of the game, by **full decompilation and recompilation**:
    [DolRecomp](https://github.com/ExpansionPak/DolRecomp), compiled, and linked
    against an SDK runtime **written from scratch** for this project.
 
+**How the analysis was done, precisely.** Every step above is automated static
+analysis of a retail GameCube binary I own: disassembly, boundary recovery,
+byte-signature matching, and mechanical translation to C by a tool. No leaked
+proprietary source, no confidential material, and no internal documentation
+from Konami, Nintendo or Silicon Knights was referenced, consulted or used at
+any point, by me or by any tool in the chain. The SDK reimplementation in
+`runtime/` is written from scratch against observed behaviour and the public
+documentation of the hardware.
+
+I do not describe this as a *clean-room* reimplementation, because that term
+means something specific — one team documents behaviour without the second team
+ever seeing the original — and that is not the process here. This is direct
+reverse engineering of a binary I own, which is what CDPA s.50B and the US
+interoperability cases permit, and it is described as what it is. Where a
+name comes from a decompilation project that does describe itself as clean
+room, that is recorded per symbol.
+
 Every symbol name, address and structure layout here was produced by that
 process. Where a name comes from a public decompilation project, it is recorded
 in [THIRD_PARTY.md](THIRD_PARTY.md) with its upstream and commit.
@@ -110,6 +127,9 @@ checkable per symbol rather than in the aggregate.
 - No generated C — it is produced at build time from your own disc and is
   never committed
 - No memory-card saves, no ripped data of any kind
+- No SDK headers, no proprietary symbol files, no object files, no libraries.
+  The tree is source I wrote, my own recovered symbol maps, and build scripts;
+  it holds no compiled artefact of any kind, from any party
 
 The repository contains our own code, our own configuration, and symbol names.
 You supply your own disc; the build hashes what you give it and refuses anything

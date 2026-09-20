@@ -15,6 +15,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->depth_test = 1;
     r->depth_update = 1;
     r->depth_func = 3;            /* less-or-equal, the usual default */
+    r->trace_noisy = getenv("MGS_TRACE_NOISY") != NULL;
     r->color_update = 1;          /* power-on: writes enabled, no blend */
     r->alpha_update = 1;
     /* MGS_TRACE_RASTER=N explains the first N triangles; bare =1 keeps the
@@ -703,6 +704,41 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
             tex = bind_texture(r, gx, map);
             if (!tex) ++r->tex_bind_failed;
+
+            /* WHICH TEXTURE IS NOISE AT THE MOMENT IT IS SAMPLED?
+             *
+             * The embedded buffer already holds noise by the time it is
+             * copied, so the noise arrives through a draw, and a draw can
+             * only put there what it samples. Scoring the bound texture at
+             * bind time names it directly. Large ones only: a glyph is
+             * legitimately busy at this scale and would drown the signal. */
+            if (tex && r->trace_noisy && tex->width >= 256u) {
+                unsigned yy, cnt = 0u, rough = 0u;
+                for (yy = 0; yy < tex->height; yy += 8u) {
+                    unsigned xx;
+                    for (xx = 1u; xx < tex->width; xx += 4u) {
+                        uint32_t a = tex->texels[yy * tex->width + xx - 1u];
+                        uint32_t b = tex->texels[yy * tex->width + xx];
+                        int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF)
+                                       + (a & 0xFF)) / 3;
+                        int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF)
+                                       + (b & 0xFF)) / 3;
+                        rough += (unsigned)(va > vb ? va - vb : vb - va);
+                        ++cnt;
+                    }
+                }
+                if (cnt && (rough / cnt) > 20u && r->noisy_logged < 10u) {
+                    /* Only the noisy ones. The clean binds run for thousands
+                     * of draws before the picture breaks and would fill any
+                     * cap long before the interesting one appeared. */
+                    unsigned rr = rough / cnt;
+                    ++r->noisy_logged;
+                    fprintf(stderr, "[bind] %ux%u fmt 0x%X at 0x%08X  "
+                            "roughness %u%s\n", tex->width, tex->height,
+                            tex->format, tex->addr, rr,
+                            rr > 20u ? "   <-- NOISE" : "");
+                }
+            }
             if (tex) {
                 texture_wrap(&gx->bp, map, &wrap_s, &wrap_t, &bilinear);
                 ++r->textured;

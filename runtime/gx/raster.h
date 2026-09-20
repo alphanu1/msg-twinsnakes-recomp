@@ -49,6 +49,8 @@ typedef struct MgsGxRaster {
     int      color_update, alpha_update;
     unsigned blend_src, blend_dst;
     uint64_t blended, write_masked;
+    int      trace_noisy;    /* MGS_TRACE_NOISY: score bound textures */
+    unsigned noisy_logged;
     uint32_t cmode_key[16]; uint64_t cmode_hit[16]; unsigned cmode_n;
     uint64_t black_over_lit;       /* black pixels drawn over lit ones */
     uint64_t black_over_lit_x[20]; /* ...by column, 32px buckets */
