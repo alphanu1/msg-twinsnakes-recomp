@@ -124,6 +124,7 @@ typedef struct MgsDvd {
     MgsJobPool*   jobs;
     GuestMemory*  mem;
     MgsDvdRequest pending[MGS_DVD_MAX_PENDING];
+    uint64_t      refused_full;   /* reads turned away with no slot free */
 
     /* The guest's tick count as of the last drain, so a read submitted
      * between drains knows when it started. */
@@ -186,5 +187,10 @@ long mgs_dvd_read_sync(MgsDvd* dvd, const char* path, uint32_t guest_dest,
 void mgs_dvd_release(MgsDvdRequest* req);
 
 unsigned mgs_dvd_pending_count(const MgsDvd* dvd);
+
+/* How many requests are still occupying a slot, and how many reads were
+ * turned away because none was free. */
+unsigned mgs_dvd_in_flight(const MgsDvd* dvd);
+uint64_t mgs_dvd_refused_full(const MgsDvd* dvd);
 
 #endif

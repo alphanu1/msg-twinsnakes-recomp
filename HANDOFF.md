@@ -6799,6 +6799,43 @@ scattered tallies:**
   session but still leaves a trail through a stall. It is what identified the
   eight reads of `movie.dat` against 99 of the voice banks.
 
+### F178 — the loader thread suspends itself, and nothing resumes it
+
+When the picture freezes **every disc read stops**, not only the movie's:
+`stage.dat` is streaming right up to the last `movie.dat + 0x38000` and then
+nothing is read again. That is the whole loading pipeline halting at once,
+which is a different fault from a movie player going idle.
+
+**It is not our DVD layer refusing them.** Requests occupy a slot until their
+callback runs, and callbacks only run with guest interrupts enabled, so an
+exhausted pool was the obvious candidate — 4,538 deferrals are recorded. It
+is counted now and the answer is **zero refusals**: 406 reads, 406
+completions, 406 callbacks, no slot ever denied.
+
+**The game stops issuing them, because its main thread is suspended:**
+
+```
+0x801ECD70  ready  prio 16  SUSPENDED
+   OSSuspendThread <- (loader) <- rel_loader_LoadRel <- main
+```
+
+Not blocked on a read and not sleeping on a queue — **parked by
+`OSSuspendThread`**, waiting for an `OSResumeThread` that never comes. Every
+other thread is healthy: the engine thread is still running and drawing,
+which is why the game keeps rendering, the pad thread polls, and the vsync
+thread sleeps on `VIWaitForRetrace` as it should.
+
+So the question is no longer "why does the movie stop reading" but **"who
+should resume thread 0x801ECD70, and why doesn't it"**. That is a much
+smaller question, and it is answerable: find the `OSResumeThread` call that
+pairs with this suspend.
+
+It also reframes the audio theory. The suspend is a deliberate handover — the
+loader parks itself and expects a completion to wake it. If that completion
+is an audio one, audio is still implicated, but the mechanism is a missed
+wake-up rather than a starved buffer, and a missed wake-up can be found
+without building a mixer.
+
 ---
 
 *Record further findings here as they are established — including the ones that

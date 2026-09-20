@@ -40,8 +40,30 @@ static MgsDvdRequest* alloc_request(MgsDvd* dvd)
     unsigned i;
     for (i = 0; i < MGS_DVD_MAX_PENDING; ++i)
         if (!dvd->pending[i].in_use) return &dvd->pending[i];
+
+    /* NO SLOT LEFT, AND THAT IS SILENT TO THE GAME.
+     *
+     * A request occupies its slot until the completion callback has run, and
+     * callbacks only run when the guest has interrupts enabled. If they stop
+     * being delivered the slots never come back, every later read is refused,
+     * and ALL loading stops at once - which is exactly what a freeze that
+     * takes the whole game with it looks like. Counted, because a refusal
+     * here is indistinguishable in a log from a read the game never issued.
+     */
+    ++dvd->refused_full;
+    fprintf(stderr, "[dvd] NO FREE REQUEST SLOT: all %u are still pending, "
+                    "so this read is refused\n", (unsigned)MGS_DVD_MAX_PENDING);
     return NULL;
 }
+
+unsigned mgs_dvd_in_flight(const MgsDvd* dvd)
+{
+    unsigned i, n = 0;
+    for (i = 0; i < MGS_DVD_MAX_PENDING; ++i) if (dvd->pending[i].in_use) ++n;
+    return n;
+}
+
+uint64_t mgs_dvd_refused_full(const MgsDvd* dvd) { return dvd->refused_full; }
 
 MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
                                   uint32_t guest_dest, uint32_t offset,
