@@ -36,8 +36,49 @@ const MgsGxRaster* mgs_display_raster(void);
 
 void mgs_card_service(const MgsModule* mod, void* cpu);
 
+/* The engine's own globals, once OSLink has told us where they are. */
+static uint32_t s_engine_bss;
+
+/* WHETHER THE ENGINE EVER TRIES TO UNPARK ITSELF.
+ *
+ * A cutscene sets a bit in the scheduler's global mask, which gates most of
+ * the task levels off, and clears it when the movie ends (HANDOFF F180). The
+ * movie does not end, so the game stays parked - but that leaves two very
+ * different possibilities: the mask is set once and never touched again, or
+ * it is being written repeatedly and simply never cleared. Logging the
+ * transitions tells them apart, and the mask returning to zero is the
+ * success signal for any fix.
+ */
+static void task_mask_watch(void* cpu)
+{
+    static uint32_t last = 0xFFFFFFFFu;
+    static unsigned changes;
+    uint32_t mask;
+
+    /* TAKEN AS SOON AS OSLink RUNS, not at exit.
+     *
+     * The first version read this where the final report does, which is
+     * after the run - so the watch never fired once. The host already
+     * watches OSLink go past and keeps its arguments; the overlay's globals
+     * are a fixed offset from the module it was handed. */
+    if (!s_engine_bss) {
+        uint32_t mod_ = 0u;
+        if (!mgs_module_watch_result(&mod_, NULL) || !mod_) return;
+        s_engine_bss = mod_ + 0x4B6678u - 0x24AD8u;
+    }
+    if (changes > 40u) return;
+    mask = mgs_module_guest_read32(cpu, s_engine_bss + 0x23A38u);
+    if (mask == last) return;
+    last = mask;
+    ++changes;
+    printf("[engine] task mask -> 0x%08X%s\n", mask,
+           mask ? "  (levels gated: the game is parked)" : "  (running)");
+    fflush(stdout);
+}
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
+    task_mask_watch(cpu);
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
     /* The card's mount completion rides the same pump: both are completions
      * the guest is waiting for, and both may only be delivered from here. */
@@ -2044,6 +2085,7 @@ int main(int argc, char** argv)
                                  * where the engine actually keeps them. */
                                 if (mod_) {
                                     uint32_t bss = mod_ + 0x4B6678u - 0x24AD8u;
+                                    s_engine_bss = bss;
                                     mgs_dump_heaps(cpu, bss);
                                     /* What the per-frame scheduler would
                                      * actually run. See host/heaps.c. */

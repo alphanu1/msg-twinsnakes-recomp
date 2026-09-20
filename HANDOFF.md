@@ -6933,6 +6933,41 @@ much better test than watching a picture, and it needs no eyes on a window.
 gated off". Something those levels do each frame is waiting on a condition
 that never becomes true, and audio remains the best candidate for it.
 
+### F181 — the parking mechanism works; only the movie's park sticks
+
+F180 found the engine gated nine of twelve task levels off during the movie.
+Watching the mask change through a run, rather than reading it once at the
+end, shows the mechanism is healthy:
+
+```
+[engine] task mask -> 0x00002450   parked
+[engine] task mask -> 0x00000000   running
+[engine] task mask -> 0x00000001   parked
+[engine] task mask -> 0x00000000   running
+[engine] task mask -> 0x00000008   parked   <- and never lifts
+```
+
+**The engine parks and unparks itself three times before the movie, each
+time cleanly.** So this is not our emulation of task gating going wrong —
+there is no emulation, the mask is the engine's own global and it drives it
+correctly. Only the movie's park, bit 3, is never lifted, because the thing
+that would lift it is the movie finishing.
+
+**A trap worth recording:** the first version of this watch read the mask
+where the final report does, which is *after* the run, so it never fired
+once and reported "no transitions" — which would have read as "the mask is
+set once and never touched". The host already watches `OSLink` go past and
+keeps its arguments, and the overlay's globals are a fixed offset from the
+module it was handed; taking it there is what made the watch work.
+
+**Where this leaves the search.** Everything around the movie is now
+accounted for and healthy: the disc delivers every byte asked of it, the card
+mounts, no thread blocks, the engine's scheduler behaves, and the parking is
+deliberate. What remains is the movie's own advance — eleven frames decoded
+from a 256 KB prebuffer and then nothing — and `MGS_TRACE_DSP` plus the
+`[engine] task mask -> 0x00000000` line give a headless success signal for
+whatever fixes it.
+
 ---
 
 *Record further findings here as they are established — including the ones that
