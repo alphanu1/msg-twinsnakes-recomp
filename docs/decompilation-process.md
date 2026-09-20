@@ -320,12 +320,25 @@ is the one that governs the work:
 
 **Why 5.4% is the least useful number here.** The engine is translated
 mechanically — DolRecomp does not care what a function is called. Names in the
-REL buy debugging and hand-written patches, not correctness, which is why 0%
+REL buy debugging and hand-written patches, not correctness, which is why 0.1%
 there is not a blocker. What the runtime must replace is the **SDK boundary**,
 and that is measure 3.
 
 **Measure 2 is the one that unblocks the build.** The recompiler consumes
 function boundaries, and those are complete for both modules.
+
+**Measure 3 is the one that is nearly done, and it is not the same as measure
+1.** Weighted by call sites it stands at 86.8%, well ahead of the 58.9% count
+of entry points, and the gap between those two is the point: what remains
+unnamed is mostly called once or twice, while everything the engine leans on
+heavily is known. The 138 entry points still unnamed are the tail.
+
+**Where measure 1 stops improving.** 934 unnamed call sites remain and only 52
+of them — 6% — sit in code with any public reference to match against. The rest
+is Konami's own sound, Tremor and CR_System code, for which no decompilation
+exists to align with. Signature matching and source-order alignment are close
+to exhausted there; what is left needs a function read at a time in Ghidra,
+which is in scope but buys debugging rather than correctness.
 
 ## Stage 5b, second pass — all of the SDK's assembly · **DONE**
 

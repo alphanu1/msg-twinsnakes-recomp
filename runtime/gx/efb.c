@@ -101,7 +101,9 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
      * the source rectangle, not the whole buffer. */
     if (getenv("MGS_TRACE_COPYSRC")) {
         static unsigned n;
-        if (n++ < 12u) {
+        /* Only the large ones. The 64x64 caption copies run thousands of
+         * times and would fill any cap long before the movie starts. */
+        if (width > 256u && n++ < 10u) {
             unsigned yy, cnt = 0u, rough = 0u, lit = 0u;
             for (yy = 0; yy < height && yy + sy < MGS_EFB_HEIGHT; yy += 4u) {
                 unsigned xx;
