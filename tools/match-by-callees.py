@@ -47,6 +47,43 @@ def binary_callees(asm_glob, named):
                 out[cur].append(t)
     return out
 
+def ref_callers(src_dir, names):
+    """Which reference functions mention each name. The caller side is
+    evidence the callee side cannot see, so agreeing with it is a second
+    route and not a restatement of the first."""
+    out = collections.defaultdict(set)
+    pat = {n: re.compile(r'\b' + re.escape(n) + r'\b') for n in names}
+    for p in glob.glob(os.path.join(src_dir, '**', '*.c'), recursive=True):
+        txt = re.sub(r'/\*.*?\*/', '', open(p, errors='ignore').read(), flags=re.S)
+        for m in re.finditer(r'^[A-Za-z_][\w \t\*]*?\b(\w+)\s*\([^;{]*\)\s*\{', txt, re.M):
+            fn, st, d = m.group(1), m.end() - 1, 0
+            body = ''
+            for j in range(st, len(txt)):
+                if txt[j] == '{': d += 1
+                elif txt[j] == '}':
+                    d -= 1
+                    if d == 0: body = txt[st:j]; break
+            for n, rx in pat.items():
+                if fn != n and rx.search(body): out[n].add(fn)
+    return out
+
+
+def binary_callers(asm_glob, named, addrs):
+    """Which named functions mention each address."""
+    cur, out = None, collections.defaultdict(set)
+    want = set(addrs)
+    for p in sorted(glob.glob(asm_glob)):
+        for ln in open(p, errors='ignore'):
+            m = re.match(r'\.fn (\w+)', ln)
+            if m: cur = m.group(1); continue
+            for t in re.findall(r'\bfn_([0-9A-Fa-f]{8})\b', ln):
+                a = int(t, 16)
+                if a in want and cur:
+                    c = named.get(int(cur[3:], 16), cur) if cur.startswith('fn_') else cur
+                    if not c.startswith('fn_'): out[a].add(c)
+    return out
+
+
 def reference(src_dir):
     """Function names in source order per file, with each one's callees."""
     order, calls = {}, {}
@@ -90,10 +127,23 @@ def main():
         nxt  = next((addrs[j] for j in range(i + 1, len(addrs)) if addrs[j] in named), None)
         if prev is None or nxt is None: unbounded += 1; continue
         lo, hi = order.get(named[prev]), order.get(named[nxt])
-        if not lo or not hi or lo[0] != hi[0] or hi[1] - lo[1] < 2:
+        if not lo or not hi or (lo[0] == hi[0] and hi[1] - lo[1] < 2):
             unbounded += 1; continue
 
-        cands = [n for n, (f, k) in order.items() if f == lo[0] and lo[1] < k < hi[1]]
+        # BOUNDED ON ONE SIDE IS STILL BOUNDED.
+        #
+        # Requiring both neighbours to land in the same reference file left
+        # 322 functions untouched, because a run of unnamed code often
+        # straddles a file boundary. What a neighbour actually establishes is
+        # a floor or a ceiling: anything after a named function is later in
+        # ITS file, anything before one is earlier in THAT file. Taking the
+        # union widens the candidate set, and the callee and caller tests do
+        # the discriminating - which is where the burden belongs.
+        if lo[0] == hi[0]:
+            cands = [n for n, (f, k) in order.items() if f == lo[0] and lo[1] < k < hi[1]]
+        else:
+            cands = [n for n, (f, k) in order.items()
+                     if (f == lo[0] and k > lo[1]) or (f == hi[0] and k < hi[1])]
         mine = set(callees.get('fn_%08X' % addr, []))
         known = {c for c in mine if not c.startswith('fn_')}
         if not known: ambiguous += 1; continue
@@ -129,9 +179,24 @@ def main():
         print(f'dropped {len(dropped)} proposals whose name was proposed more '
               f'than once: {sorted({n for _, n, _, _ in dropped})}')
 
+    # THE SECOND ROUTE, APPLIED HERE RATHER THAN BY HAND.
+    bc = binary_callers(a.asm, named, [p[0] for p in proposed])
+    rc = ref_callers(a.reference, {p[1] for p in proposed})
+    confirmed, single = [], []
+    for addr, name, f, k in proposed:
+        agree = bc.get(addr, set()) & rc.get(name, set())
+        (confirmed if agree else single).append((addr, name, f, k, sorted(agree)))
+    if single:
+        print(f'{len(single)} passed the callee test but have no agreeing '
+              f'caller, so are NOT claimed:')
+        for addr, name, f, k, _ in single:
+            print(f'  0x{addr:08X}  {name:<28} {f}')
+    proposed = confirmed
+
     print(f'proposed {len(proposed)}; {ambiguous} had no unique match; '
           f'{unbounded} were not bounded by two named neighbours in one file')
-    for addr, name, f, k in proposed:
-        print(f'  0x{addr:08X}  {name:<28} {f:<16} calls {", ".join(k)}')
+    for addr, name, f, k, agree in proposed:
+        print(f'  0x{addr:08X}  {name:<28} {f:<14} calls {", ".join(k)[:34]}'
+              f'  <- called by {", ".join(agree)[:30]}')
 
 main()

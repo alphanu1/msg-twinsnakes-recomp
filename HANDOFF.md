@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,014 / 18,485 | 5.5% |
+| Functions named | 1,017 / 18,485 | 5.5% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 198 / 336 | 58.9% |
 | SDK call sites covered | 6,144 / 7,078 | 86.8% |
@@ -7038,10 +7038,27 @@ either way, so none is claimed on one route alone. And `0x800393B4` calls
 only `__CARDGetControlBlock`, which three different accessors do identically:
 three candidates, one function, nothing to separate them.
 
-**This route pays compound interest.** 322 unnamed functions are not yet
-bounded by two named neighbours inside one reference file — that is where the
-remaining yield is, and every name added widens the bounds for its
-neighbours. Worth re-running after any other stage lands.
+**This route pays compound interest, and it was collected.** Requiring both
+neighbours to land in the *same* reference file left 322 functions untouched,
+because a run of unnamed code usually straddles a file boundary. What a
+neighbour really gives is a floor or a ceiling — anything after a named
+function is later in **its** file, anything before one is earlier in **that**
+file — so taking the union of both widens the candidate set and leaves the
+discriminating to the callee and caller tests, which is where that burden
+belongs. Unbounded fell from 324 to **171**.
+
+The caller check is now inside the tool rather than done by hand, so it only
+emits names confirmed by both routes. That second pass added three more:
+`__AXDSPDoneCallback`, `ReadArrayUnlock` and `__CARDUpdateDir` — and the
+first of those is confirmed by `__AXOutInitDSP`, a name added minutes
+earlier, which is the compound interest arriving. **1,014 to 1,017.**
+
+Re-running after that yields nothing further: 0 proposed, 167 with no unique
+match, 171 still unbounded. The route is exhausted at this strictness, and
+four candidates (`AMInit`, `AXInit`, `CARDCheckEx`, `GXSetCurrentGXThread`)
+sit one route short — they pass on callees and have no agreeing caller in the
+DOL, because they are called from the overlay. They are listed by the tool on
+every run so they are not lost, and not claimed.
 
 ---
 
