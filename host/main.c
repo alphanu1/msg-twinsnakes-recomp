@@ -45,8 +45,64 @@ static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 static GuestMemory* s_display_mem;
 static int          s_display_windowed;
 
+/* THE CARD'S STATE, AS IT CHANGES, IN THE TERMINAL.
+ *
+ * What the game puts on screen about the memory card - "damaged and cannot
+ * be used" - is the only report of a failure that reaches a person, and
+ * reading it means watching the window and taking a photograph. The SDK's own
+ * control block says the same thing in a form a log can carry, so it is
+ * watched here and printed when it changes rather than only at exit.
+ *
+ * __CARDBlock[0] at 0x80208E00: attached at +0x00, result +0x04, size +0x08,
+ * sectorSize +0x0C, mountStep +0x24.
+ */
+static const char* card_result_name(int32_t r)
+{
+    switch (r) {
+    case    0: return "READY";
+    case   -1: return "BUSY";
+    case   -2: return "WRONGDEVICE";
+    case   -3: return "NOCARD";
+    case   -4: return "NOFILE";
+    case   -5: return "IOERROR";
+    case   -6: return "BROKEN - the game shows \"damaged and cannot be used\"";
+    case   -7: return "EXIST";
+    case   -8: return "NOENT";
+    case   -9: return "INSSPACE";
+    case  -10: return "NOPERM";
+    case  -11: return "LIMIT";
+    case  -13: return "ENCODING";
+    case  -14: return "CANCELED";
+    case -128: return "FATAL_ERROR";
+    default:   return "?";
+    }
+}
+
+static void card_watch(void)
+{
+    static uint32_t last_attached = 0xFFFFFFFFu, last_step = 0xFFFFFFFFu;
+    static int32_t  last_result = 0x7FFFFFFF;
+    uint32_t attached, step;
+    int32_t  result;
+
+    if (!s_display_mem) return;
+    attached = guest_read32(s_display_mem, 0x80208E00u);
+    result   = (int32_t)guest_read32(s_display_mem, 0x80208E04u);
+    step     = guest_read32(s_display_mem, 0x80208E24u);
+
+    if (attached == last_attached && result == last_result && step == last_step)
+        return;
+    last_attached = attached; last_result = result; last_step = step;
+
+    printf("[card] slot A: %s, mount step %u, result %d (%s)\n",
+           attached ? "attached" : "not attached", step,
+           (int)result, card_result_name(result));
+    fflush(stdout);
+}
+
 static void display_pump(void)
 {
+    card_watch();
     mgs_display_service(mgs_host_mmio(), s_display_mem, MGS_XFB_HEIGHT);
 }
 

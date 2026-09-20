@@ -6509,6 +6509,27 @@ those branches cannot produce. The game's SDK is build 0x2301 from 2003 and
 the reference is 2004-04-20, so this is a place where they plausibly differ
 and reading the reference further will not settle it.
 
+**The card's state is now printed in the terminal as it changes**, decoded,
+rather than only dumped at exit — reading a failure should not require
+photographing the window. It immediately showed the shape of this:
+
+```
+[card] slot A: not attached, mount step 0, result 0 (READY)
+[card] slot A: not attached, mount step 0, result -3 (NOCARD)
+[card] slot A: attached,     mount step 0, result -1 (BUSY)
+[card] slot A: not attached, mount step 0, result -5 (IOERROR)
+```
+
+**The card attaches.** `CARDMountAsync` runs, `EXIAttach` succeeds — that is
+what sets `attached` and leaves `result` at BUSY — and the mount then fails
+at step 0 and detaches. So neither the device, the format, nor the attach is
+the problem; the failure is inside the first mount step, between the status
+read and the line that would set `mountStep = 1`.
+
+In the 2004 reference nothing on that path can produce IOERROR: clear-status
+and read-status return NOCARD when they fail, and the probe that follows
+returns NOCARD too. Another reason to think the 2003 build differs there.
+
 **The strongest remaining hypothesis** is the transfer-complete interrupt.
 After `mountStep = 1` the SDK's mount continues from a completion, and we
 never signal one; a mount that stalls and then times out would report an I/O
