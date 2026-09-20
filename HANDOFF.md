@@ -6712,6 +6712,48 @@ paced by voice playback against a mixer that consumes nothing would fill its
 buffer, show its first frames, and stop — which is exactly the shape here.
 Audio is phase 4 and unbuilt.
 
+### F176 — audio never starts, and un-stubbing its init still hangs
+
+A run now reports what the audio path attempted, which settles several
+guesses at once:
+
+```
+audio: 1 mails to the DSP, AI control 0x00000046 (STOPPED, 48kHz), 2 samples
+ARAM: 139 transfers in, 8 out
+```
+
+**The game never starts audio.** The audio interface is stopped, so playback
+was never begun; essentially no mail reaches the DSP, so no command list is
+ever submitted. Yet 139 ARAM transfers go *in*, so sample data is uploaded.
+The game prepares audio and never plays it.
+
+So the earlier theory — the movie waits for audio to drain — is wrong as
+stated. Nothing is draining because nothing started.
+
+**Why it never starts: `__OSInitAudioSystem` is stubbed to a no-op**, on
+purpose, as phase 4 deferral. Its note argued the flags it waits on "will
+never be raised however carefully the registers are modelled". Since that was
+written we gained ARAM DMA-done and DSP status bits and a clock that moves,
+so the premise was worth retesting.
+
+**Retested, and it still holds.** With the stub removed the boot produces no
+output at all and has to be killed. The reasoning stands; restored, and the
+`audio:` line is kept because it is what makes this legible.
+
+**What fits every symptom, including the ones from watching it play.** Music
+and SFX begin much earlier than the freeze and voices begin right at it. In
+our port no audio plays at all, so the distinction cannot be about sound
+being heard — it is about whether the game **waits**. Music and effects are
+fired and forgotten, so their silence costs nothing. Voice playback is
+synchronised, and the movie is paced against it, so the first thing that
+actually waits on the audio system is the first thing that stops.
+
+**The scoped next step is the DSP boot handshake**, not a mixer: enough of
+the coprocessor's side that `__OSInitAudioSystem` completes and the audio
+interface starts. A real voice mixer is phase 4 and far larger; this is the
+part the movie needs, and it is testable on its own — the `audio:` line goes
+from STOPPED to playing.
+
 ---
 
 *Record further findings here as they are established — including the ones that

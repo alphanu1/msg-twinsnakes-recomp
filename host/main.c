@@ -2117,6 +2117,31 @@ int main(int argc, char** argv)
                                        c0, (c0 >> 12) & 1, (c0 >> 11) & 1,
                                        c1, (c1 >> 12) & 1, (c1 >> 11) & 1);
                             }
+                            /* WHAT THE AUDIO PATH GOT AS FAR AS DOING.
+                             *
+                             * AX hands the DSP a command list each frame and
+                             * waits to be told it ran. Our DSP accepts the
+                             * mail and never answers, so the count of mails
+                             * sent says whether the game is even trying: a
+                             * handful is the boot handshake, thousands would
+                             * mean it is submitting audio frames. The audio
+                             * interface's own control word says whether
+                             * playback was ever started, and its sample
+                             * counter whether anything believes time is
+                             * passing in samples. */
+                            {
+                                uint32_t aicr = mgs_mmio_read(mgs_host_mmio(),
+                                                              0xCC006C00u, 4u);
+                                printf("audio: %u mails to the DSP, "
+                                       "AI control 0x%08X (%s, %s), "
+                                       "%u samples counted\n",
+                                       mgs_mmio_dsp_mails_sent(mgs_host_mmio()),
+                                       aicr,
+                                       (aicr & 1u) ? "playing" : "STOPPED",
+                                       (aicr & 2u) ? "48kHz" : "32kHz",
+                                       mgs_mmio_read(mgs_host_mmio(),
+                                                     0xCC006C08u, 4u));
+                            }
                             printf("DSP control 0x%04X  status bits set: "
                                    "%s%s%s%s\n", csr,
                                    (csr & 0x08u) ? "AI " : "",
