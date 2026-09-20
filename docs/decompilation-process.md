@@ -1265,6 +1265,82 @@ a third time.
 all already walked by stage 5j's matcher, against roughly 1,818 functions in
 our DOL. There is no unused reference to go and find.
 
+## Stage 5l — Align a RUN against a source file · **DONE**
+
+Stage 5j matched one function at a time, which asks a weak question: *could
+this be that?* Several candidates usually can be, so most attempts ended
+ambiguous. Aligning a whole **run** of consecutive unknowns asks a much
+stronger one: *is there exactly one way to lay these functions against that
+file, in order, so that every call pattern agrees at once?*
+
+```sh
+tools/match-by-sequence.py \
+    --symbols config/symbols/main.dol.symbols.txt \
+    --boundaries build/phase0/main.symbols.txt \
+    --asm 'build/phase0/out/asm/*.s' \
+    --reference extern/dolsdk2004/src
+```
+
+The reference sequence may skip - functions get inlined or dropped - but the
+binary sequence may not. Where more than one alignment satisfies everything,
+nothing is proposed.
+
+### The clearest result: the stopwatch
+
+Five consecutive unknowns sit between `OSGetSemaphoreCount` and
+`__OSSystemCallVectorStart`, with this call signature:
+
+| address | size | calls |
+|---|---|---|
+| `0x80022C2C` | 0x2C | — |
+| `0x80022C58` | 0x3C | `OSGetTime` |
+| `0x80022C94` | 0xCC | `OSGetTime` |
+| `0x80022D60` | 0x70 | `OSGetTime` |
+| `0x80022DD0` | 0x28 | — |
+
+`OSStopwatch.c` reads `OSInitStopwatch` (no calls), `OSStartStopwatch`,
+`OSStopStopwatch`, `OSCheckStopwatch` (all three call `OSGetTime`),
+`OSResetStopwatch` (calls `OSInitStopwatch`) and `OSDumpStopwatch` (calls
+`OSReport`). The first four align exactly on **position and call pattern
+simultaneously**, and `OSDumpStopwatch` is absent as a debug function in a
+release build would be. **Four names.**
+
+`0x80022DD0` is withheld: it would be `OSResetStopwatch`, but that requires
+assuming `OSInitStopwatch` was inlined into it, and an assumption is not a
+second route.
+
+### Two callbacks, by an exact count in a closed region
+
+`CARDDir.c` has `__CARDGetDirBlock`, `WriteCallback`, `EraseCallback`,
+`__CARDUpdateDir` in that order. The first and last are already named at
+`0x8003AE04` and `0x8003AFA4`, and **exactly two** unknowns lie between them
+— two slots, two functions, correct order. The caller side confirms it
+independently: the reference passes `EraseCallback` to `__CARDEraseSector`,
+`__CARDUpdateDir` is the function that calls it, and in the binary
+`__CARDUpdateDir` references `0x8003AEDC` by address.
+
+**Recorded honestly:** the binary's `EraseCallback` does not show the
+`__CARDGetDirBlock` and `__CARDWrite` calls the reference has. Those are
+reached through the callback machinery rather than directly, but that is an
+explanation and not evidence, which is why the count, the order and the
+caller reference are what this rests on.
+
+### And one that was refused
+
+The first run the tool aligned "uniquely" was two 8-byte stubs in
+`AmcExi2Stubs.c`. With empty call signatures every constraint is vacuous and
+the alignment is decided by counting alone — F159 exactly. The tool now
+requires at least one function in a run to carry a recognisable callee, and
+that proposal disappeared.
+
+### Result
+
+**Seven symbols** — four stopwatch, two callbacks, and `CARDCheckEx` from
+stage 5j's method (the only reference function that calls both
+`CARDCheckExAsync` and `__CARDSync`, and positioned right after the async
+one). 1,017 named to **1,024**, and the measure that governs the port —
+SDK entry points the engine calls — from 198 to **203 of 336**.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

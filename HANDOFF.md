@@ -21,18 +21,18 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 70.2%
+## PHASE 0 PROGRESS — 70.6%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,017 / 18,485 | 5.5% |
+| Functions named | 1,024 / 18,485 | 5.5% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 198 / 336 | 58.9% |
-| SDK call sites covered | 6,144 / 7,078 | 86.8% |
+| SDK entry points the engine calls, named | 203 / 336 | 60.4% |
+| SDK call sites covered | 6,149 / 7,078 | 86.9% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
-| **Average of the five** | | **70.2%** |
+| **Average of the five** | | **70.6%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true

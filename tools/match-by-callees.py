@@ -138,15 +138,47 @@ def main():
     exported = rel_call_sites(a.rel_asm)
     limit = int(a.max_addr, 16)
 
+    # contiguous address runs of named functions sharing a reference file
+    rows = [(x, named[x], order[named[x]][0]) for x in addrs
+            if x in named and named[x] in order and x < limit]
+    regions = []
+    for x, n, f in rows:
+        if regions and regions[-1][2] == f: regions[-1][1] = x
+        else: regions.append([x, x, f])
+    regions = [tuple(r) for r in regions if r[0] != r[1]]
+
     proposed, ambiguous, unbounded = [], 0, 0
     for i, addr in enumerate(addrs):
         if addr in named or addr >= limit: continue
+        # THE FILE REGION IS A BETTER FENCE THAN A NEIGHBOUR.
+        #
+        # Requiring a named function on each side left 171 untouched. But 705
+        # named functions resolve to a reference file, and because units are
+        # emitted in source order those names form 78 contiguous ADDRESS
+        # REGIONS, one per file. Anything inside a region is in that file,
+        # whether or not its immediate neighbours happen to be named - which
+        # bounds a run of consecutive unknowns that no neighbour test reaches.
+        region = None
+        for lo_a, hi_a, rf in regions:
+            if lo_a <= addr <= hi_a: region = (lo_a, hi_a, rf); break
+
         prev = next((addrs[j] for j in range(i - 1, -1, -1) if addrs[j] in named), None)
         nxt  = next((addrs[j] for j in range(i + 1, len(addrs)) if addrs[j] in named), None)
         if prev is None or nxt is None: unbounded += 1; continue
         lo, hi = order.get(named[prev]), order.get(named[nxt])
-        if not lo or not hi or (lo[0] == hi[0] and hi[1] - lo[1] < 2):
+        if region:
+            rf = region[2]
+            # order still applies: after a named function of this file, the
+            # candidate must be later in it; before one, earlier.
+            floor_i = lo[1] if lo and lo[0] == rf else -1
+            ceil_i  = hi[1] if hi and hi[0] == rf else 10 ** 6
+            cands = [n for n, (f, k) in order.items()
+                     if f == rf and floor_i < k < ceil_i]
+            if not cands: unbounded += 1; continue
+        elif not lo or not hi or (lo[0] == hi[0] and hi[1] - lo[1] < 2):
             unbounded += 1; continue
+        else:
+            cands = None
 
         # BOUNDED ON ONE SIDE IS STILL BOUNDED.
         #
@@ -157,11 +189,12 @@ def main():
         # ITS file, anything before one is earlier in THAT file. Taking the
         # union widens the candidate set, and the callee and caller tests do
         # the discriminating - which is where the burden belongs.
-        if lo[0] == hi[0]:
-            cands = [n for n, (f, k) in order.items() if f == lo[0] and lo[1] < k < hi[1]]
-        else:
-            cands = [n for n, (f, k) in order.items()
-                     if (f == lo[0] and k > lo[1]) or (f == hi[0] and k < hi[1])]
+        if cands is None:
+            if lo[0] == hi[0]:
+                cands = [n for n, (f, k) in order.items() if f == lo[0] and lo[1] < k < hi[1]]
+            else:
+                cands = [n for n, (f, k) in order.items()
+                         if (f == lo[0] and k > lo[1]) or (f == hi[0] and k < hi[1])]
         mine = set(callees.get('fn_%08X' % addr, []))
         known = {c for c in mine if not c.startswith('fn_')}
         if not known: ambiguous += 1; continue

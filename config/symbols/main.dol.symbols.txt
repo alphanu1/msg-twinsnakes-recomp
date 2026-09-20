@@ -1458,3 +1458,10 @@
 .text 0x80032988 0x2C __AXDSPDoneCallback callees+callers
 .text 0x8003968C 0x144 ReadArrayUnlock callees+callers
 .text 0x8003AFA4 0xC4 __CARDUpdateDir callees+callers
+.text 0x8003BF7C 0x54 CARDCheckEx callees+order
+.text 0x80022C2C 0x2C OSInitStopwatch sequence
+.text 0x80022C58 0x3C OSStartStopwatch sequence
+.text 0x80022C94 0xCC OSStopStopwatch sequence
+.text 0x80022D60 0x70 OSCheckStopwatch sequence
+.text 0x8003AE0C 0xD0 WriteCallback sequence
+.text 0x8003AEDC 0xC8 EraseCallback sequence
