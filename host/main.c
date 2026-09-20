@@ -30,9 +30,14 @@ const MgsEfb* mgs_display_efb(void);
 const MgsGx* mgs_display_gx(void);
 const MgsGxRaster* mgs_display_raster(void);
 
+void mgs_card_service(const MgsModule* mod, void* cpu);
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
+    /* The card's mount completion rides the same pump: both are completions
+     * the guest is waiting for, and both may only be delivered from here. */
+    mgs_card_service(mod, cpu);
 }
 
 /* The run loop drives the graphics copy and the presentation; both need guest

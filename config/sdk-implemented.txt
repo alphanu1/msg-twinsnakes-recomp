@@ -101,3 +101,17 @@ __OSStopAudioSystem
 memcpy
 memset
 __fill_mem
+
+# The memory card, stubbed. Not phase 5's CARD emulation: without a card the
+# game stops on a notice screen that needs a button press, so every headless
+# run - the reproducible ones - stops before the intro movie, which is where
+# the outstanding rendering faults are. Real save/load comes later as a
+# pass-through to host files; see card_shims.c.
+CARDInit
+CARDProbeEx
+CARDMountAsync
+CARDCheckExAsync
+CARDGetStatus
+CARDMount
+CARDUnmount
+__CARDSync

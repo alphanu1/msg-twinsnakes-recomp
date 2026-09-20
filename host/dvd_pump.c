@@ -97,3 +97,42 @@ void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd)
         mgs_dvd_release(done[i]);
     }
 }
+
+/* THE MEMORY CARD'S COMPLETION, DELIVERED THE SAME WAY A DVD READ'S IS.
+ *
+ * CARDMountAsync reports READY immediately - there is no bus and nothing to
+ * wait for - but the SDK's contract is that the caller learns of it through
+ * the attach callback, and the game waits for exactly that. The shim cannot
+ * call it: it runs inside a guest call, so calling back would nest the guest
+ * stack and run the callback under the caller's interrupt state.
+ *
+ * So the same discipline as every other completion here: queued on the
+ * runtime side, run from the pump, on the guest thread, with the scheduler
+ * held off across it and MSR[EE] checked first.
+ */
+uint32_t mgs_card_take_callback(int32_t* chan, int32_t* result);
+
+void mgs_card_service(const MgsModule* mod, void* cpu);
+void mgs_card_service(const MgsModule* mod, void* cpu)
+{
+    int32_t  chan = 0, result = 0;
+    uint32_t cb;
+
+    /* The same gate the DVD path uses: a callback that runs with the guest's
+     * interrupts off breaks the atomicity it is protecting. */
+    if (!(mgs_module_msr(cpu) & MSR_EE)) return;
+
+    cb = mgs_card_take_callback(&chan, &result);
+    if (!cb) return;
+
+    {
+        uint32_t args[2];
+        args[0] = (uint32_t)chan;
+        args[1] = (uint32_t)result;
+        mgs_module_call_guest(mod, cpu, GUEST_OSDisableScheduler, NULL, 0u, 100000ull);
+        if (!mgs_module_call_guest(mod, cpu, cb, args, 2u, 4000000ull))
+            fprintf(stderr, "[card] attach callback 0x%08X did not return; "
+                            "gave up at 0x%08X\n", cb, mgs_module_call_fail_pc());
+        mgs_module_call_guest(mod, cpu, GUEST_OSEnableScheduler, NULL, 0u, 100000ull);
+    }
+}

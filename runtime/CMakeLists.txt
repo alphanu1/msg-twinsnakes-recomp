@@ -6,6 +6,7 @@
 add_library(mgs_runtime STATIC
   memory/guest.c
   os/os_report.c
+  os/card_shims.c
   os/mem_shims.c
   os/os_time.c
   os/boot_info.c

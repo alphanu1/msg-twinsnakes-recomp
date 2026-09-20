@@ -668,8 +668,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       runs are not deterministic: DVD reads finish on host worker threads, so
       the same binary completes 271 or 287 of them. `si_poll_frame` runs off
       the step-counted frame tick, so the race is elsewhere in the SI path.
-- [ ] **A memory card.** Low difficulty in the design document's SDK table.
-      The warning screen can now be dismissed without one.
+- [ ] **A memory card** (F166). Not low difficulty after all, and not
+      stubbable at the SDK's API: the SDK reads the card's header, directory
+      and FAT directly out of the work area, so answering READY to
+      `CARDMount` and `CARDCheckEx` leaves it finding nothing and
+      unmounting. Emulating the device on EXI — a 2 MB image backed by a
+      host file — makes the SDK's own code work unmodified and gives real
+      save/load. Phase 5 by the plan; bringing it forward would unblock the
+      reproducible headless path to the intro movie.
 - [ ] **Play back what is recorded.** The sphere-map geometry now lands in
       its buffer correctly; `GXCallDisplayList` has not yet been reached
       within the step budgets run so far, so the playback path is written

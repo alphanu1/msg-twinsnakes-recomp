@@ -6197,6 +6197,56 @@ a special build. It does not fire during a boot, and the headless MEM1 hash
 is unchanged at `0x8C8E2DB54E773E25`; whether it fires during the movie is
 the open question.
 
+### F166 — the memory card cannot be stubbed at the SDK's API, and why
+
+Every headless run stops on a notice screen that needs a button press, which
+puts the intro movie — where the outstanding rendering faults are — out of
+reach of the reproducible path. Dolphin does not show that screen, and
+Dolphin has a working card in slot A, so this is a divergence that localises
+to a shim rather than a property of the game.
+
+Stubbing the API was tried, in increasing depth, and does not work:
+
+| stubbed | result |
+|---|---|
+| `CARDInit`, `CARDProbeEx` → READY | still the notice; game mounts next |
+| `+ CARDMountAsync`, `CARDCheckExAsync` | mount and check each run once, then **3,259,600** `CARDProbeEx` polls |
+| `+ CARDMount`, `__CARDSync`, `CARDUnmount` | mount → check → **unmount**, then the notice |
+| `+ both completion callbacks delivered` | unchanged: mount → check → unmount |
+
+**Why it cannot work at that level.** The callback the game handed to
+`CARDCheckExAsync` is `0x800381EC` — `__CARDSyncCallback`, the SDK's *own*
+internal helper. The game is not driving the card API directly; it calls the
+blocking wrappers, and the SDK runs a state machine underneath. That state
+machine's lower half — `__CARDGetControlBlock`, `__CARDGetDirBlock`,
+`__CARDAccess`, `__CARDIsReadable` — **reads the card's header, directory and
+FAT straight out of the work area**. It never asks a shim anything. Returning
+READY to the calls above it does not put a directory in memory, so the SDK
+looks, finds nothing usable, and unmounts.
+
+The CARD module is fully named — 33 of 33 symbols in `0x80038000-0x8003F000`
+— so this is not a naming gap. It is the wrong interception point.
+
+**What would work: emulate the device on EXI, not the API.** A memory card is
+an EXI device with a small command set (read block, write block, erase,
+status, id). Backing that with a 2 MB image in host memory, persisted to a
+host file, makes the SDK's own code work unmodified — directory, FAT,
+checksums and all — which is how Dolphin does it. It also gives real save and
+load rather than a card the game can see but not use, and it respects the
+translated/native boundary instead of reaching past it: with EXI answering,
+none of these CARD shims are needed and they should be removed.
+
+That is phase 5 work by the design document's plan, and doing it now would be
+out of phase order. The decision of whether to bring it forward — on the
+grounds that it unblocks the reproducible test path for phases 2 and 3 — is
+recorded here rather than taken.
+
+**Kept for now:** the shims and the completion-callback queue
+(`card_shims.c`, `mgs_card_service` in `dvd_pump.c`). They do not reach the
+movie, but the queue is the mechanism an EXI card will need for its
+interrupts, and the trace above is what any future attempt should start from
+rather than rediscover.
+
 ---
 
 *Record further findings here as they are established — including the ones that
