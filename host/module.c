@@ -667,6 +667,18 @@ static void (*s_display)(void);
 
 static void (*s_frame)(void);
 
+/* Ticks of guest time per interpreted step. See the note at its use. */
+static unsigned mgs_tick_rate(void)
+{
+    static unsigned rate;
+    if (!rate) {
+        const char* e = getenv("MGS_TICK_RATE");
+        rate = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 32u;
+        if (!rate) rate = 1u;
+    }
+    return rate;
+}
+
 /* Whatever the host wants the heartbeat to report. Kept as a callback so
  * this file needs no GX or DVD header. */
 static uint64_t (*s_progress)(unsigned which);
@@ -974,10 +986,21 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * 675,000 ticks. Without this every timed wait in the SDK spins
          * forever, which is exactly what __OSInitAudioSystem was doing:
          * 13 million OSGetTick calls against a clock that never moved. */
-        mgs_runtime_advance_ticks(mgs_runtime_from(NULL), 32u);
+        /* HOW FAST GUEST TIME RUNS, AND WHY 32 IS WRONG.
+         *
+         * The Gekko's time base counts at the bus clock over four - 40.5 MHz
+         * - so one 60 Hz field is 675,000 ticks. Retrace here is every 2,000
+         * steps, which at 32 ticks a step makes a field 64,000 ticks: guest
+         * time runs about ten times too slowly against the frame rate it is
+         * paired with. Anything that compares elapsed time to a frame number
+         * - a movie player, most obviously - sees almost no time passing.
+         *
+         * MGS_TICK_RATE overrides it while that is being measured; the
+         * calibrated figure for 60 Hz is 675000/2000 = 337 or 338. */
+        mgs_runtime_advance_ticks(mgs_runtime_from(NULL), mgs_tick_rate());
         /* The audio interface's sample counter comes off the same clock,
          * because __AI_SRC_INIT times one against the other. */
-        mgs_mmio_advance_ticks(mgs_host_mmio(), 32u);
+        mgs_mmio_advance_ticks(mgs_host_mmio(), mgs_tick_rate());
 
         /* Advance the video beam on a cadence, so a guest polling for retrace
          * sees time pass at the rate the host runs rather than as fast as it

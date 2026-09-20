@@ -6674,6 +6674,44 @@ cause of the freeze — worth having found, and not the answer.
 What it does remove is a whole class of doubt: the movie's data now arrives
 byte-exact, so anything still wrong with playback is downstream of the disc.
 
+### F175 — the movie prebuffers 256 KB and waits; the clock is not why
+
+Tracing which files the game reads, rather than assuming, corrected two
+things I had been treating as fact.
+
+**The sequential stream I took for the movie is audio.** The 101 evenly
+spaced reads at 0x2B88EECC are `shared/audio/banks/bank001.spd`. Files read
+by absolute offset over a run: `stage.dat` 281, `bank048.spd` 50,
+`bank001.spd` 49, `demo.dat` 14, and **`shared/movie.dat` just 8**.
+
+**The movie starts at its beginning, not partway in.** Those eight reads are
+at file offsets 0x0, 0x8000, 0x10000 … 0x38000 — sequential from zero. So
+"the teal scene appears too early" is not a seek landing in the wrong place;
+the movie genuinely plays from frame one and the picture is the first thing
+in the file. 256 KB read out of 94,935,040. That is a prebuffer being filled
+and then never drained.
+
+**The guest clock is miscalibrated, and that is not the cause.** The Gekko's
+time base counts at 40.5 MHz, so a 60 Hz field is 675,000 ticks; ours
+advances 32 ticks a step against a retrace every 2,000 steps, making a field
+64,000 — about **ten times too slow** against the frame rate it is paired
+with. `OSGetTime` is called 715,957 times in a run, so the game is certainly
+clock-driven, and this looked compelling.
+
+It is not the fault. Measured at the calibrated rate, movie frames decoded
+went from **11 to 13** — noise. `MGS_TICK_RATE` now exposes the figure and
+the default is left at 32, because a ten-fold change to guest time is not
+something to ship on the strength of a hypothesis it just failed. The
+discrepancy is real and wants fixing on its own merits, with its own
+evidence.
+
+**What the evidence now favours is audio.** The freeze coincides with where
+the voices should start, which is an observation from watching it rather than
+from a log, and two voice banks are streaming heavily throughout. A movie
+paced by voice playback against a mixer that consumes nothing would fill its
+buffer, show its first frames, and stop — which is exactly the shape here.
+Audio is phase 4 and unbuilt.
+
 ---
 
 *Record further findings here as they are established — including the ones that
