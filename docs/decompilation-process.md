@@ -1070,6 +1070,87 @@ The average does not move, which is correct: these are engine-internal
 functions the REL never calls, so they change no call-site coverage. They
 buy debugging, which is what the row's caveat has always said.
 
+## Stage 5g, second pass — the self-naming strings are exhausted · **DONE**
+
+Stage 5g named engine functions from messages that carry their own function
+name. This pass asked how much of that seam is left, and the answer is
+almost none — which is the point of recording it.
+
+```sh
+strings -t x discs/GGSPA4/disc1/files/shared/mgso_pal.rel \
+  | grep -oE ":: [A-Za-z_][A-Za-z0-9_]*" | sort -u
+```
+
+**52 strings carrying a `:: Name` tag, naming just 6 distinct functions.**
+The earlier note of "about 25" was counting strings, not names.
+
+Mapping each string's label to the function that references it, through
+`build/phase0/out/mgso_pal/asm/`:
+
+| tag | distinct messages | functions referencing them |
+|---|---|---|
+| `NewFallingFloor` | 3 | **1** |
+| `NewPutBookObject` | 3 | 2 |
+| `NewPutBottleObject` | 9 | 3 |
+| `NewPutBreakObject` | 15 | 3 |
+| `NewPutMagazineObject` | 12 | 4 |
+| `brk_potato` | 10 | 4 |
+
+**Only one is safe, and five are not.** Where several functions in a module
+emit messages carrying the same tag, the tag names the *module*, not the
+emitter — F159's rule that a matching count is necessary and not sufficient,
+in a new disguise. Naming the function with the most messages would have
+produced five plausible, unverifiable names.
+
+**Added: one symbol.** `NewFallingFloor` at `.text 0x28D9E4`, size `0x26C`,
+because all three of its messages are referenced from that one function and
+nothing else references them. Origin `message`.
+
+**A discriminator that did not work, so it is not re-tried:** these are
+`NewPut…Object` constructors, so the real one should be reachable from an
+object table in the data section. Searching `auto_04_*_data.s` for references
+to the candidates finds none — the REL reaches its text from data through
+relocations, not through labels the disassembly prints, so this needs the
+relocation table rather than a text search.
+
+## Stage 6f — Tremor and ogg cannot be named from upstream · **DONE (negative result)**
+
+`main.dol` carries a complete Tremor and part of libogg — 198 functions
+across ten translation units, attributed by stage 5e-DOL and otherwise
+nameless. Upstream sources are in `extern/tremor` and `extern/ogg`, so
+matching them by order looked straightforward. It is not.
+
+**The structure checks out.** Grouping stage 5e-DOL's anchors by address
+gives eighteen runs, one per source file, strictly ascending and
+non-overlapping — so translation units are emitted contiguously and
+order-matching is at least well-posed.
+
+**The counts do not.** Taking each file's region as running to the next
+file's first anchor:
+
+| file | functions in binary | upstream |
+|---|---|---|
+| `codebook.c` | 3 | 8 |
+| `floor0.c` | 16 | 12 |
+| `floor1.c` | 17 | 10 |
+| `framing.c` | 39 | 50 |
+| `mapping0.c` | 22 | 6 |
+| `vorbisfile.c` | 29 | 45 |
+| *ten files* | **167** | **177** |
+
+Not one file matches. Two reasons, and both are fatal to the method:
+the gaps between anchor runs have nowhere to go, so a file's region absorbs
+whatever sits between its last anchor and the next file's first; and
+`main.dol.files.txt` already records that **Konami edited these sources** —
+they replaced Xiph's allocator with their own tracked one — which is why the
+line numbers do not match upstream either.
+
+**So no names are claimed from upstream order, and none should be.** The
+emission order is worth keeping, though: within every Tremor/ogg unit the
+line numbers run strictly *downwards* as the address rises, so any future
+attempt must reverse the source order, while Konami's own `sd_*.c` units run
+upwards.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

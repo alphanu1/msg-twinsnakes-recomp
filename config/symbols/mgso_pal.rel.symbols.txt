@@ -84,3 +84,4 @@
 # building Huffman tables, which is not where anyone was looking.
 .text 0x0F0F2C 0x4A4 huft_build message
 .text 0x0F1470 0x17C inflate_trees_dynamic message
+.text 0x28D9E4 0x26C NewFallingFloor message

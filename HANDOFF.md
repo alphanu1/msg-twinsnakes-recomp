@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,006 / 18,485 | 5.4% |
+| Functions named | 1,007 / 18,485 | 5.4% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 198 / 336 | 58.9% |
 | SDK call sites covered | 6,144 / 7,078 | 86.8% |
@@ -6967,6 +6967,40 @@ deliberate. What remains is the movie's own advance — eleven frames decoded
 from a 256 KB prebuffer and then nothing — and `MGS_TRACE_DSP` plus the
 `[engine] task mask -> 0x00000000` line give a headless success signal for
 whatever fixes it.
+
+### F182 — the cheap naming seams are exhausted; one name, two dead ends
+
+A pass over the two routes that looked like they had slack left. The yield is
+**one symbol**, and the value is mostly in what is now ruled out.
+
+**Self-naming strings: 52 of them, 6 names, 1 usable.** Messages tagged
+`:: FunctionName` are the route stage 5g used. There are 52 such strings in
+the engine and they name only six functions — the earlier "about 25" counted
+strings. Mapping each to the function that references it, five of the six are
+emitted from two to four different functions, so the tag names the **module**
+and not the emitter. Only `NewFallingFloor` has all its messages referenced
+from one function and nowhere else; it is added at `.text 0x28D9E4`, size
+`0x26C`, origin `message`. Naming the other five by "most messages wins"
+would have produced five plausible unverifiable names, which is F159 again in
+a new disguise.
+
+**Tremor and ogg cannot be named from upstream.** `main.dol` carries 198
+functions of Xiph's decoder across ten translation units, with upstream
+sources sitting in `extern/`. The structure supports the idea — anchors group
+into eighteen runs, one per file, strictly ascending and non-overlapping, so
+units are emitted contiguously. The counts destroy it: not one of the ten
+files matches upstream, 167 against 177 overall and wildly out per file
+(`mapping0.c` 22 against 6). Two causes, both fatal: a file's region absorbs
+the gap to the next file's first anchor, and `main.dol.files.txt` already
+records that **Konami edited these sources**, replacing Xiph's allocator with
+their own — which is why the line numbers never matched either.
+
+**What this says about where naming effort should go.** Both remaining cheap
+routes are now measured and closed. The engine is 16,667 functions with 10
+named, signature matching cannot touch it (stage 6b), and its strings are
+spent. What is left is reading code — stage 6c's area classification says
+where to look, and the SDK boundary is already at 198 of 336 entry points,
+which is the number that actually governs the port.
 
 ---
 
