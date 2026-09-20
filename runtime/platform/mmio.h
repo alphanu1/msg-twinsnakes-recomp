@@ -51,6 +51,7 @@
 typedef void (*MgsFifoSink)(void* user, uint32_t value, unsigned size);
 
 #include "exi_card.h"
+#include "exi_ipl.h"
 
 typedef struct MgsMmio {
     /* One flat store for the whole region. Modelled registers are special
@@ -68,6 +69,7 @@ typedef struct MgsMmio {
     MgsExiCard   card;
     GuestMemory* exi_mem;        /* for the card's DMA transfers */
     int          card_ready;
+    MgsExiIpl    ipl;            /* the clock and the machine's settings */
     uint8_t      exi_cs;
     uint64_t     exi_transfers, exi_to_card;
     int          trace_exi;

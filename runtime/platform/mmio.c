@@ -75,6 +75,20 @@ static void exi_set_reg(MgsMmio* m, uint32_t off, uint32_t v)
  * The direction is in the control register: 0 reads from the device, 1 writes
  * to it.
  */
+/* One byte to whichever device chip select names. Channel 0 carries the
+ * memory card on select 0 and the clock and settings on select 1; select 2
+ * is the AD16 debug device, which nothing here provides. */
+static void exi_byte(MgsMmio* m, uint8_t* b)
+{
+    if ((m->exi_cs & 1u) && m->card_ready) mgs_exi_card_byte(&m->card, b);
+    else if (m->exi_cs & 2u)               mgs_exi_ipl_byte(&m->ipl, b);
+}
+
+static int exi_has_device(const MgsMmio* m)
+{
+    return ((m->exi_cs & 1u) && m->card_ready) || (m->exi_cs & 2u) != 0u;
+}
+
 static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
 {
     uint32_t base = (MMIO_EXI - MMIO_BASE) + chan * EXI_CHANNEL_STRIDE;
@@ -84,7 +98,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
 
     ++m->exi_transfers;
     /* Only slot A carries a card, and only while it is the selected device. */
-    if (chan != 0u || !m->card_ready || !(m->exi_cs & 1u)) {
+    if (chan != 0u || !exi_has_device(m)) {
         if (m->trace_exi && m->exi_traced < 40u) {
             ++m->exi_traced;
             fprintf(stderr, "[exi] DROPPED: chan %u cs %u rw %u len %u "
@@ -106,7 +120,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
             uint8_t b = 0xFFu;
             uint32_t a = 0x80000000u | (mar + i);
             if (rw == 1u && m->exi_mem) b = guest_read8(m->exi_mem, a);
-            mgs_exi_card_byte(&m->card, &b);
+            exi_byte(m, &b);
             if (rw == 0u && m->exi_mem) guest_write8(m->exi_mem, a, b);
         }
         return;
@@ -118,7 +132,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
         for (i = 0u; i < tlen; ++i) {
             unsigned sh = 24u - i * 8u;
             uint8_t  b  = (rw == 0u) ? 0xFFu : (uint8_t)(data >> sh);
-            mgs_exi_card_byte(&m->card, &b);
+            exi_byte(m, &b);
             out |= (uint32_t)b << sh;
         }
         if (rw != 1u) exi_set_reg(m, base + EXI_DATA, out);
@@ -838,6 +852,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 if (cs != m->exi_cs) {
                     m->exi_cs = cs;
                     if (m->card_ready) mgs_exi_card_select(&m->card, (cs & 1u) != 0u);
+                    mgs_exi_ipl_select(&m->ipl, (cs & 2u) != 0u);
                 }
                 /* EXT is the slot's own answer about whether anything is
                  * plugged in - hardware status, not something software sets.
@@ -1120,6 +1135,7 @@ void mgs_mmio_attach_card(MgsMmio* m, GuestMemory* mem, const char* path)
     uint32_t csr = (MMIO_EXI - MMIO_BASE) + EXI_CSR;
     if (!m) return;
     m->exi_mem = mem;
+    mgs_exi_ipl_init(&m->ipl);
     m->card_ready = mgs_exi_card_init(&m->card, path, 16u);
     /* Announce the slot as occupied from the outset: the SDK reads EXT before
      * it touches anything else, and a card that appears later looks like one

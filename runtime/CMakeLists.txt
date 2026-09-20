@@ -25,6 +25,7 @@ add_library(mgs_runtime STATIC
   platform/jobs.c
   platform/mmio.c
   platform/exi_card.c
+  platform/exi_ipl.c
   platform/profile.c
   dvd/fst.c
   dvd/disc.c

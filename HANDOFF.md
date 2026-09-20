@@ -6316,6 +6316,42 @@ decompilation, for behaviour only — THIRD_PARTY.md records why that is not a
 rule 9 problem, and no code was copied from it. The card's wire protocol
 came from Dolphin's device implementation, recorded there against its pin.
 
+### F168 — the clock and settings device, and a decode bug it hid
+
+Built the second device on channel 0 (`runtime/platform/exi_ipl.c`): the
+real-time clock and the 64 bytes of battery-backed SRAM holding the
+machine's language, video mode and display offset. `DoMount` reads SRAM while
+mounting, so the slot could not stay empty. The font ROM is deliberately not
+provided — it is Nintendo's, and nothing has asked for it.
+
+**Transfers reaching a device went from five of nine to seven of nine.** The
+remaining two are the AD16 debug device, which nothing needs.
+
+**A decode bug, caught only by tracing what was asked for.** The figures
+quoted for these regions — `0x20000000` for the clock, `0x20000100` for SRAM
+— are *command* values, and the command carries the address shifted up by
+six. The first version compared the decoded address against the undecoded
+constants, matched neither, and answered every SRAM read with the zero
+reserved for the font ROM. Decoded, the two regions land four apart, so they
+are now compared exactly rather than masked — masking off six bits to find
+"the region" merges the clock and the settings into one.
+
+**It did not fix the mount.** `__CARDBlock[0]` still reads `attached 0,
+result -5, mountStep 0` with the geometry correctly stored. So SRAM was a
+real gap and not the blocker.
+
+**What the SDK's own code says about that state**, which is where the next
+attempt should start rather than re-deriving it: `card->attached` is set only
+inside `CARDMountAsync`, after `EXIAttach` succeeds, and a failing
+`EXIAttach` reports NOCARD (-3), not the IOERROR (-5) we see. `attached` is
+also cleared on detach. So the -5 was most likely left by a mount that got
+further and then unwound — which matches what the API-level stubs showed in
+F166, where the game mounted, checked, and then unmounted. The missing
+evidence is which operation reports IOERROR, and the cheapest way to get it
+is a trace of the bus during the mount rather than more reading: no
+`ReadArray` (`0x52`) and no vendor-id (`0x85`) command has ever reached the
+device, so whatever fails, fails before the first real card read.
+
 ---
 
 *Record further findings here as they are established — including the ones that
