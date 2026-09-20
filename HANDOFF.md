@@ -341,6 +341,14 @@ renderer.
   opcode it did not recognise below 0x80 as a valid empty command, which meant
   it walked silently through garbage and reported the desync in the wrong
   place entirely. An unknown opcode is a desync wherever it appears.
+- **Measuring where the damage shows rather than where it enters (F163).**
+  Three times in one session the reported fault was downstream of the cause:
+  the desync reason, the misaligned display list, and the texture copy. Each
+  time, fixing what fired moved the failure to the next check. Ask what the
+  input to the broken stage looked like before changing the stage.
+- **Filtering on one attribute when two textures share it (F163).** A dump
+  keyed on 512x448 caught the CMPR texture, not the RGBA8 one, and produced a
+  confident "the video decodes correctly" that was simply the wrong texture.
 - **Caching anything on an address alone (F156).** An address is not an
   identity. The texture cache matched on address/format/size and never read
   the bytes, so every dynamically updated texture - a video frame above all -
@@ -5879,6 +5887,57 @@ With masking restored and render-to-texture in place: **0 desyncs**,
 freezes. It predates all of this work. `MGS_SAVE_SEQ` now captures a numbered
 frame sequence and `tools`-side scoring separates noise from picture by
 roughness, so the progression can be measured rather than described.
+
+
+### F163 — the video: what it is not, established the hard way
+
+The movie reaches the screen by **render-to-texture**: the embedded buffer is
+copied to `0x80066480` (and two siblings) and sampled back as a texture. That
+path was never implemented - `mgs_efb_copy` opened with `if (to_xfb && ...)`,
+so every such copy did nothing. That is the original fault and it predates all
+of this session's work.
+
+**Implementing it fixed the captions** (confirmed on screen) and did not fix
+the video.
+
+**Where the noise actually enters.** The embedded buffer *already* measures
+roughness 39 when the copy runs - a picture scores a few, noise scores tens.
+The copy is faithful; the picture is broken before it. Every change made to the
+copy path this session was therefore downstream of the fault.
+
+**A feedback loop, which is why it never recovers.** The textures sampled
+during the noise are the copy destinations themselves (`fmt 0x6` 512x448 at
+`0x80066480` and `0x806BC7C0`, roughness 33). Noise in the buffer is copied to
+a texture, drawn back into the buffer, and sustains itself. Early frames are
+genuinely flat - roughness 0, 100% lit, sampling a clean `fmt 0xE` CMPR texture
+at `0x800EA680` - so there is a clean starting state and a definite transition.
+
+**Five diagnoses of mine that measurement overturned.** Each cost a run and is
+recorded so the next pass does not spend them again:
+
+| claimed | refuted by |
+|---|---|
+| the 64-bit store truncation corrupts the FIFO | no 8-byte stores exist: 1, 2 and 4 only |
+| the decoder is starved of data | 19,253,874 bytes delivered |
+| the video decodes correctly, the fault is downstream | wrong texture: two share 512x448 and the filter matched size only |
+| the decoder works then degrades | no frame was ever correct - the "clean" ones are 87% zeros |
+| the copy format is 0xC (16bpp) | stride 8192 at 512 wide and 1024 at 64 wide is RGBA8 exactly; the field is bits 4-7 |
+
+The last one produced a correct fix - the format field, RGBA8's two-halves tile
+layout and the stride were all wrong together - and it changed the output by
+nothing at all, because it is downstream of where the noise enters.
+
+**Two faults of mine, found and fixed.** Encoding full-frame copies as tiled
+texels wrote 458 KB over the framebuffer, scrambling the video rectangle and
+leaving the letterbox clean. And spacing tile rows by `copy_stride` for the
+64x64 case wrote 16 KB into an 8 KB texture, taking a run from 0 desyncs to
+26,323,104.
+
+**What to do next, and what not to.** Find the exact frame where buffer
+roughness crosses from 0 to 39, and log every draw in that frame with its bound
+texture. Everything measured so far is on one side of that transition or the
+other. Do **not** spend more time on the copy path: it has been measured
+faithful three separate ways.
 
 ---
 
