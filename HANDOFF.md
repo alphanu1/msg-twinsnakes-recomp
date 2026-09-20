@@ -6606,6 +6606,50 @@ F170's that the interrupt was. The format was already correct and is now
 covered by tests; the interrupt is correct hardware behaviour and stays, but
 neither was the mount failure.
 
+### F173 — the movie decodes eleven frames and stops asking for more
+
+With the card mounting (F172) a headless run reaches the intro movie **with
+no pad script**, so the video is finally on the reproducible path. The first
+measurements from there change what the problem is.
+
+**The movie is not failing to decode; it stops being driven.** Textures
+decoded by shape over a 200,000,000-step run:
+
+| shape | decodes | roughness |
+|---|---|---|
+| `fmt 0xE` 512x448 — the movie's own frames | **11** | mean 6, max 51 |
+| `fmt 0x6` 512x448 — the per-frame render-to-texture | **4099** | mean 2, max 37 |
+
+Eleven distinct movie frames, each with real content, and then nothing —
+while four thousand render-to-texture updates keep arriving, so the game is
+alive and drawing throughout. That is what "frozen on the first frame with
+the text still animating over it" looks like in numbers, and it matches what
+is on screen: a flat field at 71% lit and roughness 0, with a `159x17`
+caption sampled on top of it for thousands of frames.
+
+**It is not the disc.** The game asked for 406 reads — 303 `DVDReadAsyncPrio`
+and 103 `DVDReadAbsAsyncPrio` — and all 406 completed with all 406 callbacks
+run. Nothing is outstanding. **The game stopped asking**, so nothing about
+DVD delivery can explain it.
+
+**It is not a hang.** The run stops in `GXSetVtxDesc`, the engine's own
+thread is running, and the hottest hardware reads are PI and the command
+processor's FIFO status — the shape of a game rendering normally. No audio
+register appears at all, so it is not spinning on a device either.
+
+**So the movie player believes it has nothing to do.** It buffered eleven
+frames, and whatever should advance it past them is not happening. Audio is
+the obvious suspect, being unimplemented and phase 4 by the plan — a player
+paced by how many samples have been consumed will wait forever against a
+mixer that never consumes any — but that is a hypothesis and not yet
+evidence; the absence of audio-register polling argues against the simplest
+form of it. ARAM is worth a look: 139 transfers in and 8 out for the whole
+run, with 614 of its interrupts refused against 294 delivered.
+
+**What this does close off:** the decoder, the texture cache, the CMPR
+format, the copy encoder and DVD delivery. All were suspected across this
+session and none of them is it.
+
 ---
 
 *Record further findings here as they are established — including the ones that
