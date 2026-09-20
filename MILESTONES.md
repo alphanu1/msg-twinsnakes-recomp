@@ -668,7 +668,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       runs are not deterministic: DVD reads finish on host worker threads, so
       the same binary completes 271 or 287 of them. `si_poll_frame` runs off
       the step-counted frame tick, so the race is elsewhere in the SI path.
-- [~] **A memory card** (F166, F167). Emulated as an EXI *device*, not as
+- [x] **A memory card** (F172). Mounts, and the notice screen it was causing
+      is gone — a headless boot now reaches the intro movie with no pad
+      script. Emulated as an EXI device with a pre-formatted image persisted
+      to `saves/slot_a.raw`, validated on load, and the machine's SRAM and
+      clock alongside it. The last fault was one byte: the flash id's
+      checksum in SRAM, which the mount verifies and which must be the
+      complement of the id's sum. Saving and loading real files is still to
+      come; the device and the mount are done.
+- [ ] **A memory card, superseded detail** (F166, F167). Emulated as an EXI *device*, not as
       SDK shims: the SDK identifies it correctly — 16 Mbit, sectors of 8192,
       status READY and UNLOCKED, EXT set — off a pre-formatted 2 MB image
       persisted to `saves/slot_a.raw`. It does not yet mount; next is

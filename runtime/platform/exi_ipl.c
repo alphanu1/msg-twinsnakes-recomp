@@ -50,6 +50,31 @@ void mgs_exi_ipl_init(MgsExiIpl* p)
     p->sram[0x13u] = 0u;                        /* flags          */
     sram_checksum(p);
 
+    /* THE FLASH ID'S CHECKSUM, WHICH THE CARD MOUNT VERIFIES.
+     *
+     * SRAM holds a twelve-byte flash id per slot and, separately, a checksum
+     * byte for each: the complement of the sum of those twelve. The card's
+     * mount checks it. Having reached step 1 and decided the card is already
+     * unlocked, it sums the flash id, compares, and reports an I/O ERROR if
+     * the two disagree - so a slot whose flash id is zeroed but whose
+     * checksum byte is also zero fails a mount that had otherwise succeeded.
+     *
+     * That is what it did: attached, step 0, step 1, then IOERROR, with
+     * nothing wrong with the card at all. The complement of zero is 0xFF, not
+     * zero, and writing it is the whole fix.
+     *
+     * Layout: OSSram occupies the first 20 bytes, so the extended area starts
+     * at 0x14 - flash ids at 0x14 and 0x20, their checksums at 0x3A and 0x3B.
+     */
+    {
+        unsigned ch, i;
+        for (ch = 0; ch < 2u; ++ch) {
+            uint8_t sum = 0u;
+            for (i = 0; i < 12u; ++i) sum = (uint8_t)(sum + p->sram[0x14u + ch * 12u + i]);
+            p->sram[0x3Au + ch] = (uint8_t)~sum;
+        }
+    }
+
     /* A FIXED CLOCK, deliberately. Reading the host's would make a headless
      * run unreproducible, and reproducibility is what that path is for - the
      * same reason OSGetTime counts guest ticks rather than wall clock. */

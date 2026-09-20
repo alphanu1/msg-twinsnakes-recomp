@@ -6569,6 +6569,43 @@ the store that starts the transfer re-enters the guest at a point it did not
 choose. Doing it properly means queueing the interrupt to a safe point the
 way DVD completions are, and that is the next thing to build.
 
+### F172 — the memory card mounts, and it came down to one byte of SRAM
+
+**The card works.** The notice is gone, the mount runs to completion, and a
+headless boot now reaches the intro movie with no pad script at all.
+
+```
+[card] slot A: attached, mount step 0, result -1 (BUSY)
+[card] slot A: attached, mount step 2 ... 7
+[card] slot A: attached, mount step 7, result -4 (NOFILE)
+```
+
+`NOFILE` is the right answer for a formatted card with no save on it. EXI
+transfers in a boot went from 7 reaching the card to **652**.
+
+**What was wrong: the flash id's checksum byte in SRAM.** SRAM holds a
+twelve-byte flash id per slot and a separate checksum byte for each — the
+complement of the sum of those twelve. Having reached step 1 and decided the
+card is already unlocked, the mount sums the flash id, compares it against
+that byte, and reports **IOERROR** if they disagree. Ours had a zeroed flash
+id and a zeroed checksum; the complement of zero is 0xFF, not zero. One byte
+per slot, at 0x3A and 0x3B in the block.
+
+**Why it took so long, which is the part worth keeping.** The error was
+IOERROR, so it read as a transfer fault, and three separate investigations
+went after transport: the device protocol, the card's on-disc format, and
+EXI's transfer-complete interrupt. None of them was wrong to check and none
+of them was the fault. The thing that actually found it was printing
+`mountStep` as it changed — `attached, step 0` then `step 1` then `IOERROR`
+named the exact branch, because only one line in the whole mount sets IOERROR
+immediately after setting step 1. **Watch the state machine's own counter
+before theorising about the bus underneath it.**
+
+Superseded by this: F171's suspicion that the format was at fault, and
+F170's that the interrupt was. The format was already correct and is now
+covered by tests; the interrupt is correct hardware behaviour and stays, but
+neither was the mount failure.
+
 ---
 
 *Record further findings here as they are established — including the ones that
