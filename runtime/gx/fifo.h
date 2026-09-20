@@ -212,7 +212,7 @@ typedef struct MgsGx {
     unsigned drawring_at;
     uint64_t dlring[8];
     unsigned dlring_at;
-    uint64_t dl_calls, dl_ragged, dl_truncated;
+    uint64_t dl_calls, dl_ragged, dl_truncated, dl_masked;
     uint32_t trace_dl_addr;  /* MGS_TRACE_DLADDR: follow one list */
     int      dl_follow, dl_followed;
     unsigned dl_follow_n;

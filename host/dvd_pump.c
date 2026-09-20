@@ -39,6 +39,9 @@
 #define MSR_EE 0x8000u
 
 static uint64_t s_completed, s_callbacks, s_deferred;
+static uint64_t s_bytes, s_reads_late;
+uint64_t mgs_dvd_bytes(void);
+uint64_t mgs_dvd_bytes(void) { return s_bytes; }
 
 uint64_t mgs_dvd_completed(void)  { return s_completed; }
 uint64_t mgs_dvd_callbacks(void)  { return s_callbacks; }
@@ -72,6 +75,7 @@ void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd)
     for (i = 0; i < n; ++i) {
         uint32_t callback = done[i]->guest_callback;
         ++s_completed;
+        s_bytes += (done[i]->result > 0) ? (uint64_t)done[i]->result : 0u;
 
         if (callback) {
             uint32_t args[2];

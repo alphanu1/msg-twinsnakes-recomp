@@ -33,6 +33,118 @@ static void rgb_to_ycbcr(uint32_t argb, int* y, int* cb, int* cr)
 
 static uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v)); }
 
+
+/* EFB TO TEXTURE.
+ *
+ * Until now a copy that was not to the external framebuffer did nothing at
+ * all, and a boot that reaches the movie makes 21,041 of them - 64x64, format
+ * 0xC - every one discarded. Whatever the game sampled afterwards was
+ * therefore whatever happened to be in that memory, which is how a caption
+ * compositor renders as noise.
+ *
+ * Textures are TILED: 4x4 texels for the 16-bit formats, 8x4 for the 8-bit
+ * ones, and the tiles run left to right then top to bottom. Writing linearly
+ * gives a picture that is recognisably the right thing cut into squares and
+ * shuffled, which is a distinctive and easily mistaken kind of wrong.
+ */
+static void tex_tile_shape(unsigned fmt, unsigned* tw, unsigned* th,
+                           unsigned* bpp)
+{
+    switch (fmt) {
+        case 0x0u: *tw = 8; *th = 8; *bpp = 4;  break;   /* I4  */
+        case 0x1u: case 0x8u: case 0x9u: case 0xAu:
+                   *tw = 8; *th = 4; *bpp = 8;  break;   /* I8, R8, G8, B8 */
+        case 0x2u: *tw = 8; *th = 4; *bpp = 8;  break;   /* IA4 */
+        default:   *tw = 4; *th = 4; *bpp = 16; break;   /* IA8, 565, 5A3, RG8, GB8 */
+    }
+}
+
+static uint16_t encode_texel(unsigned fmt, uint32_t argb)
+{
+    unsigned a = (argb >> 24) & 0xFFu, r = (argb >> 16) & 0xFFu;
+    unsigned g = (argb >> 8) & 0xFFu,  b = argb & 0xFFu;
+    unsigned i = (r * 77u + g * 151u + b * 28u) >> 8;   /* luminance */
+
+    switch (fmt) {
+        case 0x3u: return (uint16_t)((a << 8) | i);                  /* IA8 */
+        case 0x4u: return (uint16_t)(((r & 0xF8u) << 8) |            /* RGB565 */
+                                     ((g & 0xFCu) << 3) | (b >> 3));
+        case 0x5u:                                                    /* RGB5A3 */
+            if (a >= 0xE0u)
+                return (uint16_t)(0x8000u | ((r >> 3) << 10) |
+                                  ((g >> 3) << 5) | (b >> 3));
+            return (uint16_t)(((a >> 5) << 12) | ((r >> 4) << 8) |
+                              ((g >> 4) << 4) | (b >> 4));
+        case 0xBu: return (uint16_t)((r << 8) | g);                  /* RG8 */
+        case 0xCu: return (uint16_t)((g << 8) | b);                  /* GB8 */
+        default:   return (uint16_t)((a << 8) | i);
+    }
+}
+
+void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
+                      unsigned sx, unsigned sy,
+                      unsigned width, unsigned height, unsigned fmt)
+{
+    unsigned tw, th, bpp, tiles_x, tx, ty, x, y;
+
+    if (!efb->copy_dest || !mem || !width || !height) return;
+    tex_tile_shape(fmt, &tw, &th, &bpp);
+    tiles_x = (width + tw - 1u) / tw;
+
+    for (ty = 0; ty < (height + th - 1u) / th; ++ty) {
+        for (tx = 0; tx < tiles_x; ++tx) {
+            unsigned tile_bytes = tw * th * bpp / 8u;
+            /* THE STRIDE IS THE DISTANCE BETWEEN ROWS OF TILES, and it is not
+             * the same as packing them tightly. These copies are 64 wide with
+             * 4x4 tiles, so a row of tiles is 16 * 32 = 512 bytes - but the
+             * game programmes a stride of 1024. Packing at 512 puts every row
+             * after the first at the wrong address, which writes a correctly
+             * encoded texture into a scrambled layout. */
+            /* TILES PACKED, NOT SPACED BY THE COPY STRIDE.
+             *
+             * The stride register is shared with the framebuffer path and
+             * reads 1024 for these 64-wide copies - the external buffer's
+             * line pitch, not this texture's. Spacing tile rows by it writes
+             * 16 KB where the texture is 8 KB, over whatever follows: that
+             * took a run from 0 desyncs to 26,323,104, because what follows
+             * includes display lists. Tried, measured, reverted. */
+            uint32_t base = efb->copy_dest +
+                            (ty * tiles_x + tx) * tile_bytes;
+            for (y = 0; y < th; ++y) {
+                for (x = 0; x < tw; ++x) {
+                    unsigned px = tx * tw + x, py = ty * th + y;
+                    unsigned ex, ey;
+                    uint32_t argb;
+                    uint8_t* p;
+
+                    if (px >= width || py >= height) continue;
+                    ex = sx + px; ey = sy + py;
+                    if (ex >= MGS_EFB_WIDTH || ey >= MGS_EFB_HEIGHT) continue;
+                    argb = efb->pixels[ey * MGS_EFB_WIDTH + ex];
+
+                    if (bpp == 16u) {
+                        uint16_t t = encode_texel(fmt, argb);
+                        p = guest_ptr(mem, base + (y * tw + x) * 2u, 2u);
+                        if (!p) continue;
+                        p[0] = (uint8_t)(t >> 8); p[1] = (uint8_t)t;
+                    } else if (bpp == 8u) {
+                        unsigned v = (fmt == 0x8u) ? ((argb >> 16) & 0xFFu)
+                                   : (fmt == 0x9u) ? ((argb >> 8) & 0xFFu)
+                                   : (fmt == 0xAu) ? (argb & 0xFFu)
+                                   : (((argb >> 16) & 0xFFu) * 77u +
+                                      ((argb >> 8) & 0xFFu) * 151u +
+                                      (argb & 0xFFu) * 28u) >> 8;
+                        p = guest_ptr(mem, base + y * tw + x, 1u);
+                        if (!p) continue;
+                        *p = (uint8_t)v;
+                    }
+                }
+            }
+        }
+    }
+    ++efb->tex_copies;
+}
+
 void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
                   unsigned width, unsigned height, int to_xfb, int clear)
 {

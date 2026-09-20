@@ -601,6 +601,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
          * guessing from a lone opcode byte matches vertex data too - acting
          * on one of those writes a framebuffer over the game's memory. */
         m->wgpipe_bytes += size;
+        if (size < 16u) ++m->wgpipe_by_size[size];
         if (m->fifo_sink) m->fifo_sink(m->fifo_user, value, size);
         return;
     }

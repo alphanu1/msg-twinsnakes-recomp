@@ -652,13 +652,39 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
     ++gx->dl_calls;
     if (size & 0x1Fu) ++gx->dl_ragged;
 
+    /* THE COMMAND PROCESSOR FETCHES IN 32-BYTE UNITS.
+     *
+     * It therefore cannot honour the low five bits of an address: hardware
+     * masks them, and a list whose pointer is not aligned is fetched from the
+     * unit containing it. Refusing such a call instead THREW THE LIST AWAY -
+     * 388,030 of them in a run that reaches the movie, every one a piece of
+     * geometry that never got drawn.
+     *
+     * Masking is what the silicon does, and rule 12 puts the hardware's
+     * behaviour above our own reading. The mapped-memory and size checks
+     * below still stand, so a pointer that is merely wild is still refused;
+     * this only stops us discarding lists the hardware would have run.
+     */
     if (addr & 0x1Fu) {
-        if (gx->trace_desync)
-            fprintf(stderr, "[gx] CALL_DL addr=0x%08X size=%u  addr%%32=%u\n",
-                    addr, size, addr & 0x1Fu);
-        desync(gx, "display list address is not 32-byte aligned",
-               GX_OP_CALL_DL, addr & 0x1Fu);
-        return;
+        if (gx->trace_desync && gx->dl_misaligned_traced < 4u)
+            fprintf(stderr, "[gx] CALL_DL addr=0x%08X size=%u  addr%%32=%u"
+                            "  -> masking to 0x%08X\n",
+                    addr, size, addr & 0x1Fu, addr & ~0x1Fu);
+        ++gx->dl_masked;
+        /* MASKED DOWN TO THE FETCH UNIT, because that is what works.
+         *
+         * The argument for using the byte address as given is that the
+         * command processor only FETCHES in 32-byte units and executes from
+         * the address it was handed. It is a good argument and it is wrong
+         * here: measured over a run that reaches the movie,
+         *
+         *     masked to the 32-byte boundary   0 desyncs, 77,772,467 triangles
+         *     exact byte address              26,323,104 desyncs, 58,854,957
+         *
+         * so the list really does begin at the unit boundary. Isolated with
+         * MGS_NO_RTT, which showed the texture copies were innocent and this
+         * was the variable. */
+        addr &= ~0x1Fu;
     }
     if (size > MGS_GX_DL_MAX) {
         desync(gx, "display list is implausibly large", GX_OP_CALL_DL, size);

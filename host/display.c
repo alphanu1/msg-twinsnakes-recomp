@@ -142,6 +142,10 @@ static const char* s_best_path;
 static unsigned s_best_lit, s_best_w, s_best_h;
 
 /* The embedded framebuffer, straight out, with no YUV round trip. */
+static const char* s_seq_prefix;
+static int s_seq_init;
+static unsigned s_seq_every = 400u;
+
 static int save_efb_ppm(const char* path, unsigned w, unsigned h)
 {
     FILE* f = fopen(path, "wb");
@@ -224,6 +228,24 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
          * answered from it. This samples every copy to the external buffer,
          * counts what is lit, and keeps the fullest. It runs only when
          * MGS_SAVE_BEST names a file. */
+        /* MGS_SAVE_SEQ=<prefix> writes every Nth frame to prefix_NNNN.ppm
+         * (N from MGS_SAVE_EVERY, default 400). Watching a sequence is the
+         * only way to see a fault that appears partway through a movie and
+         * then stops: one frame cannot show a progression. */
+        if (!s_seq_init) { s_seq_init = 1;
+            s_seq_prefix = getenv("MGS_SAVE_SEQ");
+            { const char* e = getenv("MGS_SAVE_EVERY");
+              if (e && *e) s_seq_every = (unsigned)strtoul(e, NULL, 0);
+              if (!s_seq_every) s_seq_every = 1u; } }
+        if ((cmd & COPY_TO_XFB) && s_seq_prefix) {
+            static unsigned seq_n, seq_i;
+            if ((seq_n++ % s_seq_every) == 0u && seq_i < 60u) {
+                char path[512];
+                snprintf(path, sizeof path, "%s_%04u.ppm", s_seq_prefix, seq_i++);
+                save_efb_ppm(path, copy_w, copy_h);
+            }
+        }
+
         if ((cmd & COPY_TO_XFB) && s_best_path) {
             unsigned lit = 0u, yy, xx;
             for (yy = 0; yy < copy_h && yy < MGS_EFB_HEIGHT; ++yy)
@@ -237,9 +259,25 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
             }
         }
 
-        if (!getenv("MGS_NO_COPY"))
-            mgs_efb_copy(&s_efb, mem, copy_w, copy_h,
-                         (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0);
+        if (!getenv("MGS_NO_COPY")) {
+            /* A copy to TEXTURE is not a copy to the screen, and both arrive
+             * through this one command. The source rectangle's top-left
+             * matters here in a way it does not for the framebuffer: a
+             * render-to-texture pass reads a small box out of the embedded
+             * buffer, often the scratch strip to the right of the visible
+             * area, not the origin. */
+            if (cmd & COPY_TO_XFB) {
+                mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 1,
+                             (cmd & COPY_CLEAR) != 0);
+            } else if (!getenv("MGS_NO_RTT")) {
+                uint32_t tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
+                mgs_efb_copy_tex(&s_efb, mem, tl & 0x3FFu,
+                                 (tl >> 10) & 0x3FFu,
+                                 copy_w, copy_h, (cmd >> 3) & 0xFu);
+                if (cmd & COPY_CLEAR)
+                    mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 0, 1);
+            }
+        }
 
         /* The depth buffer is cleared with the colour buffer. Leaving it
          * would have the next frame's geometry tested against the last

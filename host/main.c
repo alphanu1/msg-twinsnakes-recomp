@@ -23,6 +23,7 @@
 
 void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
 uint64_t mgs_dvd_completed(void);
+uint64_t mgs_dvd_bytes(void);
 uint64_t mgs_dvd_callbacks(void);
 const MgsEfb* mgs_display_efb(void);
 const MgsGx* mgs_display_gx(void);
@@ -1484,6 +1485,8 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_interrupt_pe_seen(),
                                (unsigned long long)mgs_interrupt_pe_sent(),
                                (unsigned long long)mgs_host_mmio()->pe_finish_acks);
+                        printf("DVD bytes delivered: %llu\n",
+                               (unsigned long long)mgs_dvd_bytes());
                         printf("DVD reads completed: %llu  callbacks run: %llu"
                                "  deferred (guest had interrupts off): %llu\n",
                                (unsigned long long)mgs_dvd_completed(),
@@ -1703,6 +1706,19 @@ int main(int argc, char** argv)
                                    (unsigned long long)mm->reads,
                                    (unsigned long long)mm->writes,
                                    (unsigned long long)mm->wgpipe_bytes);
+                            {   /* The pipe takes 1, 2, 4 and EIGHT byte
+                                 * stores; eight is what psq_st and stfd do,
+                                 * and is how immediate-mode vertices are
+                                 * written. */
+                                unsigned k;
+                                printf("  write-gather stores by size:");
+                                for (k = 1; k < 16u; ++k)
+                                    if (mm->wgpipe_by_size[k])
+                                        printf(" %u:%llu", k,
+                                               (unsigned long long)
+                                                   mm->wgpipe_by_size[k]);
+                                printf("\n");
+                            }
                             overlay_line("MMIO R:%llu W:%llu FIFO:%llu",
                                    (unsigned long long)mm->reads,
                                    (unsigned long long)mm->writes,

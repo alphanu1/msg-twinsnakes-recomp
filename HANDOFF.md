@@ -308,6 +308,13 @@ renderer.
   rejected by the depth test in a whole boot. Honouring ZMODE was correct
   and changed the frame by nothing. Submission order alone decides what is
   in front here.
+- **Concluding from a run whose build you did not verify (F162).** Two runs
+  with different code came back byte-identical across 45 million commands.
+  The build had not finished. Use a RUNTIME switch to A/B a feature, not a
+  rebuild.
+- **"The command processor executes from the byte address it is handed"
+  (F162).** Plausible, and wrong for display lists: masking to the 32-byte
+  fetch boundary gives 0 desyncs where the exact address gives 26,323,104.
 - **Fixing the first desync you find (F161).** All 388,030 desyncs in a video
   run share ONE reason. The first one found was a different, rarer fault, and
   hours went into it. Count failures by reason BEFORE examining any instance.
@@ -5816,6 +5823,62 @@ of an earlier silent divergence, which is the third time tonight that has been
 true.
 
 Boot is unchanged: 2,338,178 commands, **0 desyncs**.
+
+
+### F162 — render-to-texture, and an argument that lost to a measurement
+
+**EFB-to-texture copies were never implemented.** `mgs_efb_copy` opened with
+`if (to_xfb && ...)`, so a copy to a texture did nothing at all - **21,041 of
+them in a run that reaches the movie**, every one discarded. Whatever the game
+composited into a scratch target and sampled back was uninitialised memory,
+which renders as noise. A 64x64 target written 21,000 times is a compositor,
+and it starts running when captions appear - which is exactly when the user
+had been reporting the corruption from the beginning.
+
+Implemented with the hardware's tiling: 4x4 texels for the 16-bit formats,
+8x4 for the 8-bit ones, tiles left to right then top to bottom. Writing
+linearly gives a picture that is recognisably right but cut into shuffled
+squares, which is a distinctive and easily mistaken kind of wrong. The source
+rectangle's top-left is read as well: render-to-texture takes a small box out
+of the embedded buffer, often the scratch strip right of the visible area,
+not the origin.
+
+**Confirmed by the user: the captions render correctly.**
+
+**Two of my own changes were wrong, and both were caught by measurement.**
+
+- **Spacing tile rows by `copy_stride`.** The stride register is shared with
+  the framebuffer path and reads 1024 for these 64-wide copies - the external
+  buffer's line pitch, not this texture's. A row of 4x4 tiles at 16bpp is
+  512 bytes, so spacing by 1024 writes 16 KB into an 8 KB texture, over
+  whatever follows. Tiles are packed.
+- **Using the exact byte address for a misaligned display list.** The argument
+  is good: the command processor only FETCHES in 32-byte units and executes
+  from the address it is handed, so masking would begin a list up to 31 bytes
+  early. Measured over a run that reaches the movie:
+
+  | address handling | desyncs | triangles |
+  |---|---|---|
+  | masked to the 32-byte boundary | **0** | 77,772,467 |
+  | exact byte address | 26,323,104 | 58,854,957 |
+
+  The lists begin at the unit boundary. The argument was plausible and wrong,
+  and is recorded with its numbers so it is not made again.
+
+**`MGS_NO_RTT` is what settled it.** With two changes in flight and a rebuild
+that had not completed, packed and strided runs came back byte-identical
+across 45 million commands - impossible, and a sign the binary was stale. A
+runtime switch cannot be confounded by a build that did not happen: it showed
+the texture copies were innocent and the address handling was the variable.
+
+With masking restored and render-to-texture in place: **0 desyncs**,
+77,772,467 triangles, and lit pixels up from 4,401,047,447 to **5,391,299,344**
+- a billion more, which is the composited content reaching the screen.
+
+**Still open:** the video image itself degrades a few seconds in and then
+freezes. It predates all of this work. `MGS_SAVE_SEQ` now captures a numbered
+frame sequence and `tools`-side scoring separates noise from picture by
+roughness, so the progression can be measured rather than described.
 
 ---
 

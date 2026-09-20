@@ -64,6 +64,7 @@ typedef struct MgsMmio {
      * rather than stored: phase 3 will consume them, and until then knowing
      * the game is producing commands is the useful signal. */
     uint64_t wgpipe_bytes;
+    uint64_t wgpipe_by_size[16];
 
     MgsFifoSink fifo_sink;
     void*       fifo_user;
