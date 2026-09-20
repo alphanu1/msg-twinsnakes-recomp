@@ -1449,6 +1449,65 @@ in the map would announce itself.
 Re-running yields nothing further — closed regions are exhausted along with
 the other two routes until new anchors arrive.
 
+## Stage 5o — Where the remaining unnamed code actually is · **DONE**
+
+`tools/unnamed-by-region.py` answers the question that governs how much more
+naming is worth attempting:
+
+```
+927 unnamed call sites across 132 functions
+
+  Konami sound / Tremor            602   no public reference
+  CR_System (Konami)               270   no public reference
+  CodeWarrior runtime / boot        26   partly
+  SDK: audio / DSP / AR / CARD      12   yes
+  SDK: GX                            5   yes
+  SDK: OS                            2   yes
+
+45 of 927 (5%) are in code with a public reference to match against.
+```
+
+**Ninety-five per cent of what is left has nothing to match it against.** It
+is Konami's own sound layer, their edited Tremor, and `CR_System.c`; every
+name there has to be earned by reading the instruction stream and can only
+ever be a description of behaviour.
+
+### `fprintf`, by three routes
+
+The largest remaining referenced target was `0x80011CE0`, three call sites,
+sitting between `vprintf` and `printf` and calling `__pformatter`, `fwide`
+and the critical-region pair. Only two functions in the reference share that
+signature — `fprintf` and `vprintf` — and `vprintf` is already placed.
+
+The third route is the calling convention: the function spills `f1`-`f6` at
+entry, which is a **varargs** prologue. `fprintf` takes `...`; `vfprintf`
+takes a `va_list` and would not spill. Named `fprintf`.
+
+### A wrong turn worth recording
+
+The reference orders that file `printf`, `fprintf`, `vprintf`, while the
+binary has `vprintf` *below* `0x80011CE0` and `printf` above — the reverse.
+That looked like two existing names being swapped, which would have been a
+real defect in the map.
+
+They are not. `printf` spills its float argument registers and `vprintf` does
+not, so both are correctly placed and this translation unit simply is not
+emitted in source order. **Checked before "fixing" anything**, which is the
+only reason two good names survived.
+
+### And where it stops
+
+The remaining referenced candidates are MSL_C maths routines, and MSL puts
+**one function in each translation unit** — `fmod` is alone in `w_fmod.c`.
+There is no shared file to bound a gap inside, so neither the closed-region
+rule nor sequence alignment can reach them, and a 32-byte leaf with no calls
+offers nothing else to go on. Closed.
+
+### Result
+
+**1,035 functions named**; SDK entry points the engine calls, **205 of 336
+(61.0%)**; phase 0 at **70.7%**.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.

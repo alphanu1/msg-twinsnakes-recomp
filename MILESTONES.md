@@ -17,12 +17,12 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,240 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,241 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
 mechanical rewrite of machine code into C; decompilation in the matching-source
-sense is out of scope by design and sits at ~0%. Phase 0 progress is 70.6%. The toolchain is
+sense is out of scope by design and sits at ~0%. Phase 0 progress is 70.7%. The toolchain is
 built and verified. Both PAL discs are extracted, the SDK build is known, and
 `config/GGSPA4.toml` holds the executable hashes. What remains in phase 0 is the
 symbol recovery itself.
