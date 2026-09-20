@@ -51,6 +51,13 @@ typedef struct MgsGxRaster {
     uint64_t blended, write_masked;
     int      trace_noisy;    /* MGS_TRACE_NOISY: score bound textures */
     unsigned noisy_logged;
+    /* The last draws, each with the texture it sampled: addr, format, size
+     * and how noisy that texture was. Dumped when the embedded buffer first
+     * turns to noise, to name the draw that did it. */
+    uint32_t drawlog_addr[64];
+    uint16_t drawlog_w[64], drawlog_h[64];
+    uint8_t  drawlog_fmt[64], drawlog_rough[64];
+    unsigned drawlog_at;
     uint32_t cmode_key[16]; uint64_t cmode_hit[16]; unsigned cmode_n;
     uint64_t black_over_lit;       /* black pixels drawn over lit ones */
     uint64_t black_over_lit_x[20]; /* ...by column, 32px buckets */

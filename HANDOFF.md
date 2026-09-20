@@ -5939,6 +5939,52 @@ texture. Everything measured so far is on one side of that transition or the
 other. Do **not** spend more time on the copy path: it has been measured
 faithful three separate ways.
 
+
+### F164 — the garbage is gone: RGBA8, and why the fix looked like it failed
+
+The movie no longer shows corruption. The video rectangle is clean and the
+captions render correctly over it.
+
+**The fix was the copy format, and three things were wrong together**, which is
+why every partial attempt made it worse in a different way:
+
+- **The format field is bits 4-7, not 3-6.** `cmd 0x010063` gives **6**
+  (RGBA8, 32bpp), where bits 3-6 give `0xC` (a 16-bit format).
+- **RGBA8 is two 32-byte halves per 4x4 tile** - sixteen alpha/red pairs, then
+  sixteen green/blue. Written as one run of 32-bit texels it produces a
+  plausible wrong image rather than an obviously wrong one.
+- **Tile rows are spaced by the programmed stride**, which only agrees with the
+  format once the format is right: 8192 for a 512-wide target, 1024 for a
+  64-wide one. Both match exactly what the game sets, and that agreement is
+  what confirmed the format rather than another guess.
+
+**Why it appeared not to work.** The corrected encoder was measured while
+full-frame copies were disabled - I had excluded them an hour earlier to stop
+an earlier version writing over the framebuffer. With the format fixed they are
+the video, so excluding them removed the thing the fix repaired. Two changes in
+flight, and the measurement covered only one.
+
+**The encoder round-trips, verified.** A uniform source of luminance 23 writes
+bytes spanning 0..39, which is a flat teal decomposed into alpha/red near zero
+and green/blue near 39. Uniform in, uniform out: it manufactures nothing.
+
+**The CMPR path is sound too.** The video samples `fmt 0xE` 512x448 textures.
+Their source bytes measure entropy 5.58/8 with 15% of blocks carrying identical
+endpoints - real block-compressed data - and they decode to a picture:
+roughness 4.1, 84 colours, 27,080 lit texels. Neither the decoder nor the
+format was ever at fault there.
+
+**What remains: the picture is frozen, not corrupt.** The visible frame is a
+flat teal, and the live `[video]` line names why - the draw producing it samples
+a CMPR texture whose roughness is **0** while other CMPR textures in the same
+run carry real content. Content exists; the wrong one is reaching the screen.
+The freeze coincides with where the subtitles begin.
+
+A live `[video]` line now prints in an ordinary run, every 120 frames and on
+any crossing between clean and noisy: frame, size, roughness, lit percentage,
+scan-out address, and the last texture sampled with its address and roughness.
+That is what identified this in seconds instead of another instrumented build.
+
 ---
 
 *Record further findings here as they are established — including the ones that

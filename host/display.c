@@ -247,6 +247,93 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
          * With two framebuffers alternating, any disagreement means we fill
          * one and show the other - which flashes between a good frame and a
          * never-written one rather than being steadily wrong. */
+        /* A LIVE LINE ABOUT THE PICTURE, in the ordinary run.
+         *
+         * Roughness - the mean difference between neighbouring pixels -
+         * separates artwork from noise by an order of magnitude: a drawn
+         * frame scores a few, uncorrelated pixels score tens. Printed every
+         * 120 frames, and immediately whenever it crosses between the two,
+         * so a run in a terminal says when the picture broke and what it was
+         * sampling at the time rather than needing a special build.
+         */
+        if (cmd & COPY_TO_XFB) {
+            static unsigned vn; static int was_noisy = -1;
+            unsigned yy, cnt = 0u, rough = 0u, lit = 0u;
+            for (yy = 0; yy < copy_h && yy < MGS_EFB_HEIGHT; yy += 8u) {
+                unsigned xx;
+                for (xx = 1u; xx < copy_w && xx < MGS_EFB_WIDTH; xx += 4u) {
+                    uint32_t a = s_efb.pixels[yy * MGS_EFB_WIDTH + xx - 1u];
+                    uint32_t b = s_efb.pixels[yy * MGS_EFB_WIDTH + xx];
+                    int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) / 3;
+                    int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
+                    rough += (unsigned)(va > vb ? va - vb : vb - va);
+                    if (b & 0x00FFFFFFu) ++lit;
+                    ++cnt;
+                }
+            }
+            {
+                unsigned r = cnt ? rough / cnt : 0u;
+                int noisy = r > 20u;
+                if (noisy != was_noisy || (vn % 120u) == 0u) {
+                    const MgsGxRaster* rr = &s_raster;
+                    unsigned i2 = (rr->drawlog_at - 1u) & 63u;
+                    printf("[video] frame %5u  %ux%u  roughness %3u %-5s  "
+                           "lit %3u%%  xfb 0x%08X",
+                           vn, copy_w, copy_h, r, noisy ? "NOISE" : "ok",
+                           cnt ? lit * 100u / cnt : 0u,
+                           mgs_mmio_xfb_address(mgs_host_mmio()));
+                    if (rr->drawlog_w[i2])
+                        printf("  last texture %ux%u fmt 0x%X @0x%08X r%u",
+                               rr->drawlog_w[i2], rr->drawlog_h[i2],
+                               rr->drawlog_fmt[i2], rr->drawlog_addr[i2],
+                               rr->drawlog_rough[i2]);
+                    printf("\n");
+                    fflush(stdout);
+                    was_noisy = noisy;
+                }
+                ++vn;
+            }
+        }
+
+        /* WHEN DOES THE BUFFER TURN? Once per frame, cheap, and on the
+         * first crossing dump the draws that led to it. Everything measured
+         * so far sits on one side of this transition or the other. */
+        if ((cmd & COPY_TO_XFB) && getenv("MGS_FIND_TURN")) {
+            static int turned;
+            unsigned yy, cnt = 0u, rough = 0u;
+            for (yy = 0; yy < copy_h && yy < MGS_EFB_HEIGHT; yy += 8u) {
+                unsigned xx;
+                for (xx = 1u; xx < copy_w && xx < MGS_EFB_WIDTH; xx += 4u) {
+                    uint32_t a = s_efb.pixels[yy * MGS_EFB_WIDTH + xx - 1u];
+                    uint32_t b = s_efb.pixels[yy * MGS_EFB_WIDTH + xx];
+                    int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) / 3;
+                    int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
+                    rough += (unsigned)(va > vb ? va - vb : vb - va);
+                    ++cnt;
+                }
+            }
+            if (!turned && cnt && rough / cnt > 20u) {
+                const MgsGxRaster* rr = &s_raster;
+                unsigned k;
+                turned = 1;
+                fprintf(stderr, "[turn] buffer went noisy: roughness %u, "
+                        "frame %llu\n", rough / cnt,
+                        (unsigned long long)s_efb.copies);
+                fprintf(stderr, "[turn] the last large textures sampled, "
+                        "oldest first:\n");
+                for (k = 48u; k > 0u; --k) {
+                    unsigned i2 = (rr->drawlog_at - k) & 63u;
+                    if (!rr->drawlog_w[i2]) continue;
+                    fprintf(stderr, "[turn]   %ux%u fmt 0x%X at 0x%08X "
+                            "roughness %u%s\n",
+                            rr->drawlog_w[i2], rr->drawlog_h[i2],
+                            rr->drawlog_fmt[i2], rr->drawlog_addr[i2],
+                            rr->drawlog_rough[i2],
+                            rr->drawlog_rough[i2] > 20u ? "  <-- noise" : "");
+                }
+            }
+        }
+
         if ((cmd & COPY_TO_XFB) && getenv("MGS_TRACE_XFBPAIR")) {
             static unsigned n;
             if (n++ < 24u) {

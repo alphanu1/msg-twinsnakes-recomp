@@ -201,6 +201,40 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
             }
         }
     }
+    /* DOES THE ENCODER ROUND-TRIP?
+     *
+     * A flat source must produce flat bytes. If the embedded buffer is
+     * uniform and what lands in memory is not, the encoder is manufacturing
+     * the noise rather than copying it - and that would make it the source,
+     * not a victim, of everything downstream. Comparing the spread of the
+     * source against the spread of the bytes written answers it directly.
+     */
+    if (getenv("MGS_CHECK_ENCODE")) {
+        static unsigned n;
+        if (width > 256u && n++ < 6u) {
+            unsigned i, srcmin = 255u, srcmax = 0u, bmin = 255u, bmax = 0u;
+            const uint8_t* wrote = guest_ptr(mem, efb->copy_dest, 4096u);
+            for (i = 0; i < 2048u; ++i) {
+                unsigned px = (sy + (i / 64u)) * MGS_EFB_WIDTH + sx + (i % 64u);
+                uint32_t c = efb->pixels[px];
+                unsigned v = (((c >> 16) & 0xFF) + ((c >> 8) & 0xFF) + (c & 0xFF)) / 3u;
+                if (v < srcmin) srcmin = v;
+                if (v > srcmax) srcmax = v;
+            }
+            if (wrote) {
+                for (i = 0; i < 4096u; ++i) {
+                    if (wrote[i] < bmin) bmin = wrote[i];
+                    if (wrote[i] > bmax) bmax = wrote[i];
+                }
+            }
+            fprintf(stderr, "[encode] %ux%u -> 0x%08X   source spread %u..%u"
+                    "   bytes written %u..%u%s\n",
+                    width, height, efb->copy_dest, srcmin, srcmax, bmin, bmax,
+                    (srcmax - srcmin < 8u && bmax - bmin > 64u)
+                        ? "   <-- FLAT IN, NOISY OUT" : "");
+        }
+    }
+
     ++efb->tex_copies;
 }
 
