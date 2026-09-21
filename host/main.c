@@ -1223,7 +1223,15 @@ int main(int argc, char** argv)
         printf("disc 2: not mounted (the swap will be refused until it is)\n");
 
     mgs_profile_start();
-    jobs = mgs_jobs_create(0u);
+    /* MGS_JOBS=<n> sizes the worker pool; 0 (the default) picks one per
+     * core less one. Exposed because it is the only knob that changes how
+     * much of the run is concurrent, and a run that differs from another
+     * needs that isolated first: F204 found three 120M runs where two were
+     * byte-identical and the third was not. */
+    {
+        const char* env = getenv("MGS_JOBS");
+        jobs = mgs_jobs_create(env ? (unsigned)strtoul(env, NULL, 0) : 0u);
+    }
     {
         /* The rasteriser is the one piece of runtime work heavy enough to be
          * worth splitting across cores, and the only one on the frame's
