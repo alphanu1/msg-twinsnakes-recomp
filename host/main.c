@@ -95,12 +95,19 @@ static void task_mask_watch(void* cpu)
  * symbol table and tools/resolve-addrs.py maps them afterwards, which also
  * means an old dump re-resolves as naming improves.
  */
+/* MGS_TASK_DUMP=<guest address of a task function>: dump that task's node. */
+static uint32_t s_task_dump_fn;
+
 static void dump_engine_tasks(void* cpu)
 {
     uint32_t mask;
     unsigned level;
 
     if (!s_engine_bss) { printf("engine tasks: the overlay never linked\n"); return; }
+    {
+        const char* env = getenv("MGS_TASK_DUMP");
+        s_task_dump_fn = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
+    }
     mask = mgs_module_guest_read32(cpu, s_engine_bss + 0x23A38u);
     printf("engine tasks (global mask 0x%08X):\n", mask);
 
@@ -132,6 +139,29 @@ static void dump_engine_tasks(void* cpu)
                    node, func, flags,
                    func ? "" : "  NO FUNCTION",
                    (flags & 0x000F0000u) ? "  SKIPPED BY FLAGS" : "");
+            /* THE NODE IS THE TASK'S OWN OBJECT.
+             *
+             * The dispatcher reaches `bctrl` with r3 still holding the node,
+             * so a task function is called with its own list entry as its
+             * argument - which means the node carries that task's state, and
+             * dumping it says WHY a task that does run does nothing. The
+             * movie task is a state machine on +0x44 and returns immediately
+             * for states it does not handle.
+             *
+             * Selected by function address rather than dumped for every
+             * task, because these fields mean different things to different
+             * tasks and a column of them would invite reading one task's
+             * layout onto another. */
+            if (s_task_dump_fn && func == s_task_dump_fn) {
+                unsigned w;
+                for (w = 0u; w < 0x60u; w += 0x10u) {
+                    printf("        +0x%02X %08X %08X %08X %08X\n", w,
+                           mgs_module_guest_read32(cpu, node + w),
+                           mgs_module_guest_read32(cpu, node + w + 4u),
+                           mgs_module_guest_read32(cpu, node + w + 8u),
+                           mgs_module_guest_read32(cpu, node + w + 12u));
+                }
+            }
             node = next;
         }
     }

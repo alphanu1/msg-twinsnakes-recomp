@@ -7587,6 +7587,64 @@ neighbourhood. That is worth following, but carefully: the freeze begins at
 frame 960 while the mask still reads `0x00000000`, so this gating arrives
 after the picture has already stopped.
 
+### F196 — the movie deadlock, traced end to end: the mask the movie sets is the mask that stops it ending
+
+Following F195's correction — the decoder *is* registered and eligible — the
+whole chain is now read out of the instruction stream, and it closes on
+itself.
+
+**The task is in state 1 and cannot leave it.** The engine dispatcher calls a
+task with `r3` still holding its list node, so the node *is* the task's
+object. Dumping the movie task's node (`MGS_TASK_DUMP=0x7F151214`):
+
+    task 0x811CDDE0  fn 0x7F151214  flags 0x000080B0
+      +0x40 00000002 00000001 00000000 00000001
+
+`+0x44` is the state machine's selector and reads **1**; `+0x4C` reads 1,
+which state 0 sets on its way out, so start-up completed. The two asserts in
+state 0 — `mpegGCN.c` lines 905 and 910, a lookup by id and an attach —
+both passed, and the log carries no diagnostic at all.
+
+**State 1 advances only on an event.** It reads `(*bss_55EA4)->0x3C` before
+and after calling `fn_1_149048`, and returns unchanged if both are zero.
+`fn_1_149048` polls an event list and sets that flag on **event code 1**:
+
+    n = fn_1_F52A8(g->0x38, &list);
+    for (i = 0; i < n; ++i, list += 0x10)
+        if (list->0x08->0x00 == 1) g->0x3C = 1;
+
+**And the poll is gated by the task mask.** The first thing `fn_1_F52A8`
+does:
+
+    r0 = *bss_23A38;        /* the global task mask */
+    if (r0 != 0) return 0;  /* no events, at all */
+
+So a non-zero mask does not merely gate task *levels* — it **stops every
+event in the engine from being delivered**. The mask reads `0x00000008` at
+the end of a run.
+
+**Which closes the loop:**
+
+    mask != 0  ->  no events delivered
+               ->  the movie task never sees event 1
+               ->  it stays in state 1
+               ->  the movie never ends
+               ->  nothing clears the mask
+
+F180 recorded that a cutscene sets a bit in this mask and clears it when the
+movie ends. Both halves are true, and together they are a deadlock: the thing
+that ends the movie is exactly what the mask suppresses.
+
+**What this does NOT yet explain, and must not be glossed.** The picture stops
+at frame 960, and the mask does not reach `0x8` until after frame 1,560 — the
+transitions logged are `0x2450 → 0 → 0x1 → 0 → 0x8`. So for roughly 600
+frames the mask reads zero, events can flow, and the picture is *already*
+static. The deadlock above is real and certainly explains why nothing ever
+recovers, but something stops the picture before it is entered. Treating this
+finding as the whole answer would repeat exactly the mistake F195 corrected.
+
+**Next:** what writes `0x8` into `bss_23A38`, and what happens at frame 960.
+
 ---
 
 *Record further findings here as they are established — including the ones that

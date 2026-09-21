@@ -533,6 +533,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The movie deadlock, traced end to end** (F196). The decoder task sits
+      in state 1, which advances only on event code 1; the event poll
+      `fn_1_F52A8` returns **zero events whenever the global task mask is
+      non-zero**, and the mask ends at `0x8`. So the bit a cutscene sets to
+      park the game also suppresses the event that would end the cutscene -
+      a closed loop. **Caveat kept explicit:** the picture stops at frame 960
+      and the mask only reaches `0x8` after 1,560, so this explains why
+      nothing recovers, not what stops it.
 - [x] **The read path is proved innocent, and an over-claim corrected**
       (F195). Reads now record three frames of guest call chain; the movie's
       ended in our own host->guest sentinel, naming `gcn_stream_read_done`
