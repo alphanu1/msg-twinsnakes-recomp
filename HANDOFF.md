@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,049 / 18,485 | 5.7% |
+| Functions named | 1,052 / 18,485 | 5.7% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7820,6 +7820,72 @@ in a general form.
 **Still unexplained, and still not to be glossed:** the picture stops at
 frame 960 and this park arrives after frame 1,560. This is why nothing
 recovers. What stops it is still open.
+
+### F201 — the pool that starves the movie, and 1,101 entries that are never freed
+
+F200 ended needing a runtime answer the host could not give. It can now:
+`MGS_TRACE_FN=<addr>[,...]` reports a guest function's arguments, its caller
+and its return value, and `MGS_TRACE_FN_MAX=0` counts without printing.
+Validated first on something already known — `DVDReadAsyncPrio(fileInfo,
+0x7F49CBC0, len, off) -> 1` from `gcn_stream_issue_read`, offsets advancing —
+and confirmed not to perturb: 40M steps give a bit-identical stop with and
+without it.
+
+**The pointer whose NULL parks the game goes NULL exactly once.** Watching
+`ctx + 0x25E8` (the parker task's own node, `0x8102D400`, plus `0x25E8`):
+**720 changes, all to fresh non-NULL values, then one to zero — the last
+event in the run.** The addresses climb monotonically, `0x81741B30` through
+`0x8176D110`, and never repeat.
+
+**All of it comes from one shared pool.** Every caller passes the same object
+`0x7F4EF794` and distinguishes itself by a `kind`:
+
+    caller       kind          ok     NULL
+    0x7F251B84   0x00000002   719      383     <- the movie's context
+    0x7F01B0D4   0x0002..7 0004  0     5505    <- five kinds, never any hit
+    0x7F01CE60   0x00010004     0     1101
+    0x7F0110F4   0x00000001  1101        0     <- never fails
+    (four more, 28 calls between them)
+
+The `0xNNNN0004` kinds returning NULL 6,606 times out of 6,606 are not a
+fault — they are lookups for things that are simply not there, and their
+callers carry on. **79% of all acquires returning NULL is normal**, which is
+worth stating because it is exactly the kind of number that reads as a
+catastrophe.
+
+**The accounting.** 8,839 acquires, of which **1,848 succeed**; `gcn_pool_free`
+is called **747** times. The difference is **1,101** — precisely the number
+of successful kind-1 acquires by one caller, `fn_1_8FE8`.
+
+**And that caller has a second disposal path which does not free.** It
+acquires, then branches:
+
+    if (fn_1_1325D4(pool, e))  gcn_pool_clear_entry_flag(pool, e);
+    else                     { obj->0xB0 = 1; gcn_pool_free(pool, e); }
+
+`gcn_pool_free` writes 0 to the entry's header, marking it free.
+`gcn_pool_clear_entry_flag` clears **bit 7** of that header and stores it
+back — the entry stays allocated. So entries taken down the first branch are
+never returned to the pool, and the pool is finite.
+
+**What this does and does not establish.** The arithmetic closes exactly, and
+the alternative path demonstrably does not free. What is *not* established is
+that nothing else frees them — a consumer elsewhere could, and if it is
+itself parked this is another loop of the same shape as F196. That has to be
+measured, not assumed, and it is the next thing to do.
+
+Three names, all describing checkable behaviour: `gcn_pool_acquire`,
+`gcn_pool_free`, `gcn_pool_clear_entry_flag`. `fn_1_1325D4` is deliberately
+left unnamed — it returns `*(entry - 0xC) - 0x10` in three instructions and
+what that field means is not established; a name would be a guess dressed as
+a finding. 1,049 → **1,052**.
+
+**One unexplained run.** A 120M-step run stopped at 45.5M with `no code for
+that address, pc = 0xCD92A240` — the guest branching to garbage. It did not
+reproduce: two identical runs afterwards were bit-identical and healthy, so
+the port is deterministic in this configuration. Most likely a leftover
+process from a `pkill` overlapping the new one. Recorded rather than
+explained.
 
 ---
 

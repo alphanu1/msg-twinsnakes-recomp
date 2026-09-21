@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,255 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,258 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **A guest-function tracer, and the pool that starves the movie**
+      (F201). `MGS_TRACE_FN` reports a guest function's arguments, caller and
+      result (`MGS_TRACE_FN_MAX=0` counts silently); validated on
+      `DVDReadAsyncPrio` and shown not to perturb. It gives the accounting:
+      one shared pool, 8,839 acquires, **1,848 successes against 747 frees**,
+      and the 1,101 difference is exactly one caller's successes - `fn_1_8FE8`,
+      which disposes of entries through `gcn_pool_clear_entry_flag` (clears a
+      header bit) rather than `gcn_pool_free` (zeroes it). **1,049 to 1,052.**
+      Not yet established that nothing else frees them.
 - [x] **The park traced to one NULL pointer** (F200). The mask's whole
       history is four game-logic writes, each with its writer named; the one
       that sticks is `gcn_task_mask_set(8)`, and it is a deliberate `if`

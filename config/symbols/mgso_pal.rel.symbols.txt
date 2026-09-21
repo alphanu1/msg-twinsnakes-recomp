@@ -58,6 +58,30 @@
 # --- CodeWarrior / libm ------------------------------------------------------
 .text 0x017834 0x70 sqrtf own
 
+# --- a shared entry pool ----------------------------------------------------
+# One object serves the whole engine: every caller traced passes the same
+# pool, 0x7F4EF794 at runtime, and distinguishes itself by a `kind` in r4.
+#
+#   gcn_pool_acquire(pool, kind)  searches pool->0x14 .. pool->0x24 for an
+#       entry whose header word is 0 or 0xFF and returns it, or 0 if there is
+#       none - and 0 immediately if pool->0x34 is non-zero. Entries are
+#       0x10 bytes of header followed by the payload, which is what the
+#       caller receives: the header sits at result-0x10.
+#   gcn_pool_free(pool, entry)    writes 0 to that header, marking it free.
+#   gcn_pool_clear_entry_flag(pool, entry)  clears BIT 7 of the header and
+#       stores it back. NOT a free - the entry stays allocated, which is the
+#       distinction the whole accounting in F201 turns on.
+#
+# All three take the same lock (`bss_55C74`) around the header write.
+#
+# `fn_1_1325D4` at 0x1325D4 is left unnamed on purpose: it returns
+# `*(entry - 0xC) - 0x10` in three instructions, and while callers use it as
+# a predicate, what that field MEANS is not established. A name would be a
+# guess dressed as a finding.
+.text 0x1323C4 0x11C gcn_pool_acquire own
+.text 0x1324E0 0x054 gcn_pool_clear_entry_flag own
+.text 0x132534 0x050 gcn_pool_free own
+
 # --- the movie player, in mpegGCN.c -----------------------------------------
 # `mpeg_movie_task` is the function the engine's task table holds for the
 # movie - the table entry reads `fn 0x7F151214`, which is this - and the
