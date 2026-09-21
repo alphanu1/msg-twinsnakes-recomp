@@ -533,6 +533,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The movie fault is measured, not inferred** (F193). `movie.dat` is
+      94,935,040 bytes; the game reads 262,144 - eight 32 KB reads reaching
+      exactly `0x40000` - and stops. **0.28% of the file**, and a round
+      number: a 256 KB buffer that fills and never drains. The machine is
+      not frozen (1,920 frames, 8.8 MB of stage loaded, 93 s of audio); the
+      *picture* is, from the frame after the last movie read. Not the task
+      mask - that reads 0x0, everything running, right through the frozen
+      stretch and only gates afterwards. `mpegGCN.c` never appears in the
+      profile and an overlay thread sits blocked on queue `0x7F4A595C`.
+      **Next: what posts to that queue.**
 - [x] **zlib named by its struct offsets** (F192). `inflate_fast`,
       `inflate_trees_bits`, `inflate_trees_fixed` - the first from seven
       parameter displacements matching zlib's published `inflate_blocks_state`

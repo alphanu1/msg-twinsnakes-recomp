@@ -7421,6 +7421,61 @@ The general point is the same one F189 made about counting: **a claim nothing
 mechanically checks is a claim that drifts.** The origin column had been
 carefully filled in for 1,244 symbols and nothing had ever read it back.
 
+### F193 — the movie stops after 0.28% of its file, and almost everything believed about this was wrong
+
+With the read tally (F189) and the resolver (F190) in place, the movie fault
+is now measured rather than inferred — and nearly every part of the previous
+picture turns out to be wrong.
+
+**`movie.dat` is 94,935,040 bytes. The game reads 262,144 of them.** Eight
+reads of 32 KB, `+0x0` through `+0x38000`, reaching exactly `0x40000`, and
+then never again. **0.28% of the file.** The round number says what it is: a
+**256 KB buffer that fills and never drains.**
+
+**The game is not frozen, and never was.** It renders continuously — 120
+frames at 20M steps, 840 at 40M, 1,920 at 120M — loads 8.8 MB of `stage.dat`
+across 281 reads, decodes 1,134 textures, makes 2,001 EFB copies and streams
+93 seconds of audio. "Stuck" was the display, not the machine.
+
+**The freeze is sharp and it coincides with the last movie read.** The frame
+trace samples every 120 frames:
+
+  - frames 0–840: 512×448 CMPR textures, `lit` moving 0% → 8% → 0% → 6% →
+    11% → 11% → 9% → 9%. The movie is playing.
+  - then the last `movie.dat` read.
+  - frames 960–1,920: `lit` **exactly 71% for nine consecutive samples**, and
+    the only textures drawn are small ones — 379×39, 177×17, 159×17. A static
+    bright image with text over it, which is exactly what is reported from
+    the window, and 71% is consistent with the full-screen teal.
+
+**Three things ruled out, two of them things I had argued for.**
+
+  - *Not the task gating.* The engine parks task levels through the mask at
+    REL bss `+0x23A38`, and it does gate — but the mask is `0x00000000`,
+    everything running, across the whole frozen stretch from frame 960 to
+    1,560. It only gates to `0x8` **after** frame 1,560, long after the
+    picture stopped. Gating follows the freeze; it does not cause it.
+  - *Not audio.* F188 already settled this; the stream runs for 93 s.
+  - *Not the disc stalling.* Reads continue the whole time — just not of
+    `movie.dat`.
+
+**What it actually looks like.** `mpegGCN.c` does not appear anywhere in the
+guest profile: **the movie decoder never runs.** And at the end every guest
+thread but the current one is blocked, including one in the overlay's own
+address space — `0x7F4A5630`, priority 10, **blocked on queue `0x7F4A595C`**,
+which is also REL memory. A reader that fills its buffer and waits to be told
+it has been consumed, a consumer that never runs, and a queue nobody posts
+to, are the same fact seen three ways.
+
+That is the thing to chase next, and it is a much narrower question than
+"why does the movie freeze": **what posts to `0x7F4A595C`, and why doesn't
+it?**
+
+**Where the profile does go:** `inflate_fast` 24.0% across three addresses,
+then `PSMTXMultVec`, `PSVECAdd`, `PSMTX44Concat`, `OSDisableInterrupts` /
+`OSRestoreInterrupts`. Decompression and matrix maths — a game loading and
+drawing, which is what the rest of this finding says it is doing.
+
 ---
 
 *Record further findings here as they are established — including the ones that
