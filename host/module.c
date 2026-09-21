@@ -1068,6 +1068,13 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         if ((r.steps % 127ull) == 0ull)
             mgs_interrupt_aram(mod, cpu);
 
+        /* And the audio DMA's, which is what asks for the next buffer of
+         * sound. Offered often, on a period sharing no factor with the
+         * others in this loop: the engine queues a completion every 10,125
+         * guest ticks, and one that waits is one the stream waits on. */
+        if ((r.steps % 89ull) == 0ull)
+            mgs_interrupt_aid(mod, cpu);
+
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */

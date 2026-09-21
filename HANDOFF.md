@@ -7174,6 +7174,62 @@ above it: in what start-up does between the waits, or in the timing shift
 that running audio for real introduces. The next probe should drive that,
 not the registers.
 
+### F187 — the audio DMA engine did not exist, and it is what asks for the next buffer
+
+F186 cleared the DSP register handshake and said a stall would have to be
+above it. It is: **the audio DMA engine at `0xCC005030` was not modelled at
+all** — the registers were plain storage, and AID, bit 3 of the DSP control
+register, was raised by nothing in the whole runtime. Bits `0x20` (ARAM) and
+`0x80` (mail) both had a source. `0x08` had none.
+
+**Why that stops a stream rather than slowing it.** `AIInitDMA` programmes an
+address and a block count, `AIStartDMA` sets the enable bit, and the hardware
+then streams 32-byte blocks into the sample-rate converter, raising AID each
+time it latches a transfer. `__AIDHandler` acknowledges that and calls
+whatever `AIRegisterDMACallback` was given — which is how the audio manager,
+and above it a movie player, is told to produce more sound. With no AID the
+callback never runs, the buffer is never refilled, **nothing asks for more
+data, and the disc is never read again.** That is the shape of what we see:
+reads stop dead rather than tailing off.
+
+**Dolphin as the oracle, and it corrected the obvious guess.** The natural
+model is "interrupt on completion". `DSP.cpp` is explicit that it is the
+opposite: *"The AID interrupt is set when the fifo STARTS a transfer. It
+latches address and count into internal registers and starts copying."* That
+is what lets the handler point the registers at the next buffer while the
+current one drains, and why one enable plays for ever — on completion the
+engine relatches from those same registers and fires again. Had this been
+modelled as fire-on-completion, `AIInitDMA` called from inside the callback
+would have restarted the current transfer and stuttered every buffer.
+
+Two further details taken from the oracle rather than guessed: the blocks-left
+register reads **one lower** than the true count (zero-based; reported
+honestly, code waiting for it to reach zero waits for ever on the last
+block), and the enable bit is **edge-**, not level-triggered.
+
+**Paced, unlike the ARAM DMA.** An ARAM transfer is a memcpy and completing it
+inside the store that starts it is merely generous. An audio transfer
+completing early is a lie about how long the sound lasted, and the movie
+player takes its timing from these completions. So the engine drains on the
+guest's own clock: one 32-byte block is 8 stereo 16-bit frames at 32 kHz,
+so 4,000 blocks a second, so 10,125 guest ticks per block off the 40.5 MHz
+timebase. It rides `mgs_mmio_advance_ticks`, which already existed and is
+already called every step.
+
+**Checked by mutation, not by passing.** `tests/test_ai_dma.c` covers eight
+cases and passed first time, which is worth distrusting, so the engine was
+broken three ways to confirm the test bites: a wrong block rate, a missing
+relatch interrupt, and a level-triggered enable. Each was caught, by the case
+meant to catch it. 16/16 tests pass.
+
+**What is still not modelled:** the AI's *other* interrupt. `AISCNT` reaching
+`AIIT` (`0xCC006C0C`) raises AIS, which drives `__AISHandler` and the
+callback from `AIRegisterStreamCallback`. That register is still plain
+storage, so that interrupt can no more fire than AID could. It is the disc-
+streaming audio path and this game decodes Vorbis in software, so it may
+never be used — but "may" is not "does not", and it is the next thing to
+check if the stream still stops.
+
 ---
 
 *Record further findings here as they are established — including the ones that

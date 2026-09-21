@@ -533,6 +533,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The audio DMA engine** (F187). `0xCC005030` was plain storage and
+      AID - the completion that asks for the next buffer of sound - was
+      raised by nothing. Modelled from Dolphin, which corrects the obvious
+      guess: the interrupt fires when the FIFO **starts** a transfer, not
+      when it ends, and the engine relatches from the same registers on
+      completion. Paced on the guest clock at 4,000 32-byte blocks a second
+      rather than completed instantly, because a movie takes its timing from
+      these. Eight cases in `tests/test_ai_dma.c`, confirmed to bite by
+      three mutations. **Still not modelled:** AIS, the stream-trigger
+      interrupt at `0xCC006C0C`.
 - [x] **Audio start-up is driven by a test, not by a boot** (F186).
       `tests/test_dsp_init.c` walks `__OSInitAudioSystem`'s register sequence
       against `MgsMmio` directly - reset, mailbox drain, two ARAM DMAs, the

@@ -128,6 +128,14 @@ typedef struct MgsMmio {
      * callback per request, so two completions collapsing into one raise is
      * a callback that never runs and a caller that waits for ever. */
     uint32_t aram_irq_pending;
+    /* The audio DMA engine: what is programmed, what is still to go, and
+     * the completions owed to the guest. See the block comment in mmio.c. */
+    uint32_t aid_src, aid_blocks;        /* as programmed */
+    uint32_t aid_cur, aid_left;          /* as running */
+    uint32_t aid_ticks;                  /* guest ticks toward the next block */
+    uint32_t aid_irq_pending;
+    int      aid_enabled;
+    uint64_t aid_starts, aid_blocks_done;
 
     /* Per-register read counts, for finding a poll that never ends. A guest
      * waiting on hardware is indistinguishable from a guest doing work when
@@ -273,6 +281,12 @@ void     mgs_mmio_dsp_clear_mail(MgsMmio* m);
 void     mgs_mmio_dsp_assert_aram(MgsMmio* m);
 int      mgs_mmio_take_aram_irq(MgsMmio* m);
 void     mgs_mmio_put_aram_irq(MgsMmio* m);
+void     mgs_mmio_dsp_assert_aid(MgsMmio* m);
+int      mgs_mmio_take_aid_irq(MgsMmio* m);
+void     mgs_mmio_put_aid_irq(MgsMmio* m);
+uint64_t mgs_mmio_aid_starts(const MgsMmio* m);
+uint64_t mgs_mmio_aid_blocks(const MgsMmio* m);
+int      mgs_mmio_aid_enabled(const MgsMmio* m);
 
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);

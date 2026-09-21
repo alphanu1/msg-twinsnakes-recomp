@@ -269,6 +269,40 @@ int mgs_interrupt_aram(const MgsModule* mod, void* cpu)
     return 0;
 }
 
+/* THE AUDIO DMA'S COMPLETION.
+ *
+ * The same shape as the ARAM one above and for the same reason, but it is
+ * asking a different question. An ARAM completion says a copy finished; this
+ * says a buffer of sound has started playing and the next one is wanted. The
+ * SDK's `__AIDHandler` acknowledges it and calls whatever was handed to
+ * `AIRegisterDMACallback`, which is how the audio manager - and above it, a
+ * movie player - is told to produce more.
+ *
+ * Nothing raised this before, because the DMA engine that raises it was not
+ * modelled at all. A game that streams is then not slow but stopped: it
+ * submits one buffer, waits to be asked for another, and is never asked. It
+ * stops reading the disc, because it has nothing to read for.
+ */
+int mgs_interrupt_aid(const MgsModule* mod, void* cpu);
+static uint64_t s_aid_raised, s_aid_refused;
+uint64_t mgs_interrupt_aid_raised(void);
+uint64_t mgs_interrupt_aid_raised(void) { return s_aid_raised; }
+uint64_t mgs_interrupt_aid_refused(void);
+uint64_t mgs_interrupt_aid_refused(void) { return s_aid_refused; }
+
+int mgs_interrupt_aid(const MgsModule* mod, void* cpu)
+{
+    MgsMmio* m = mgs_host_mmio();
+    if (!mgs_mmio_take_aid_irq(m)) return 0;
+    mgs_mmio_dsp_assert_aid(m);
+    if (mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) { ++s_aid_raised; return 1; }
+    /* Put it back rather than lose it: a dropped completion is a callback
+     * that never runs, and the stream stops for good. */
+    mgs_mmio_put_aid_irq(m);
+    ++s_aid_refused;
+    return 0;
+}
+
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
 {

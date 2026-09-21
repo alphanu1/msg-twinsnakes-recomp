@@ -64,3 +64,7 @@ add_test(NAME card COMMAND test_card)
 add_executable(test_dsp_init test_dsp_init.c)
 target_link_libraries(test_dsp_init PRIVATE mgs_runtime)
 add_test(NAME dsp_init COMMAND test_dsp_init)
+
+add_executable(test_ai_dma test_ai_dma.c)
+target_link_libraries(test_ai_dma PRIVATE mgs_runtime)
+add_test(NAME ai_dma COMMAND test_ai_dma)

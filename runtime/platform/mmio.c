@@ -239,6 +239,32 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
  * are raised together. Raising only one leaves the second wait spinning, which
  * is how this presented. */
 #define DSP_CR_ARDMA_DONE  0x0400u
+/* THE AUDIO DMA, which is what paces playback.
+ *
+ * Distinct from the ARAM DMA above and from the DSP itself: this engine
+ * streams 32-byte blocks out of main memory into the sample-rate converter
+ * that feeds the DAC. It is the only thing in the machine that makes audio
+ * take time, and its completion interrupt (AID, bit 3 of the control
+ * register) is what asks the game for the next buffer.
+ *
+ * The interrupt fires when the FIFO STARTS a transfer, not when it ends -
+ * it latches address and count into internal registers and begins copying,
+ * so the handler is free to point the registers at the next buffer while
+ * the current one drains. On completion it relatches from those registers
+ * and fires again. That is why one enable is enough to play for ever, and
+ * why nothing needs to re-set the enable bit per buffer.
+ */
+#define AI_DMA_START_HI    0x30u   /* bits 9:0 are address >> 16 */
+#define AI_DMA_START_LO    0x32u   /* address & 0xFFE0 */
+#define AI_DMA_CONTROL_LEN 0x36u   /* bit 15 enable, bits 14:0 blocks */
+#define AI_DMA_BLOCKS_LEFT 0x3Au   /* read-only, and reads one LESS than left */
+#define AI_DMA_ENABLE      0x8000u
+#define DSP_CR_AIINT       0x0008u
+/* One 32-byte block is 8 stereo 16-bit frames, and the converter eats them
+ * at 32 kHz however the DAC is later clocked - so a block every 1/4000 s.
+ * The Gekko timebase is the 162 MHz bus over four, so 40,500,000 / 4,000. */
+#define AI_DMA_TICKS_PER_BLOCK 10125u
+
 #define AR_DMA_MMADDR      0x20u   /* main memory address */
 #define AR_DMA_ARADDR      0x24u   /* ARAM address */
 #define AR_DMA_CNT         0x28u   /* length, and writing it starts the DMA */
@@ -332,6 +358,19 @@ uint32_t mgs_mmio_read(MgsMmio* m, uint32_t addr, unsigned size)
     /* Reading a channel's input buffer consumes that poll; see
      * si_consume_read. */
     si_consume_read(m, addr);
+
+    /* BLOCKS LEFT READS ONE LOWER THAN THE COUNT, AND THAT MATTERS.
+     *
+     * The register is zero-based: a transfer with one block still to go
+     * reads zero. It is the hardware's own quirk, not a rounding choice -
+     * code that waits for this to reach zero never sees it if the count is
+     * reported honestly, and waits for ever on the last block. */
+    if (addr >= MMIO_DSP + AI_DMA_BLOCKS_LEFT &&
+        addr < MMIO_DSP + AI_DMA_BLOCKS_LEFT + 2u) {
+        uint16_t left = (uint16_t)(m->aid_left > 0u ? m->aid_left - 1u : 0u);
+        uint8_t* bl = &m->regs[(MMIO_DSP + AI_DMA_BLOCKS_LEFT) - MMIO_BASE];
+        bl[0] = (uint8_t)(left >> 8); bl[1] = (uint8_t)left;
+    }
 
     if (m->trace_si && addr >= MMIO_SI && addr < MMIO_EXI &&
         m->si_traced < m->si_trace_cap) {
@@ -973,6 +1012,40 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         if (addr == MMIO_DSP + DSP_CONTROL && (value & DSP_CR_RESET))
             m->regs[off + size - 1u] &= (uint8_t)~DSP_CR_RESET;
 
+        /* ENABLING THE AUDIO DMA LATCHES IT AND ANNOUNCES ITSELF.
+         *
+         * Only on the RISING edge of the enable bit: while a transfer is
+         * already running, writes to the address and count registers are
+         * the next buffer being queued, and must not restart the current
+         * one. The SDK relies on exactly that - `AIInitDMA` is called from
+         * inside the completion callback, with the enable bit still set.
+         *
+         * The interrupt goes on the queue rather than being raised here,
+         * for the reason the ARAM one does: this is a store executed by the
+         * guest, and the guest can only be interrupted between steps.
+         */
+        if (addr >= MMIO_DSP + AI_DMA_CONTROL_LEN &&
+            addr < MMIO_DSP + AI_DMA_CONTROL_LEN + 2u) {
+            const uint8_t* cl = at(m, MMIO_DSP + AI_DMA_CONTROL_LEN);
+            const uint8_t* sh = at(m, MMIO_DSP + AI_DMA_START_HI);
+            const uint8_t* sl = at(m, MMIO_DSP + AI_DMA_START_LO);
+            if (cl && sh && sl) {
+                uint16_t ctl = (uint16_t)((cl[0] << 8) | cl[1]);
+                int on = (ctl & AI_DMA_ENABLE) != 0;
+                if (on && !m->aid_enabled) {
+                    m->aid_src = ((((uint32_t)((sh[0] << 8) | sh[1])) & 0x03FFu) << 16)
+                               | (((uint32_t)((sl[0] << 8) | sl[1])) & 0xFFE0u);
+                    m->aid_blocks = (uint32_t)(ctl & 0x7FFFu);
+                    m->aid_cur = m->aid_src;
+                    m->aid_left = m->aid_blocks;
+                    m->aid_ticks = 0u;
+                    ++m->aid_starts;
+                    ++m->aid_irq_pending;
+                }
+                m->aid_enabled = on;
+            }
+        }
+
         /* Starting an ARAM DMA completes it: raise the completion flag the
          * guest is about to poll for. Writing the count register is what
          * starts a transfer on hardware. */
@@ -1284,6 +1357,46 @@ void mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks)
     uint64_t samples;
     uint8_t* sc;
 
+    /* THE AUDIO DMA DRAINS ON THE GUEST'S OWN CLOCK.
+     *
+     * Paced rather than completed instantly, which is the opposite of the
+     * ARAM DMA a few hundred lines up. An ARAM transfer is a memcpy and
+     * finishing it early is merely generous; an audio transfer finishing
+     * early is a lie about how long the sound lasted, and the game's movie
+     * player takes its timing from these completions. Completing them as
+     * fast as they arrive would run a movie's audio at whatever rate the
+     * host manages, which is not a rate at all.
+     *
+     * Ahead of the AI_PLAYING test below on purpose: the DMA engine and the
+     * sample counter are separate pieces of hardware, and the SDK starts the
+     * DMA before it starts the interface.
+     */
+    if (m->aid_enabled && m->aid_blocks) {
+        m->aid_ticks += ticks;
+        while (m->aid_ticks >= AI_DMA_TICKS_PER_BLOCK) {
+            m->aid_ticks -= AI_DMA_TICKS_PER_BLOCK;
+            ++m->aid_blocks_done;
+            if (m->aid_left) { --m->aid_left; m->aid_cur += 32u; }
+            if (!m->aid_left) {
+                /* Relatch from whatever the registers say NOW - the
+                 * completion handler will have pointed them at the next
+                 * buffer - and announce the new transfer. */
+                const uint8_t* cl = at(m, MMIO_DSP + AI_DMA_CONTROL_LEN);
+                const uint8_t* sh = at(m, MMIO_DSP + AI_DMA_START_HI);
+                const uint8_t* sl = at(m, MMIO_DSP + AI_DMA_START_LO);
+                if (cl && sh && sl) {
+                    m->aid_src = ((((uint32_t)((sh[0] << 8) | sh[1])) & 0x03FFu) << 16)
+                               | (((uint32_t)((sl[0] << 8) | sl[1])) & 0xFFE0u);
+                    m->aid_blocks = (uint32_t)(((cl[0] << 8) | cl[1]) & 0x7FFFu);
+                }
+                m->aid_cur = m->aid_src;
+                m->aid_left = m->aid_blocks;
+                ++m->aid_irq_pending;
+                if (!m->aid_blocks) break;   /* zero-length: do not spin */
+            }
+        }
+    }
+
     if (!(control & AI_PLAYING)) return;
 
     m->ai_ticks += ticks;
@@ -1371,3 +1484,29 @@ int mgs_mmio_take_aram_irq(MgsMmio* m)
 }
 
 void mgs_mmio_put_aram_irq(MgsMmio* m) { ++m->aram_irq_pending; }
+
+/* The audio DMA's completion, told to the device before the line is raised -
+ * same order and same reason as the ARAM one above: PI's DSP bit is shared
+ * by three sources, and the guest's dispatcher reads this register to tell
+ * which of them is asking. */
+void mgs_mmio_dsp_assert_aid(MgsMmio* m)
+{
+    uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+    uint16_t v = (uint16_t)(((cr[0] << 8) | cr[1]) | DSP_CR_AIINT);
+    cr[0] = (uint8_t)(v >> 8); cr[1] = (uint8_t)v;
+    m->dsp_status |= (uint16_t)DSP_CR_AIINT;
+    dsp_refresh_line(m);
+}
+
+int mgs_mmio_take_aid_irq(MgsMmio* m)
+{
+    if (!m->aid_irq_pending) return 0;
+    --m->aid_irq_pending;
+    return 1;
+}
+
+void mgs_mmio_put_aid_irq(MgsMmio* m) { ++m->aid_irq_pending; }
+
+uint64_t mgs_mmio_aid_starts(const MgsMmio* m) { return m->aid_starts; }
+uint64_t mgs_mmio_aid_blocks(const MgsMmio* m) { return m->aid_blocks_done; }
+int      mgs_mmio_aid_enabled(const MgsMmio* m) { return m->aid_enabled; }

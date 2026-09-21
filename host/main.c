@@ -2017,6 +2017,16 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
+                        printf("audio DMA: %llu transfers, %llu blocks "
+                               "(%.2fs of sound), %s; interrupts %llu "
+                               "delivered, %llu refused\n",
+                               (unsigned long long)mgs_mmio_aid_starts(mgs_host_mmio()),
+                               (unsigned long long)mgs_mmio_aid_blocks(mgs_host_mmio()),
+                               (double)mgs_mmio_aid_blocks(mgs_host_mmio()) / 4000.0,
+                               mgs_mmio_aid_enabled(mgs_host_mmio()) ? "running"
+                                                                     : "stopped",
+                               (unsigned long long)mgs_interrupt_aid_raised(),
+                               (unsigned long long)mgs_interrupt_aid_refused());
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",
