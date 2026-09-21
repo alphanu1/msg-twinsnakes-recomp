@@ -547,6 +547,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The root: one state word, written once** (F214). `0x8021A078`, the
+      stream object's state, changes **exactly once all run** - `0 -> 3` -
+      and `fn_80053988` dispatches on it: state 1 asks for a header read,
+      **state 2 asks for the refill**, state 3 asks to start. Stuck at 3 it
+      can only ever start. The loop that would move it is cut in a circle:
+      state 2 needs `obj->0xD6 & 0x4` (watched: `0x00` all run), that bit is
+      set only by `fn_80053200` (traced: **0 calls**), which is the
+      completion callback of a 96-byte `DVDReadAsyncPrio` issued only by the
+      type-1 case, which needs state 1. **Every part behaves as written.**
+      Open: what advances the state off 3.
 - [x] **The refill message type is never sent** (F213). The dispatch maps
       precisely: **types 3 and 5 alone** return a slot to service, type 5 is
       a one-shot start (2 calls, one per stream object, from two distinct

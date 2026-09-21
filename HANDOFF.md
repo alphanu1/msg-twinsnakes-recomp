@@ -8498,6 +8498,63 @@ answer is either a call site never reached or a condition never satisfied,
 and the next step is to find the type-3 construction in the binary the way
 `fn_80052FAC`'s was found — by reading the function, not a grep window.
 
+### F214 — the root: one state word is written once, and sixteen links follow from it
+
+The chain now reaches a single word of guest memory. Every step below is a
+counter or a watch from a reproducible run.
+
+**`0x8021A078` — the stream object's state at `+0x08` — changes exactly ONCE
+in a 120M-step run: `0 -> 3`, at pc `0x80053BDC`. Nothing ever writes it
+again.**
+
+`fn_80053988` dispatches on that word to decide what to ask the stream
+thread for:
+
+    state 1  ->  fn_80053930(..., r6 = 1)    a header read
+    state 2  ->  fn_80053930(..., r6 = 3)    THE REFILL
+    state 3  ->  fn_80053930(..., r6 = 5)    the start
+    otherwise -> nothing
+
+Stuck at 3, it can only ever ask to start — which it did, twice, once per
+stream object, correctly. **The refill request is unreachable not because its
+code is wrong but because its selector never moves.**
+
+**The loop that should move it, and where it is cut.** Working out from the
+state word:
+
+  - state 2 is set at `0x8005568C`, and is **gated on `obj->0xD6 & 0x4`**.
+    That byte is watched for a whole run: **`0x00` throughout.**
+  - bit 2 of `0xD6` is set in exactly one place, `fn_80053200`, which finds
+    the stream object whose `+0x3C` matches its argument, sets the bit, and
+    wakes the thread.
+  - `fn_80053200` is traced at **0 calls**. It is never invoked.
+  - It is never *called* because it is not a function anyone calls: its
+    address is taken once, at `0x80055378`, and handed to
+    **`DVDReadAsyncPrio`** as the completion callback of a 96-byte read of
+    `obj + 0x3C`, issued from the stream thread's **type-1** case.
+  - That read is never issued: all **303** `DVDReadAsyncPrio` calls in a run
+    come from `0x7F008618`, the overlay's `gcn_stream_issue_read`, and none
+    from `0x80055398`.
+  - The type-1 case never runs because a type-1 message needs state 1, and
+    the state is 3.
+
+So it closes on itself: **state 3 -> only "start" is ever requested -> the
+header read that would fire the callback is never issued -> the bit that
+would allow state 2 is never set -> the state never leaves 3.**
+
+**What this does and does not say.** It says precisely where the machine
+stops and that every part of it is individually behaving as written — no
+corruption, no dropped message, no lost interrupt, no race. It does **not**
+yet say what, on hardware, moves that state word off 3 the first time. One
+write, at `0x80053BDC`, is all the run contains; the code that would write
+1 or 2 exists and is reachable only through the loop above.
+
+**The next question is therefore narrow and answerable:** what is supposed to
+advance `obj->0x08` out of 3 — and whether our runtime fails to deliver
+something that would, or whether the game is waiting on a condition it sets
+for itself. The single write site `0x80053BDC` and its caller `0x80053C6C`
+are where to start.
+
 ---
 
 *Record further findings here as they are established — including the ones that
