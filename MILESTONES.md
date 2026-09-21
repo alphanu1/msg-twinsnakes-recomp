@@ -533,6 +533,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [ ] **The port is not reliably deterministic** (F204). Three 120M runs,
+      same build and arguments: two byte-identical, the third differing by
+      one refused DVD read. The DVD model is designed against exactly this -
+      completion is decided by the guest clock, with a busy-wait so host
+      thread scheduling cannot be observed - so something escapes that, and
+      it is not yet found. Replay against Dolphin is the design's oracle for
+      divergence, so this blocks that. **A single run is not evidence.**
+- [x] **The tracer sees host-invoked calls** (F204). `MGS_TRACE_FN` matched
+      `pc` only in the run loop; `mgs_module_call_guest` has its own. Now one
+      `fntrace_step` called from both.
 - [x] **The tracer is blind to host-invoked callbacks** (F203).
       `gcn_stream_read_done` traces as 0 calls while the host counts 406
       callbacks run: `MGS_TRACE_FN` matches `pc` in the run loop, and a

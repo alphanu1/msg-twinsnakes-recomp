@@ -7998,6 +7998,51 @@ producer of kind-2 records and of event code 1 — the same question from two
 directions, and both reduce to: **the game read 256 KB of a 90 MB movie and
 nothing ever asked for the next byte.**
 
+### F204 — the tracer now sees host-invoked calls, and the port is NOT reliably deterministic
+
+**The tracer's blind spot is fixed.** F203 found that `MGS_TRACE_FN` missed
+every callback the host invokes, because it matched `pc` only in the run
+loop while `mgs_module_call_guest` has a dispatch loop of its own. The check
+is now one function, `fntrace_step`, called from **both** loops — factored
+rather than copied, which is the mistake F197 recorded.
+
+**And a determinism claim of mine has to be withdrawn.** F201 said "the port
+is deterministic in this configuration" on the strength of two identical
+runs. Three runs of 120M steps, same build, same arguments, nothing else
+running:
+
+    run 1: 406 reads, 0 refused   |  run 2: 406 reads, 0 refused
+    run 3: 407 reads, 1 refused
+
+Runs 1 and 2 are **byte-identical logs**. Run 3 is not. Two matching runs
+were never evidence of determinism; they were evidence that two runs matched.
+
+**Where the divergence is.** The difference is exactly one refused read — a
+`DVDReadAsyncPrio` that found no free request slot, was refused, and was
+retried, costing one extra read. So the varying quantity is **whether a slot
+is free at the moment a read is issued**, and that is worth stating plainly
+because the DVD model is *designed* not to have this problem:
+`mgs_dvd_drain` completes a request when the **guest clock** passes its
+`ready_tick`, and busy-waits for the host worker if the bytes are somehow not
+there yet, precisely so that host thread scheduling cannot be observed. That
+design is right and the divergence means something escapes it. **Not yet
+found, and not guessed at here.**
+
+**Why this matters beyond tidiness.** `twin-snakes-native-port-design.md`
+makes replay against Dolphin the oracle for divergence, and `module.c`'s own
+comment says the retrace cadence is tied to steps rather than wall clock
+because "a replayed run must be reproducible, and wall clock is not." A run
+that is *usually* reproducible is worse than one that never is: it invites
+exactly the reasoning that wasted time today, where a diverged run was read
+as a behavioural fact. Two earlier oddities now have a candidate explanation
+rather than the ones I gave them: a 120M run that stopped at 45.5M with a
+branch to garbage (F201, blamed on a leftover process), and a run with only
+65 reads and 5 files that I read as tracer perturbation.
+
+**Practical consequence, applied from here on:** a single run is not
+evidence. Anything load-bearing gets repeated, and a difference between two
+runs is the first thing to suspect, not the last.
+
 ---
 
 *Record further findings here as they are established — including the ones that

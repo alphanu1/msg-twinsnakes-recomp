@@ -665,6 +665,52 @@ static unsigned s_fnret_n;
  * without printing a line. */
 static uint64_t s_fntrace_hits[MGS_FNTRACE_MAX];
 
+/* One step of the function trace, called from BOTH dispatch loops.
+ *
+ * The run loop is not the only place guest code is entered: a callback the
+ * host invokes runs in mgs_module_call_guest's own loop, and tracing only
+ * the first made `gcn_stream_read_done` read as 0 calls while the host's
+ * counter said 406 callbacks had run (F203). Both loops now go through
+ * here, so a traced function is seen however it is reached. */
+static void fntrace_step(void* cpu, uint32_t pc)
+{
+    unsigned i;
+
+    if (s_fntrace_n) {
+        for (i = 0u; i < s_fntrace_n; ++i) {
+            if (pc != s_fntrace[i]) continue;
+            ++s_fntrace_hits[i];
+            if (s_fntrace_lines < s_fntrace_cap) {
+                const uint32_t* g = mgs_module_gpr(cpu);
+                ++s_fntrace_lines;
+                fprintf(stderr, "[fn] 0x%08X(0x%08X, 0x%08X, 0x%08X, 0x%08X)"
+                                " from 0x%08X\n",
+                        pc, g[3], g[4], g[5], g[6],
+                        *mgs_module_lr_ptr(cpu));
+            }
+            if (s_fnret_n < (unsigned)(sizeof s_fnret / sizeof s_fnret[0])) {
+                s_fnret[s_fnret_n].ret = *mgs_module_lr_ptr(cpu);
+                s_fnret[s_fnret_n].fn  = pc;
+                ++s_fnret_n;
+            }
+            break;
+        }
+    }
+    if (s_fnret_n) {
+        unsigned k = s_fnret_n;
+        while (k--) {
+            if (s_fnret[k].ret != pc) continue;
+            if (s_fntrace_lines < s_fntrace_cap) {
+                ++s_fntrace_lines;
+                fprintf(stderr, "[fn] 0x%08X -> 0x%08X\n",
+                        s_fnret[k].fn, mgs_module_gpr(cpu)[3]);
+            }
+            s_fnret_n = k;   /* and drop anything above: never came back */
+            break;
+        }
+    }
+}
+
 /* The last pc the run loop saw, for a process that has to be killed.
  *
  * A wedge inside a single dispatch call cannot be reported by any of the
@@ -1175,61 +1221,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             s_watch_seen = 1;
         }
 
-        /* MGS_TRACE_FN: what a guest function was called with, and what it
-         * returned.
-         *
-         * The four slots below take a HOST CALLBACK each, compiled in, which
-         * is right for a trace that has to interpret something - the vertex
-         * descriptor, a semaphore - and wrong for the commonest question by
-         * far: "this function returns NULL and I want to know which branch
-         * and with what arguments". That needed a rebuild per question.
-         *
-         * Entry is easy: the run loop already sees pc at every dispatch, so
-         * a match prints r3..r8. The RETURN is the useful half and takes one
-         * more step: the link register at entry is where this call will come
-         * back to, so remembering it and printing r3 when pc reaches it
-         * gives the result. A small stack of those, because a traced
-         * function may recurse or be re-entered on another thread.
-         *
-         * Pairing is by most-recent-match, and it is not infallible: an
-         * unrelated path reaching the same address pops an entry early. It
-         * is a diagnostic, and the entry line alone is often the answer. */
-        if (s_fntrace_n) {
-            unsigned i;
-            for (i = 0u; i < s_fntrace_n; ++i) {
-                if (pc != s_fntrace[i]) continue;
-                ++s_fntrace_hits[i];
-                if (s_fntrace_lines < s_fntrace_cap) {
-                    const uint32_t* g = mgs_module_gpr(cpu);
-                    ++s_fntrace_lines;
-                    fprintf(stderr, "[fn] 0x%08X(0x%08X, 0x%08X, 0x%08X, "
-                                    "0x%08X) from 0x%08X\n",
-                            pc, g[3], g[4], g[5], g[6],
-                            *mgs_module_lr_ptr(cpu));
-                }
-                if (s_fnret_n < (unsigned)(sizeof s_fnret / sizeof s_fnret[0])) {
-                    s_fnret[s_fnret_n].ret = *mgs_module_lr_ptr(cpu);
-                    s_fnret[s_fnret_n].fn  = pc;
-                    ++s_fnret_n;
-                }
-                break;
-            }
-        }
-        if (s_fnret_n) {
-            unsigned k = s_fnret_n;
-            while (k--) {
-                if (s_fnret[k].ret != pc) continue;
-                if (s_fntrace_lines < s_fntrace_cap) {
-                    ++s_fntrace_lines;
-                    fprintf(stderr, "[fn] 0x%08X -> 0x%08X\n",
-                            s_fnret[k].fn, mgs_module_gpr(cpu)[3]);
-                }
-                /* Drop this one and everything above it: those are calls
-                 * that never came back through here. */
-                s_fnret_n = k;
-                break;
-            }
-        }
+        fntrace_step(cpu, pc);
 
         if (s_trace_addr && pc == s_trace_addr && s_trace_fn)
             s_trace_fn(cpu, mgs_module_gpr(cpu));
@@ -1483,6 +1475,7 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
     for (step = 0; step < max_steps; ++step) {
         uint32_t pc = mgs_module_pc(cpu);
         if (pc == MGS_GUEST_RETURN_SENTINEL) { returned = 1; break; }
+        fntrace_step(cpu, pc);
         {
             uint32_t budget = 100000u;
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
