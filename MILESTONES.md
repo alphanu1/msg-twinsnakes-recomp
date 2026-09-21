@@ -547,6 +547,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The far end is `sd_stream2.c`'s own thread** (F210). `fn_80055264`
+      (size `0x4C4`) is a live stream thread, blocked in `OSReceiveMessage` -
+      and it is **not** starved: its queue takes 30 messages from four sites.
+      Its two slots are made ready **once** (watched: five state changes all
+      run), used, and marked done, and nothing returns them. Two 32 KB slots
+      is 64 KB, exactly where the destination pointer stopped. **Open: which
+      of those 30 messages should ask for a refill.**
 - [x] **The whole chain, measured end to end** (F209). Thirteen links from
       the frozen picture back to its cause, every one a counter from a
       reproducible run: `fn_80054D14` in main.dol posts to the drain's queue

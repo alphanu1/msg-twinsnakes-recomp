@@ -8288,6 +8288,56 @@ runs reproduced (F206). Every count here comes from runs that are
 byte-identical to each other, and several of these numbers were taken twice
 for that reason.
 
+### F210 — the far end is `sd_stream2.c`'s own thread, and it is not starved
+
+Following F209's last link upwards lands in Konami's streaming layer, named
+by the file attributions that bracket it: `sd_stream2.c` (lines 730, 1002,
+1234 and 1607 sit either side of these functions).
+
+    fn_80055264   0x80055264, size 0x4C4   the stream THREAD's body
+    fn_800534D4                            makes a slot ready (state 0 -> 1)
+    fn_80054D14                            posts a ready slot to the drain
+    fn_80052FAC                            marks a slot done (state 2 -> 3)
+
+**The slot lifecycle, watched directly** at `0x8027ADD4` — five changes in a
+whole run and no more:
+
+    00 00  ->  01 01   both slots made ready, once, by fn_800534D4
+    01 01  ->  02 01   slot 0 posted to the drain
+    02 01  ->  02 02   slot 1 posted
+    02 02  ->  03 02   slot 0 marked done
+    03 02  ->  03 03   slot 1 marked done
+
+Two slots, made ready **once**, used once, done. Nothing returns them to
+state 0 or 1. Two slots of 32 KB is 64 KB, which is exactly where the
+destination fill pointer stopped (`0x10000`) — the numbers agree from both
+ends.
+
+**`fn_80055264` is a thread, and it is alive.** It is entered once, as
+threads are, with zero arguments and its own address in `r6` — the shape of
+an `OSCreateThread` trampoline. It is the thread the dump has been showing
+all along: blocked in `OSReceiveMessage` with `0x80055708` on its stack,
+which falls inside this function's `0x4C4` bytes.
+
+**It is NOT starved of work, which kills the obvious theory.** Its queue
+takes **30 messages** in a run, from four sites — `0x800525CC` (2),
+`0x80052FF8` (2), `0x800566E4` (13) and `0x80056790` (13). So the thread
+wakes, works, and sleeps again repeatedly. What it does *not* do is make a
+slot ready more than once.
+
+**An error of mine, of a kind now familiar.** I first measured **zero** sends
+to this queue and nearly wrote that down as the root cause. I had grepped
+`0x8021336C`, which is the thread-queue *inside* the `OSMessageQueue` — the
+address a thread records — where the queue object itself is `0x80213364`,
+eight bytes lower. The decoder added in F194 prints both and I used the wrong
+one. **The right answer, 30, is the opposite of the wrong answer, 0.**
+
+**So the question is now: which of those 30 messages should have asked for a
+refill, and why it never arrives.** `0x80052FF8` is the site that marks a
+slot done, so the natural design — "slot finished, prepare another" — has a
+candidate path. Whether it is taken, and what it depends on, is the next
+measurement.
+
 ---
 
 *Record further findings here as they are established — including the ones that
