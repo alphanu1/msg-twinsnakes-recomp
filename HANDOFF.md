@@ -6698,8 +6698,10 @@ advances 32 ticks a step against a retrace every 2,000 steps, making a field
 with. `OSGetTime` is called 715,957 times in a run, so the game is certainly
 clock-driven, and this looked compelling.
 
-It is not the fault. Measured at the calibrated rate, movie frames decoded
-went from **11 to 13** — noise. `MGS_TICK_RATE` now exposes the figure and
+It is not the fault, and a sweep settles it rather than one sample: 32 gives
+11 frames, 337 gives 13, and 2000 gives **one frame with the boot never
+reaching the movie at all**. A faster clock does not advance the player, and
+far enough out it breaks the boot. `MGS_TICK_RATE` now exposes the figure and
 the default is left at 32, because a ten-fold change to guest time is not
 something to ship on the strength of a hypothesis it just failed. The
 discrepancy is real and wants fixing on its own merits, with its own
@@ -7107,6 +7109,32 @@ functions** — duplicates stacked by successive runs. Harmless at runtime,
 since a second call only runs when the first returned 0, but the file said
 one thing and did another. Fixed; the check now looks at both lines and
 reports `0 injected, 36 already present`.
+
+### F185 — two more movie leads closed: the clock and the ARAM interrupts
+
+**The guest clock is not what paces the movie.** F175 tested one alternative
+rate and called the 11-to-13 frame change noise. A sweep confirms it:
+
+| tick rate | movie frames | best lit |
+|---|---|---|
+| 32 (shipped) | 11 | 71% |
+| 337 (calibrated) | 13 | 71% |
+| 2000 | **1** | 0% — never reaches the movie |
+
+Speeding the clock up does not advance the player; far enough out it breaks
+the boot. The calibration error is real and still worth fixing on its own
+merits, but it is not this.
+
+**ARAM interrupts are not being lost either.** A run reports 294 delivered
+against **614 refused**, which reads like two thirds of the audio path's
+completions going missing. They are not: `mgs_interrupt_aram` puts a refused
+interrupt **back** on the queue rather than dropping it, so a refusal is a
+retry against a guest that currently has interrupts masked. The count
+measures how often the guest sits in a critical section, not loss.
+
+With the disc, the threads, the scheduler, the card, the format, the clock
+and now the interrupt path all cleared, audio remains the only live
+hypothesis — and F184 explains why testing it is expensive.
 
 ---
 
