@@ -7285,6 +7285,29 @@ translated code, and since most of a run's steps fall after the freeze, a
 whole-run profile is mostly the frozen behaviour. That is the next evidence,
 and it does not depend on guessing which subsystem to suspect.
 
+### F189 — a sampled log answered a question it could not answer
+
+Chasing where the movie stops, the disc trace showed **one** read of
+`shared/movie.dat`, at `+0x38000`. Read plainly that says the game opened the
+movie, read one chunk and gave up, which is a very different fault from
+reading several and then stopping.
+
+It says no such thing. The trace names the first hundred reads and then
+**every twentieth** — deliberately, so a long session cannot flood the log.
+`+0x38000` is the eighth 32 KB chunk, so seven earlier reads happened and
+fell between samples. The sampled log is not evidence about counts at all,
+and it was about to be used as if it were.
+
+`mgs_disc_report` now prints a tally per file at exit — reads, bytes, the
+last offset and the furthest point reached, busiest file first. Counting is
+a few bytes of state and it removes a whole class of re-run: "what was it
+reading, how much, and where did it stop" is answerable from any ordinary
+run rather than from knowing in advance to raise the cap.
+
+The general shape is worth keeping: **a rate-limited log answers "what kind
+of thing is happening" and never "how many".** Anything counted needs a
+counter.
+
 ---
 
 *Record further findings here as they are established — including the ones that

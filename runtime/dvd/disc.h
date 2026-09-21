@@ -53,4 +53,8 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
 /* File length, or -1 if absent. DVDOpen needs this to fill its file info. */
 long mgs_disc_file_size(MgsDisc* disc, const char* path);
 
+/* What was read, per file, hottest first - counts, totals, and how far into
+ * each the game got. Answers "where did it stop" without a re-run. */
+void mgs_disc_report(FILE* out);
+
 #endif

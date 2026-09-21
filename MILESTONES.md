@@ -533,6 +533,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **A read tally per file** (F189). The sampled disc trace showed one
+      read of the movie and seven had happened; `mgs_disc_report` now counts
+      reads, bytes and the furthest offset per file at exit. A rate-limited
+      log answers what is happening, never how much.
 - [x] **Audio is not the movie blocker** (F188). With the engine in, the game
       programmes it and streams 93.43 s of sound in 94.81 s of guest time,
       in buffers that measure **5.000 ms** - the AX callback period, which

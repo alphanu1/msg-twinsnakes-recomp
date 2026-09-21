@@ -14,6 +14,69 @@
 #define DISC_FST_OFF       0x424u
 #define DISC_FST_SIZE      0x428u
 
+/* Per-file read totals, reported at exit by mgs_disc_report.
+ *
+ * A fixed table rather than a growing one: a boot touches a few dozen files
+ * and an overflow row is more useful than an allocation that can fail in the
+ * middle of a read. */
+#define DISC_TALLY_MAX 96
+static struct {
+    char     path[128];
+    uint64_t reads, bytes;
+    uint32_t last_offset, max_end;
+} s_tally[DISC_TALLY_MAX];
+static unsigned s_tally_n;
+static uint64_t s_tally_lost_reads, s_tally_lost_bytes;
+
+static void disc_tally(const char* path, uint32_t length, uint32_t offset)
+{
+    unsigned i;
+    for (i = 0u; i < s_tally_n; ++i) {
+        if (!strcmp(s_tally[i].path, path)) break;
+    }
+    if (i == s_tally_n) {
+        if (s_tally_n >= DISC_TALLY_MAX || strlen(path) >= sizeof s_tally[0].path) {
+            ++s_tally_lost_reads; s_tally_lost_bytes += length;
+            return;
+        }
+        ++s_tally_n;
+        strcpy(s_tally[i].path, path);
+    }
+    ++s_tally[i].reads;
+    s_tally[i].bytes += length;
+    s_tally[i].last_offset = offset;
+    if (offset + length > s_tally[i].max_end) s_tally[i].max_end = offset + length;
+}
+
+void mgs_disc_report(FILE* out)
+{
+    unsigned i, j;
+    if (!s_tally_n) { fprintf(out, "disc: no reads\n"); return; }
+    fprintf(out, "disc: %u files read\n", s_tally_n);
+    /* Busiest first: the file a stall is in is usually the one being read
+     * hardest just before it. */
+    for (j = 0u; j < s_tally_n; ++j) {
+        unsigned best = j;
+        for (i = j + 1u; i < s_tally_n; ++i)
+            if (s_tally[i].bytes > s_tally[best].bytes) best = i;
+        if (best != j) {
+            char t[sizeof s_tally[0]];
+            memcpy(t, &s_tally[j], sizeof s_tally[0]);
+            memcpy(&s_tally[j], &s_tally[best], sizeof s_tally[0]);
+            memcpy(&s_tally[best], t, sizeof s_tally[0]);
+        }
+        fprintf(out, "  %-40s %5llu reads  %8llu bytes  last +0x%X  reached +0x%X\n",
+                s_tally[j].path,
+                (unsigned long long)s_tally[j].reads,
+                (unsigned long long)s_tally[j].bytes,
+                s_tally[j].last_offset, s_tally[j].max_end);
+    }
+    if (s_tally_lost_reads)
+        fprintf(out, "  (%llu reads of %llu bytes not attributed: table full)\n",
+                (unsigned long long)s_tally_lost_reads,
+                (unsigned long long)s_tally_lost_bytes);
+}
+
 static uint32_t be32(const uint8_t* p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -239,6 +302,14 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
                 fprintf(stderr, "[disc] read %7u bytes  %s + 0x%X\n",
                         length, path, offset - e.offset_or_parent);
         }
+        /* AND A TALLY PER FILE, because the sampled log above answers
+         * "what is it reading" but not "how much, and where did it stop".
+         * Chasing a stalled movie, the trace showed a single read of
+         * movie.dat because the other seven fell between samples - which is
+         * indistinguishable from the game having read it once. A count and
+         * a last offset per file are a few bytes of state and remove a whole
+         * class of re-run. */
+        disc_tally(path, length, offset - e.offset_or_parent);
         /* AN ABSOLUTE READ IS NOT A FILE READ, AND MUST NOT BE CLAMPED.
          *
          * mgs_disc_read trims a request to the end of the file it names,

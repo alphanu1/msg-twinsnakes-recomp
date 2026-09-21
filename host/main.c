@@ -2017,6 +2017,7 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
+                        mgs_disc_report(stdout);
                         printf("audio DMA: %llu transfers, %llu blocks "
                                "(%.2fs of sound), %s; interrupts %llu "
                                "delivered, %llu refused\n",
