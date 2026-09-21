@@ -8376,6 +8376,51 @@ path — exactly the bug F192's ledger check had, made again three hours
 later. It failed loudly and immediately, which is the argument for writing
 the check before trusting the fix.
 
+### F212 — the stream thread's dispatch, and the two message types that refill a slot
+
+`fn_80055264`'s body is a message loop with a **17-entry jump table**
+(`jumptable_801E7C00`, types `0`–`0x10`), dispatching on `msg->0x08`:
+
+    r27 = *msg;  r28 = r27->0x0C;          /* the stream object */
+    if (r28->0xD6 & 0x20) skip;            /* a gate, watched: stays 0 */
+    if (msg->0x08 > 0x10) skip;
+    jump jumptable_801E7C00[msg->0x08];
+
+Mapping the table's targets against the code, **exactly two types make a slot
+ready** — the cases at `+0x68` and `+0x9C`, reached by types **3** and **5**,
+each of which calls `fn_800534D4`. Every other type lands on `+0x220`, the
+default, or on cases that do other work. Type 5's case additionally sets both
+slot bytes to 4 when `r27->0x4 == 3`.
+
+`fn_800534D4` is called **twice in a whole run**, both from `0x80055310`,
+which falls inside the type-5 case. So type 5 arrived twice and type 3 not at
+all — or between them, twice.
+
+**What the four senders to that queue emit**, read from the instruction
+stream:
+
+    0x800525CC   type 0x0F   x2     -> jump table entry 15 = default
+    0x80052FF8   (not yet read) x2  <- the site that marks a slot DONE
+    0x800566E4   (not yet read) x13
+    0x80056790   type 0x0C   x13    -> a case that does not refill
+
+The interesting one is `0x80052FF8`: it is inside `fn_80052FAC`, the function
+that marks a slot **done** (state 2 → 3), and it sent exactly **two**
+messages — the same count as the two `fn_800534D4` calls. A design where
+"slot finished" posts a message that prepares the next slot would explain
+both numbers at once, and would be the loop that has stopped turning.
+
+**What must not be assumed.** I have not read `0x80052FF8`'s type field yet —
+a narrow grep window showed a nearby `li r6, 0x3` which is *not* the type
+store, and reading it as one would be the same mistake this log already
+records three times. The next step is to read that store properly and then
+ask why `fn_80052FAC` runs only twice.
+
+**The slot states, for reference** (watched at `0x8027ADD4`, which covers
+object `0x8027AD00`'s bytes `0xD4`–`0xD7`): `00 00 → 01 01 → 02 01 → 02 02 →
+03 02 → 03 03`, and nothing after. Two slots, each made ready once, posted
+once, marked done once, never returned.
+
 ---
 
 *Record further findings here as they are established — including the ones that

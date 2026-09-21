@@ -547,6 +547,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The stream thread's dispatch is mapped** (F212). A 17-entry jump
+      table on `msg->0x08`; **exactly two types, 3 and 5, make a slot ready**
+      and both go through `fn_800534D4`, which runs **twice in a whole run**.
+      Of the four senders to its queue, one emits type `0x0F` twice, one type
+      `0x0C` thirteen times, and the remaining pair are unread - including
+      `0x80052FF8`, the slot-DONE site, which sent exactly two, matching the
+      two refills. **Next: read that message's type field properly.**
 - [x] **README's progress block is generated and checked** (F211). It had
       gone stale by 46 functions - 1,006 against 1,052 - because `--check`
       covered HANDOFF and MILESTONES but not README, whose block only stayed
