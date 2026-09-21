@@ -554,6 +554,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [ ] **Two faults between us and AX** (F219). We post DSP task mail
+      `0xDCD10003` (**done**, which *unlinks the task*) where a persistent AX
+      task needs `0xDCD10001` (**resume**) - and resume is the only thing
+      that sets `__AXOutDspReady`, without which no mixing frame runs and no
+      PCM is pulled from Vorbis. `MGS_DSP_RESUME=1` selects it; not default,
+      because AX then reaches unmodelled paths. And un-stubbing
+      `__OSInitAudioSystem` (now possible per-address with `MGS_UNPATCH`)
+      segfaults in **`EXIGetID+0x2D0`**, not in audio.
+- [ ] **Determinism is load-dependent** (F220). Two HEAD runs, both
+      completing 120M steps, gave 5 and 9 files at **load average 70**.
+      F206's fifteen identical runs were on an idle machine. Something
+      besides the fixed data race is sensitive to host scheduling.
 - [x] **The movie is paced by audio consumption** (F218). `fn_80055114`
       re-arms a slot when a **playback position** reaches its end marker
       (`0x8000`); that position is advanced by `fn_80056688`, which traced at

@@ -8765,6 +8765,70 @@ document's account, at 5 ms — and whether it runs in our port at all. That is
 one measurement away, and it is now a question about our runtime rather than
 about Konami's state machines.
 
+### F219 — the DSP task mail is wrong, and un-stubbing audio crashes in EXI, not audio
+
+F218 left the question "what drives the decoder". The answer is AX, and two
+distinct faults sit between us and it.
+
+**1. We post the wrong DSP task mail.** `mgs_interrupt_dsp_task` cycles
+`0xDCD10000` (init) then `0xDCD10003`. From `dolsdk2004/src/dsp/dsp_task.c`:
+
+    0xDCD10000  init    -> init_cb
+    0xDCD10001  resume  -> res_cb
+    0xDCD10003  done    -> done_cb, then __DSP_remove_task(): UNLINKED
+
+So our second mail **deletes the task**, and the task is AX's. `AXOut.c`
+makes the consequence exact: `__AXOutAiCallback` runs a mixing frame only
+when `__AXOutDspReady == 1`, and the single place that sets it is
+`__AXDSPResumeCallback` — AX's `res_cb`, reached only by a **resume**. No
+resume, no frame, no AX callback, no PCM pulled from Vorbis, and the stream
+position never advances. That is the far end of F218's chain, and it is a
+bug in **our** code rather than in the game's.
+
+**It is not the default yet, and that is deliberate.** Switching to resume
+lets AX actually run, and the boot then reaches audio paths this runtime does
+not model: one run ended in an `unhandled exception` at 2.5M steps.
+`MGS_DSP_RESUME=1` selects the correct mail so the rest of that work can be
+done against it without a rebuild. Flipping a constant is not the fix;
+bringing the audio path up with it is.
+
+**2. Un-stubbing `__OSInitAudioSystem` crashes in EXI.** The stub's comment
+says the flags it waits for "will never be raised however carefully the
+registers are modelled" — which F186 disproved, driving that whole sequence
+against our model with every wait passing. So it was withdrawn
+(`MGS_UNPATCH=0x8001CDC4`, new: the patch table can now be lifted per
+address at runtime, because a shim is a claim that goes stale and checking
+it should not need a rebuild).
+
+It segfaults, and `gdb` names the reason precisely: **`func_800195E0`
+recursing until the stack dies — `EXIGetID+0x2D0`**, the EXI attach/probe
+path, spinning in what the SDK writes as `EXISync`. So F184's instinct that
+the crash was "unrelated to audio" was right, and now has an address. The
+audio system cannot be brought up until that EXI wait completes.
+
+### F220 — determinism is LOAD-DEPENDENT, so F206's "settled" was conditional
+
+Two runs at HEAD, both **completing** all 120M steps, gave 5 files and 9
+files. Not truncation — both printed their step-limit line.
+
+The machine is at **load average 70**, four `quartus_fit` processes taking
+~440% CPU each. F206 measured fifteen byte-identical runs and called
+determinism settled; that was on an idle machine, and the claim only ever
+held there.
+
+The data race fixed in F205 was real and worth fixing. It was not the whole
+story: something else in the runtime is sensitive to host scheduling, and it
+only shows when the host is contended. The DVD model is explicitly built
+against this — completion is decided by the guest clock, with a busy-wait so
+worker scheduling cannot be observed — so whatever escapes it is elsewhere
+and is not yet found.
+
+**The practical consequence, applied immediately:** no measurement taken
+while the machine is loaded is trustworthy, including everything in this
+section after the load appeared. Runs to compare need an idle machine, and
+"I ran it twice and got the same answer" is evidence about those two runs
+only.
+
 ---
 
 *Record further findings here as they are established — including the ones that

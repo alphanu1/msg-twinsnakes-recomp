@@ -5,6 +5,7 @@
  * whole table would be paid continuously.
  */
 #include "patch_table.h"
+#include <stdlib.h>
 
 typedef struct { uint32_t address; MgsSdkFn fn; } MgsPatch;
 
@@ -52,9 +53,37 @@ static const MgsPatch k_patches[] = {
 
 #define MGS_PATCH_COUNT 39u
 
+/* MGS_UNPATCH=<addr>[,<addr>...]: run the TRANSLATED code
+ * for these instead of our shim.
+ *
+ * A shim is a claim that the real code cannot run here yet,
+ * and such a claim goes stale: __OSInitAudioSystem was
+ * stubbed because 'the flags it waits for will never be
+ * raised however carefully the registers are modelled', and
+ * a later test drove that whole sequence against the model
+ * with every wait passing. Withdrawing a shim to check
+ * should not need a rebuild, or it will not be done. */
+static int unpatched(uint32_t address)
+{
+    static const char* list;
+    static int looked;
+    const char* p;
+    if (!looked) { looked = 1; list = getenv("MGS_UNPATCH"); }
+    if (!list) return 0;
+    for (p = list; *p; ) {
+        char* end = 0;
+        unsigned long v = strtoul(p, &end, 0);
+        if (end == p) break;
+        if ((uint32_t)v == address) return 1;
+        p = (*end == ',') ? end + 1 : end;
+    }
+    return 0;
+}
+
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {
     uint32_t lo = 0u, hi = MGS_PATCH_COUNT;
+    if (unpatched(address)) return 0;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2u;
         if (k_patches[mid].address == address) return k_patches[mid].fn;

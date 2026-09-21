@@ -355,7 +355,38 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
     }
 
     {
-        uint32_t mail = phase == 0 ? 0xDCD10000u : 0xDCD10003u;
+        /* WHICH MAIL, AND A KNOWN DEFECT IN THE DEFAULT (F219).
+         *
+         * These are the DSP's task mails, and the SDK's handler treats them
+         * very differently (dolsdk2004 dsp_task.c):
+         *
+         *   0xDCD10000  init    -> the task's init_cb
+         *   0xDCD10001  resume  -> the task's res_cb
+         *   0xDCD10003  done    -> the task's done_cb, and then
+         *                          __DSP_remove_task(): the task is UNLINKED
+         *
+         * We post init, then DONE, then init again - and `done` takes the
+         * task off the list. The task removed is AX's, and AX is what pulls
+         * PCM out of the Vorbis decoder: `__AXOutAiCallback` runs a mixing
+         * frame only when `__AXOutDspReady` is 1, and the one place that
+         * sets it is `__AXDSPResumeCallback`, reached only by a RESUME.
+         * That is the far end of the movie stall (F218).
+         *
+         * So `done` is wrong and `resume` is what a persistent AX task
+         * expects. It is NOT the default yet, because switching it lets AX
+         * actually run and the boot then reaches audio paths this runtime
+         * does not model - one run ended in an unhandled exception at 2.5M
+         * steps. Fixing this properly means bringing the audio path up with
+         * it, not flipping a constant.
+         *
+         * MGS_DSP_RESUME=1 selects the correct mail, so the rest of that
+         * work can be done against it without a rebuild.
+         */
+        static int resume_mail = -1;
+        uint32_t mail;
+        if (resume_mail < 0) resume_mail = getenv("MGS_DSP_RESUME") != NULL;
+        mail = phase == 0 ? 0xDCD10000u
+             : (resume_mail ? 0xDCD10001u : 0xDCD10003u);
 
         mgs_mmio_dsp_post_mail(m, mail);
         if (!mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) {
@@ -370,7 +401,10 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
             return 0;
         }
         if (mail == 0xDCD10000u) { phase = 1; return 1; }
-        phase = 0;                                    /* ready for the next */
+        /* A resume leaves the task alive, so the cycle stays in phase 1 and
+         * keeps resuming. A `done` unlinks it, and the old behaviour went
+         * back to phase 0 to post another init. */
+        if (!resume_mail) phase = 0;
         ++s_dsp_tasks;
         if (getenv("MGS_TRACE_DSP"))
             fprintf(stderr, "[dsp] task %llu completed\n",

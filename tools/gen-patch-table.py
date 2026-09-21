@@ -69,7 +69,7 @@ def main():
                 " * guest call that reaches the dispatch hook, so a linear scan over the\n"
                 " * whole table would be paid continuously.\n"
                 " */\n"
-                '#include "patch_table.h"\n\n'
+                '#include "patch_table.h"\n#include <stdlib.h>\n\n'
                 "typedef struct { uint32_t address; MgsSdkFn fn; } MgsPatch;\n\n"
                 "static const MgsPatch k_patches[] = {\n")
         for addr, name in want:
@@ -78,8 +78,33 @@ def main():
             f.write("    {0u, 0},  /* C rejects a zero-sized array */\n")
         f.write("};\n\n")
         f.write(f"#define MGS_PATCH_COUNT {len(want)}u\n\n"
+                "/* MGS_UNPATCH=<addr>[,<addr>...]: run the TRANSLATED code\n"
+                " * for these instead of our shim.\n"
+                " *\n"
+                " * A shim is a claim that the real code cannot run here yet,\n"
+                " * and such a claim goes stale: __OSInitAudioSystem was\n"
+                " * stubbed because 'the flags it waits for will never be\n"
+                " * raised however carefully the registers are modelled', and\n"
+                " * a later test drove that whole sequence against the model\n"
+                " * with every wait passing. Withdrawing a shim to check\n"
+                " * should not need a rebuild, or it will not be done. */\n"
+                "static int unpatched(uint32_t address)\n{\n"
+                "    static const char* list;\n"
+                "    static int looked;\n"
+                "    const char* p;\n"
+                "    if (!looked) { looked = 1; list = getenv(\"MGS_UNPATCH\"); }\n"
+                "    if (!list) return 0;\n"
+                "    for (p = list; *p; ) {\n"
+                "        char* end = 0;\n"
+                "        unsigned long v = strtoul(p, &end, 0);\n"
+                "        if (end == p) break;\n"
+                "        if ((uint32_t)v == address) return 1;\n"
+                "        p = (*end == ',') ? end + 1 : end;\n"
+                "    }\n"
+                "    return 0;\n}\n\n"
                 "MgsSdkFn mgs_patch_lookup(uint32_t address)\n{\n"
                 "    uint32_t lo = 0u, hi = MGS_PATCH_COUNT;\n"
+                "    if (unpatched(address)) return 0;\n"
                 "    while (lo < hi) {\n"
                 "        uint32_t mid = lo + (hi - lo) / 2u;\n"
                 "        if (k_patches[mid].address == address) return k_patches[mid].fn;\n"
