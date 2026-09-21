@@ -547,6 +547,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The pinning record is identified** (F208). The head advances 456
+      times and stops at `0x817789F0`; that record's tag oscillates
+      `1 -> 0x81 -> 1` **2,171 times** between `gcn_pool_acquire` marking it
+      taken and `gcn_pool_clear_entry_flag` putting it back - **found and
+      returned 1,085 times, never consumed.** `fn_1_8FE8` is a peek looking
+      for an *empty* kind-1 record and correctly leaves one that has data.
+      **Open: who consumes a kind-1 record that has a payload.**
 - [x] **The refill fires twice in a whole run** (F207). The pump is healthy -
       2,204 calls, all normal exits, `pool->0x38` zero throughout - and the
       trigger it guards, `free > capacity/3`, is true only **twice**. The

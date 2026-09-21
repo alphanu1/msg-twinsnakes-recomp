@@ -8199,6 +8199,47 @@ re-queue rather than a consume, and `fn_1_8FE8` takes that branch on almost
 every one of its 1,101 kind-1 finds. Whether those are legitimately still
 wanted or are the thing that pins the head is the measurement to make.
 
+### F208 — the record that pins the head, found: a kind-1 record taken and put back 1,085 times
+
+F207 asked which record sits at the ring head. Watching the head cursor
+`pool->0x14` at `0x7F4EF7A8`: it advances **456 times** and then stops for
+good at **`0x817789F0`**.
+
+Watching that address — the record's tag — gives the answer outright. It
+changes **2,171 times**, and every change is one of two values:
+
+    0x817789F0: 0x00000001 -> 0x00000081   at 0x7F13A510   (gcn_pool_acquire)
+    0x817789F0: 0x00000081 -> 0x00000001   at 0x7F13A5F0   (gcn_pool_clear_entry_flag)
+
+`0x7F13A510` is inside `gcn_pool_acquire`, whose match path does
+`ori r0, r0, 0x80` — marking the record taken. `0x7F13A5F0` is inside
+`gcn_pool_clear_entry_flag`, which clears exactly that bit. So one **kind-1**
+record is found, marked, and put straight back, **1,085 times over**, and
+never consumed. Its tag never reaches 0, so the head never passes it, so
+`free` never recovers, so `movie.dat` is never read again.
+
+**Who does it and why.** `fn_1_8FE8` polls kind 1 and branches on
+`fn_1_1325D4(pool, e)`, which returns `*(e - 0xC) - 0x10`. `e` is the payload
+(`entry + 0x10`) and `entry + 4` is the record's length — the same field the
+ring's own scan advances by — so that function returns the **payload size**,
+and the branch reads:
+
+    if (payload size != 0)  put it back;          /* someone else's to take */
+    else { obj->0xB0 = 1; free it; }              /* empty: consume, mark done */
+
+So `fn_1_8FE8` is a **peek**, not a consumer: it is looking for an *empty*
+kind-1 record — an end-of-stream marker, on the evidence of the flag it sets
+— and correctly leaves any record that still has data in it. It is behaving
+as written.
+
+**Which makes the open question exact:** a kind-1 record with a payload is
+waiting at the head of the ring for a consumer that never comes. **Who is
+supposed to take kind-1 records with data?** The other kind-1 callers seen
+are `fn_1_8FE8` itself at two sites and `fn_1_912C` once, so the real
+consumer is either one of those on a path not taken, or something that never
+runs. That is the next thing to find, and it is now a single question rather
+than a subsystem.
+
 ---
 
 *Record further findings here as they are established — including the ones that
