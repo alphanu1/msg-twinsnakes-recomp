@@ -533,6 +533,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **Batch runs exit again, with their whole report** (F191). `main` holds
+      the last frame until the window is closed; under `SDL_VIDEODRIVER=dummy`
+      there is no window, so it waited for ever with the report sitting
+      unflushed in a stdio buffer - which is how two investigations came to
+      read truncated reports without noticing. A windowless driver now counts
+      as headless, and stdout is flushed before the hold. 2M steps: hangs
+      indefinitely, to exits in 1.2 s.
 - [x] **The movie player is `mpegGCN.c`** (F190), REL `0x149128`, runtime
       `0x7F151214` - the intro is MPEG decoded by translated engine code.
       `tools/resolve-addrs.py` now falls back to the file attribution and

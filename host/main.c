@@ -1161,6 +1161,24 @@ int main(int argc, char** argv)
     printf("guest memory: %u MB MEM1, %u MB ARAM\n",
            GUEST_RAM_SIZE / (1024u*1024u), GUEST_ARAM_SIZE / (1024u*1024u));
 
+    /* A DRIVER WITH NO WINDOW IS HEADLESS, WHATEVER THE FLAGS SAY.
+     *
+     * SDL's dummy driver opens a window that cannot be shown and cannot be
+     * closed, so the hold loop at the end of a run - which waits for the
+     * user to close it - waits for an event that can never arrive. Every
+     * batch run today ended that way: the guest loop finished, the report
+     * was written into a stdio buffer, and the process then sat in
+     * nanosleep for ever with the buffer unflushed. Killing it lost the
+     * tail of its own report, which is the part with the counters in it. */
+    if (!headless) {
+        const char* drv = getenv("SDL_VIDEODRIVER");
+        if (drv && (!strcmp(drv, "dummy") || !strcmp(drv, "offscreen"))) {
+            fprintf(stderr, "video driver \"%s\" has no window; running headless\n",
+                    drv);
+            headless = 1;
+        }
+    }
+
     if (!headless && !mgs_video_init("MGS: Twin Snakes")) {
         fprintf(stderr, "no window (%s); continuing headless\n", "SDL video unavailable");
         headless = 1;
@@ -2257,6 +2275,16 @@ int main(int argc, char** argv)
      * renderer shows the boot overlay instead. The counters are on stdout
      * either way. Press a key to swap between them.
      */
+    /* FLUSH BEFORE HOLDING.
+     *
+     * Everything above this point is the run's report, and stdout to a file
+     * is block-buffered. The loop below can last as long as the user leaves
+     * the window open, and a process killed during it loses whatever is
+     * still in the buffer - so the report exists on screen but not in the
+     * log that was captured to read it later. */
+    fflush(stdout);
+    fflush(stderr);
+
     if (!headless && !s_quit_requested) {
         int showing_game = mgs_display_frames() > 0u;
 

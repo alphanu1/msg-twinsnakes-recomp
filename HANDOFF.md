@@ -7333,6 +7333,43 @@ attribution, and the two must not be confusable when the output is pasted
 into a note. For reading a profile of Konami's own code — which will mostly
 never have names — this is most of the available value.
 
+### F191 — every batch run today hung on exit, and took the end of its own report with it
+
+Three runs sat at 100% CPU long after printing "stopped after 120000000
+steps", ignoring both `pkill` and `timeout`'s SIGTERM. A short run reproduced
+it in seconds, and the wedged report — which the second signal prints, with a
+host backtrace — named it exactly:
+
+    [wedged] last pc 0x80023328 in dispatch / gx idle
+    [wedged] host stack:
+      ... clock_nanosleep <- nanosleep <- libSDL3 <- main+0x27ae
+
+Not the guest at all. `main` ends by **holding the last frame until the user
+closes the window**, which is deliberate and is how the log is meant to be
+read after a session. Under `SDL_VIDEODRIVER=dummy` there is no window to
+close, so it waits on an event that can never arrive. The existing `headless`
+guard did not cover it, because headless was a flag and the dummy driver
+reports a window perfectly happily.
+
+**The expensive part was not the hang.** stdout to a file is block-buffered,
+so the report was written into a buffer that was never flushed, and killing
+the process lost whatever was still in it. That is why one run's report
+ended mid-word at `EXI transfers: 4 started, 2` — the counters after that
+point existed on no medium at all. Every run today had to be re-run or
+read incomplete.
+
+Both fixed: a driver that cannot show a window (`dummy`, `offscreen`) is now
+treated as headless and skips the hold, and stdout and stderr are flushed
+before the hold begins so a run killed during it still has its whole report.
+A 2M-step run now exits in **1.2 s with a complete report** instead of
+hanging indefinitely.
+
+**The lesson is about the instrument, not the bug.** Two separate
+investigations today read truncated reports without noticing they were
+truncated, because a report that stops has exactly the shape of a report that
+finished. Anything captured to a file and read later needs flushing at the
+point the writing stops, not at the point the process does.
+
 ---
 
 *Record further findings here as they are established — including the ones that
