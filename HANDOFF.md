@@ -8338,6 +8338,44 @@ slot done, so the natural design — "slot finished, prepare another" — has a
 candidate path. Whether it is taken, and what it depends on, is the next
 measurement.
 
+### F211 — README's progress block was stale by 46 functions, because nothing checked it
+
+Ben noticed it: the figures in `README.md` had not moved while the symbol
+maps gained names all day. The block read **1,006 functions named** against
+**1,052** in the maps, `198` SDK entry points against `205`, `6,144` call
+sites against `6,154` — stale across a dozen commits that each added names.
+
+**Why it drifted while the other two did not.** `tools/progress.py --check`
+verifies `HANDOFF.md` and `MILESTONES.md`, both named by rule 14, and
+README's numbers live in a generated block that looked self-maintaining.
+It was self-maintaining only as long as someone remembered to run `--readme`
+**and paste the result**. Nothing did. HANDOFF's table, being checked, stayed
+correct to all five rows throughout.
+
+Three fixes, in the order that matters:
+
+  - `--write` regenerates the block in `README.md` in place, so updating it
+    is one command instead of a copy and paste. Deliberately a subprocess of
+    this same script running `--readme` rather than a refactor: that path
+    reads a dozen locals built up through `main`, and lifting it out to call
+    it twice is how a generator and its check quietly stop agreeing. One code
+    path, run twice.
+  - `--check` now verifies README as well, by regenerating the block and
+    comparing. Confirmed to bite by editing a figure and watching it fail.
+  - The block itself is regenerated and current.
+
+**The general point, for the third time today.** F192 found an origin column
+that nothing read back; F189 found a sampled log used as a count; this is a
+generated block nobody regenerated. **A number that no check compares against
+its source is a number that is already drifting** — and the ones in README
+are the figures strangers read first.
+
+**And a repeat of a specific mistake:** the first cut of `check_readme` used
+`P('README.md')` as if it returned the file's contents, where it joins a
+path — exactly the bug F192's ledger check had, made again three hours
+later. It failed loudly and immediately, which is the argument for writing
+the check before trusting the fix.
+
 ---
 
 *Record further findings here as they are established — including the ones that

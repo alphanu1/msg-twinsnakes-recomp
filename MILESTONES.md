@@ -547,6 +547,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **README's progress block is generated and checked** (F211). It had
+      gone stale by 46 functions - 1,006 against 1,052 - because `--check`
+      covered HANDOFF and MILESTONES but not README, whose block only stayed
+      current if someone remembered to run `--readme` and paste it.
+      `--write` now regenerates it in place and `--check` verifies it.
 - [x] **The far end is `sd_stream2.c`'s own thread** (F210). `fn_80055264`
       (size `0x4C4`) is a live stream thread, blocked in `OSReceiveMessage` -
       and it is **not** starved: its queue takes 30 messages from four sites.

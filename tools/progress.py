@@ -88,6 +88,34 @@ def main():
     # be attributed to a component - that is what being unnamed means - so
     # they are counted together rather than spread around to flatter the
     # picture.
+    if '--write' in sys.argv:
+        # Regenerate README's block in place.
+        #
+        # It exists because the block was stale by 46 functions before anyone
+        # noticed: --readme printed the right answer to a terminal and nothing
+        # carried it into the file. Rule 14 says the progress table is
+        # generated rather than remembered, and README's copy was the one
+        # nothing generated.
+        #
+        # Deliberately a subprocess of this same script rather than a
+        # refactor. The --readme path reads a dozen locals built up through
+        # main, and lifting it out to call it twice is how a generator and its
+        # check quietly stop agreeing. One code path, run twice.
+        import subprocess
+        block = subprocess.run([sys.executable, __file__, '--readme'],
+                               capture_output=True, text=True,
+                               check=True).stdout.strip()
+        path = P('README.md')
+        text = open(path).read()
+        out = re.sub(r'<!-- progress:begin.*?<!-- progress:end -->',
+                     lambda _m: block, text, flags=re.S)
+        if out == text:
+            print('README.md: progress block already current')
+        else:
+            open(path, 'w').write(out)
+            print('README.md: progress block regenerated')
+        return
+
     if '--readme' in sys.argv:
         import collections as _c
         known = _c.Counter(); unknown = 0
@@ -149,13 +177,46 @@ def main():
     avg = acc / len(rows)
 
     if '--check' in sys.argv:
-        sys.exit(check(rows, avg) + check_origins())
+        sys.exit(check(rows, avg) + check_origins() + check_readme())
 
     print(f"| {'Measure':<42} | {'':>15} | {'':>6} |")
     print(f"|{'-'*44}|{'-'*17}|{'-'*8}|")
     for name, a, b in rows:
         print(f"| {name:<42} | {a:>6} / {b:<6} | {100*a/b:>5.1f}% |")
     print(f"| **{'Average of the five':<40}** | {'':>15} | **{avg:.1f}%** |")
+
+
+def check_readme():
+    """Does README's generated block still say what the evidence says?
+
+    It did not, and nothing noticed. `--check` verified HANDOFF.md and
+    MILESTONES.md - both required by rule 14 - and README was left out
+    because its figures live in a generated block that looked after itself.
+    It looked after itself only as long as someone remembered to run
+    `--readme` AND paste the result: the block sat at 1,006 functions named
+    while the maps held 1,052, across a dozen commits that each added names.
+
+    The same argument that put the other two under a check applies here with
+    more force, because README's figures are the ones strangers read.
+    """
+    import subprocess
+    try:
+        want = subprocess.run([sys.executable, __file__, '--readme'],
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+    except Exception as exc:                       # pragma: no cover
+        print("  README: could not regenerate the block (%s)" % exc)
+        return 1
+    text = open(P('README.md')).read()
+    m = re.search(r'<!-- progress:begin.*?<!-- progress:end -->', text, re.S)
+    if not m:
+        print("  README: no generated progress block found")
+        return 1
+    if m.group(0).strip() == want:
+        return 0
+    print("README.md's progress block is stale (project rule 14).")
+    print("  Regenerate it:  python3 tools/progress.py --write")
+    return 1
 
 
 def check_origins():
