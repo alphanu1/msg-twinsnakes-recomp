@@ -455,7 +455,10 @@ static void trace_frame_ring(void* cpu)
             flag ? "" : "   <-- flag clear, this one will NOT signal");
 }
 
-static uint64_t s_pe_seen, s_pe_sent;
+/* (s_pe_seen and s_pe_sent are declared above and shared with the trace
+ * there - deliberately the same counters, and declaring them twice made them
+ * the same object by accident rather than by intent. See
+ * tools/check-duplicate-statics.py.) */
 
 /* SAMPLED BEFORE THE HANDLER RUNS, NOT AFTER.
  *

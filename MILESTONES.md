@@ -533,6 +533,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **A duplicate `static` broke the boot, and is now checked** (F199).
+      `module.c` already held `s_watch_addr` - OSLink's address, from which
+      the overlay's `.bss` base is read - and the new memory watch declared
+      the same name. Two file-scope statics of one name are ONE object in C,
+      silently, so every run overwrote OSLink's address and the boot stopped
+      after loading the module. `tools/check-duplicate-statics.py` now runs
+      in ctest (**17 tests**) and found a second instance on its first run.
 - [x] **Four names out of the deadlock** (F198): `mpeg_movie_task`,
       `mpeg_poll_stream_events`, `gcn_event_poll` and `gcn_task_table_init`,
       **1,043 to 1,047**. The watch confirms the static reading exactly - the

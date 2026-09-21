@@ -65,6 +65,15 @@ add_executable(test_dsp_init test_dsp_init.c)
 target_link_libraries(test_dsp_init PRIVATE mgs_runtime)
 add_test(NAME dsp_init COMMAND test_dsp_init)
 
+# Not a C test: a source check. Two file-scope statics of the same name are
+# one object in C, silently, and that cost a boot - see the script.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME no_duplicate_statics
+           COMMAND ${Python3_EXECUTABLE}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/../tools/check-duplicate-statics.py)
+endif()
+
 add_executable(test_ai_dma test_ai_dma.c)
 target_link_libraries(test_ai_dma PRIVATE mgs_runtime)
 add_test(NAME ai_dma COMMAND test_ai_dma)

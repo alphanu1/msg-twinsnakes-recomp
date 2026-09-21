@@ -7718,6 +7718,48 @@ anything, the module was still being loaded.
 **And the watch costs nothing measurable** — 3M steps run in 0.323 s without
 it and 0.332 s with it, so it can be left on for any investigation.
 
+### F199 — a second `static` of the same name silently aliased the first, and broke the boot
+
+The watch from F197 broke the game, and it took a bisect to see it because
+nothing in the diff looked wrong.
+
+**Symptom:** a 120M-step run that had been reaching frame 1,920 and reading 9
+files reached **frame 0 and read 1 file**. I first blamed the watch's cost —
+wrongly: 3M steps take 0.323 s without it and 0.332 s with it. Then
+nondeterminism — also wrong. A clean baseline with the watch *disabled* was
+equally broken, which is what pointed at the code rather than the load.
+
+`git checkout <prev> -- host/module.c` restored it; reverting `main.c` and
+`heaps.c` did not. So: `module.c`, and one change in it.
+
+**Cause.** `module.c` already had `static uint32_t s_watch_addr;` holding the
+address of **`OSLink`**, watched so the host can read the overlay's `.bss`
+base out of its arguments — which `s_engine_bss`, and therefore everything
+this session has learned about the engine, depends on. My memory watch
+declared `static uint32_t s_watch_addr;` **again**.
+
+In C two file-scope statics of the same name are **tentative definitions of
+one object**. It is legal, it is silent, and `-Wall -Wextra` say nothing. So
+the new code set OSLink's address from `getenv("MGS_WATCH")` at the top of
+every run loop — to zero when unset — the overlay's globals were never
+located, and the boot stopped after loading the module. Renamed to
+`s_memwatch_addr`; frame 840 and 7 files at 40M steps, matching the baseline
+exactly.
+
+**Checked from now on.** `-Wredundant-decls` catches it, but this project
+deliberately declares a function immediately before defining it (12 such in
+`module.c` alone), and that flag objects to every one — so it is not
+imposed. `tools/check-duplicate-statics.py` narrows the check to what bites:
+file-scope **variables**, never functions. It runs in `ctest` (17 tests now)
+and found a second, pre-existing instance on its first run —
+`s_pe_seen`/`s_pe_sent` declared twice in `host/interrupt.c`, harmless
+because both sites wanted the same counters, but the same hazard.
+
+**The pattern, for the third time today:** I read a symptom as a property of
+the program (first "too slow", then "nondeterministic") when it was a
+property of a change I had just made. The bisect took four minutes and should
+have come first.
+
 ---
 
 *Record further findings here as they are established — including the ones that

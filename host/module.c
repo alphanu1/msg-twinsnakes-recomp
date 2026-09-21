@@ -642,8 +642,16 @@ static int service_vector(void* cpu, uint32_t pc,
  * the only thing a handler may portably touch. */
 volatile sig_atomic_t mgs_module_interrupted;
 
-/* MGS_WATCH: a guest word to report every change of, with the writer. */
-static uint32_t s_watch_addr, s_watch_last;
+/* MGS_WATCH: a guest word to report every change of, with the writer.
+ *
+ * NAMED AWAY FROM `s_watch_addr`, which is already taken further down for
+ * the OSLink call watch - and taken in a way the compiler will not warn
+ * about: two file-scope `static uint32_t s_watch_addr;` are tentative
+ * definitions of ONE object in C, so declaring it again silently aliased it.
+ * Setting it here from the environment then overwrote OSLink's address every
+ * run, the overlay's .bss base was never captured, and the boot stopped
+ * after loading the module - one file read, one frame drawn. */
+static uint32_t s_memwatch_addr, s_memwatch_last;
 
 /* The last pc the run loop saw, for a process that has to be killed.
  *
@@ -995,8 +1003,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     memset(&r, 0, sizeof r);
     {
         const char* env = getenv("MGS_WATCH");
-        s_watch_addr = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
-        s_watch_last = s_watch_addr ? gread32(cpu, s_watch_addr) : 0u;
+        s_memwatch_addr = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
+        s_memwatch_last = s_memwatch_addr ? gread32(cpu, s_memwatch_addr) : 0u;
     }
     for (r.steps = 0; r.steps < max_steps && !mgs_module_interrupted; ++r.steps) {
         uint32_t pc;
@@ -1109,14 +1117,14 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * than "somewhere in the last five hundred". Only when asked for:
          * the cost is a guest read per step and this is a diagnostic run,
          * not a normal one. */
-        if (s_watch_addr) {
-            uint32_t now = gread32(cpu, s_watch_addr);
-            if (now != s_watch_last) {
+        if (s_memwatch_addr) {
+            uint32_t now = gread32(cpu, s_memwatch_addr);
+            if (now != s_memwatch_last) {
                 fprintf(stderr, "[watch] 0x%08X: 0x%08X -> 0x%08X  "
                                 "at pc 0x%08X lr 0x%08X\n",
-                        s_watch_addr, s_watch_last, now,
+                        s_memwatch_addr, s_memwatch_last, now,
                         mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
-                s_watch_last = now;
+                s_memwatch_last = now;
             }
         }
 
