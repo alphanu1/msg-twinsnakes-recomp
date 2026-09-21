@@ -8555,6 +8555,53 @@ something that would, or whether the game is waiting on a condition it sets
 for itself. The single write site `0x80053BDC` and its caller `0x80053C6C`
 are where to start.
 
+### F215 — two corrections at the root, and the tracer misses fall-through entries
+
+Reading the root's call sites with **real addresses** rather than offsets
+corrected two things I had stated.
+
+**1. The starts are one pass, not two one-shot sites.** F213 said the two
+type-5 messages came from "two distinct one-shot sites, one per object". The
+listing at real addresses:
+
+    80053AF8  bl fn_80053930   with r6 = 3   <- the REFILL, never reached
+    80053B1C  bl fn_80053930   with r6 = 5   <- start, object A
+    80053B44  bl fn_80053930   with r6 = 5   <- start, object B
+
+Both type-5 calls are in the **same branch**, `.L_80053B00`, run in a single
+pass over two stream objects. `fn_80053988` is traced at **exactly 1 call**,
+which is consistent with that and was not with my reading. The type-3 site at
+`0x80053AF8` sits in the state-2 branch and is never reached — that part
+stands, now on the right evidence.
+
+I had mapped a return address to the wrong `bl`: LR `0x80053B20` follows the
+call at `0x80053B1C` (type 5), not the one at `0x80053AF8` (type 3). Reading
+a return address as if it were the call site is a half-instruction error that
+inverts the conclusion.
+
+**2. The tracer misses functions entered by fall-through.** `fn_80053B60`
+traces at **0 calls** while demonstrably executing — it calls `fn_80053988`
+from `0x80053C80`, inside itself, and that call was traced. Nothing `bl`s to
+`0x80053B60`; control falls into it from the end of `fn_80053988`. The
+tracer matches `pc` at a dispatch boundary, so a label that is never a branch
+target is never seen.
+
+That is the **third** limitation of `MGS_TRACE_FN` found by using it: it
+missed host-invoked callbacks (F203, fixed), it pairs returns by
+most-recent-match, and now it cannot see fall-through entries. **A zero from
+it means "never entered at this address", not "never executed"** — and the
+two are different whenever decomp-toolkit's function boundary is a label
+rather than a call target.
+
+**The oracle is available, and is the obvious next instrument.** Dolphin is
+installed (`org.DolphinEmu.dolphin-emu`, flatpak) and both disc images are on
+disk. The design document makes Dolphin the reference for divergence, and the
+question left — what advances `obj->0x08` off 3 — is exactly the kind that is
+cheaper to *observe* than to derive: sixteen links have been walked
+backwards, and each new level reveals another state field. Watching
+`0x8021A078` in a working run answers it directly. Dolphin's GDB stub is the
+likely route.
+
 ---
 
 *Record further findings here as they are established — including the ones that

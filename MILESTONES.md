@@ -547,6 +547,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **Two corrections at the root** (F215). The two type-5 starts are one
+      pass over two stream objects, not two one-shot sites - `fn_80053988`
+      traces at exactly 1 call - and I had mapped a return address to the
+      wrong `bl`, a half-instruction error that inverts the conclusion. The
+      refill site at `0x80053AF8` is still never reached. Also:
+      `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
+      zero means "never entered at this address", not "never executed".
+- [ ] **Use Dolphin as the oracle for the stream state** (F215). It is
+      installed and both discs are on disk; watching `0x8021A078` in a
+      working run answers what advances it, which sixteen links of backward
+      derivation have not.
 - [x] **The root: one state word, written once** (F214). `0x8021A078`, the
       stream object's state, changes **exactly once all run** - `0 -> 3` -
       and `fn_80053988` dispatches on it: state 1 asks for a header read,
