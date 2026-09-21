@@ -533,6 +533,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The tracer is blind to host-invoked callbacks** (F203).
+      `gcn_stream_read_done` traces as 0 calls while the host counts 406
+      callbacks run: `MGS_TRACE_FN` matches `pc` in the run loop, and a
+      callback the host invokes never passes it. Worth knowing before
+      trusting a zero. The stream itself is clear - the movie asked for
+      256 KB and got 256 KB - and at the frame where the picture stops the
+      task mask still reads **zero**, so the F196 deadlock is a consequence
+      arriving 600 frames later, not the cause.
 - [x] **Correction: the pool is a record ring and nothing leaks** (F202).
       `gcn_pool_acquire` compares the entry tag to its `kind` argument - it
       **finds** a record, it does not allocate one - so acquires and frees

@@ -7948,6 +7948,56 @@ and the counts are accurate. Only the reading of them changes.
 more. That is the same question as "why is no more of `movie.dat` read", now
 reached from the other end.
 
+### F203 — the tracer cannot see host-invoked callbacks, and the event table is keyed
+
+**A limitation worth knowing before trusting `MGS_TRACE_FN` again.** Tracing
+`gcn_stream_read_done` reports **0 calls** in a run where the host's own
+counter says **406 DVD callbacks ran**. Both are right: the tracer matches
+`pc` as the run loop dispatches, and a callback the HOST invokes goes
+straight into guest code — the path that leaves `0x0DEADBEC` on the stack
+(F195) — without passing that check.
+
+So the tracer sees calls the *guest* makes and is blind to calls the *host*
+makes. That briefly looked like a contradiction in the evidence: the disc
+tally said the movie's last read was issued from `gcn_stream_read_done`,
+while the tracer said that function never ran. The tally was right.
+
+This also explains a number that looked wrong: `gcn_stream_issue_read` is
+called **151** times and all 151 come from `fn_1_548`, against 406 actual
+reads. The rest are issued from inside completions, which is exactly the
+invisible path.
+
+**The stream is not at fault, again.** The movie's transfer was started
+once, ran its chain to the end, and its `desc->0x08` reached zero — it asked
+for 256 KB and got 256 KB. Nothing dropped it and nothing is waiting on it.
+
+**The event table, read out.** `gcn_event_poll(key, &out)` selects one of
+several `0x1010`-byte tables (`bss_253F0`, indexed by `bss_253E0`), takes a
+count from `+0x800`, and walks `0x10`-byte entries for one whose first word
+equals `key` — setting a halfword flag at `+0x6` and returning a count from
+`+0x4`. Its first act remains the gate: **zero events while the task mask is
+non-zero**.
+
+So the shape is the same as the record ring: a keyed table, polled. Nothing
+posts *to the movie*; the movie looks for a key and finds nothing.
+
+**Where this leaves the movie, stated carefully.** At the moment the picture
+stops — frame 960 — the mask reads **zero**, so `gcn_event_poll` is working
+and the gate is not yet closed. The event with code 1 is simply never
+produced. The mask deadlock of F196 is therefore a **consequence** that
+arrives ~600 frames later and makes the state permanent; it is not what
+stops the picture. That distinction has been held open since F196 and the
+evidence keeps supporting it.
+
+**What is now excluded, with measurements rather than argument:** the disc
+(406/406 reads, 406/406 callbacks), the read chain, the stream descriptor,
+the record ring (not an allocator, nothing leaks), the audio DMA (93 s of
+sound), the task registration (registered, ungated, not flag-skipped) and
+the task mask at the moment of the stall (zero). What remains is the
+producer of kind-2 records and of event code 1 — the same question from two
+directions, and both reduce to: **the game read 256 KB of a 90 MB movie and
+nothing ever asked for the next byte.**
+
 ---
 
 *Record further findings here as they are established — including the ones that
