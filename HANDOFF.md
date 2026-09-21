@@ -8240,6 +8240,54 @@ consumer is either one of those on a path not taken, or something that never
 runs. That is the next thing to find, and it is now a single question rather
 than a subsystem.
 
+### F209 — the whole chain, measured end to end, from a frozen picture to two messages that were never sent again
+
+Every link below is a **counter from a reproducible run**, not an inference.
+Read upwards it is the freeze; read downwards it is the cause.
+
+    fn_80054D14 (main.dol) sends to the drain's queue ......... 2 sends
+      of 60 calls, both from 0x80054F44, none after
+    fn_1_8D98 polls that queue (OSReceiveMessage, non-blocking)  1,101 calls
+      succeeds ............................................... 2 times
+    the destination fill pointer obj->0xBC wraps ............. 2 times
+      0 -> 0x2000 -> .. -> 0x8000 -> 0, twice; then it runs
+      PAST 0x8000 to 0x10000 and never wraps again
+    fn_1_8FE8's space check (0xB8 - 0xBC >= 0x40) then fails
+      so kind-1 records are peeked and put back ............... 1,085 times
+      one record's tag oscillating 1 <-> 0x81 ................ 2,171 changes
+    the ring head pool->0x14 advances ........................ 456 times
+      then stops for ever at 0x817789F0
+    free space never exceeds capacity/3, so the refill fires .. 2 times
+    so movie.dat is read ..................................... 8 times
+      262,144 of 94,935,040 bytes: 0.28% of the file
+    so kind-2 records are produced ........................... 719, then none
+    so mpeg_movie_task never leaves state 1
+    so the game parks: gcn_task_mask_set(8) .................. once, never cleared
+    so gcn_event_poll returns zero events while the mask is set
+    so the movie never ends and nothing clears the mask
+
+**The one number that is not a stall.** `fn_1_8FE8` peeking and replacing a
+record 1,085 times is not a bug — it is a poll for an *empty* kind-1 record
+(an end-of-stream marker) and it correctly leaves records that still hold
+data. Everything in the middle of this chain is code working as written,
+waiting on something upstream.
+
+**Where it actually breaks: two messages.** `fn_80054D14` builds a message
+with a type byte at `+0x17` — exactly the field the drain reads back with
+`lbz r0, 0x17(r3)` — and posts it to the queue the drain polls. It is called
+**60 times and sends twice.** After that the drain has nothing to take, the
+buffer is never emptied, and the ten links above follow mechanically.
+
+**Not yet known:** which condition inside `fn_80054D14` gates the send, and
+whether the two it did send are the expected number. It returns 1 once and 0
+on the other 59 calls. It sits just below `sd_mem.c` in the file
+attributions, so it is Konami's own streaming layer rather than the SDK.
+
+**A note on what made this possible.** None of it could be measured until the
+runs reproduced (F206). Every count here comes from runs that are
+byte-identical to each other, and several of these numbers were taken twice
+for that reason.
+
 ---
 
 *Record further findings here as they are established — including the ones that

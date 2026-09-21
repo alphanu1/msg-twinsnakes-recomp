@@ -547,6 +547,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The whole chain, measured end to end** (F209). Thirteen links from
+      the frozen picture back to its cause, every one a counter from a
+      reproducible run: `fn_80054D14` in main.dol posts to the drain's queue
+      **twice in 60 calls and never again**, so the drain succeeds twice, so
+      the destination buffer never wraps a third time, so its space check
+      fails, so kind-1 records are peeked and replaced 1,085 times, so the
+      ring head is pinned, so the refill fires twice, so **movie.dat is read
+      8 times - 0.28% of it** - and everything downstream follows.
+      **Open: which condition inside `fn_80054D14` gates the send.**
 - [x] **The pinning record is identified** (F208). The head advances 456
       times and stops at `0x817789F0`; that record's tag oscillates
       `1 -> 0x81 -> 1` **2,171 times** between `gcn_pool_acquire` marking it
