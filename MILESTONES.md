@@ -533,6 +533,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The movie player is `mpegGCN.c`** (F190), REL `0x149128`, runtime
+      `0x7F151214` - the intro is MPEG decoded by translated engine code.
+      `tools/resolve-addrs.py` now falls back to the file attribution and
+      prints `[mpegGCN.c+0xEC]` where no name exists, which is what makes a
+      profile of the engine readable at all: its symbol map is 87 lines.
 - [x] **A read tally per file** (F189). The sampled disc trace showed one
       read of the movie and seven had happened; `mgs_disc_report` now counts
       reads, bytes and the furthest offset per file at exit. A rate-limited

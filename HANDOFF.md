@@ -7308,6 +7308,31 @@ The general shape is worth keeping: **a rate-limited log answers "what kind
 of thing is happening" and never "how many".** Anything counted needs a
 counter.
 
+### F190 — the movie player is `mpegGCN.c`, and addresses now resolve to a file when they have no name
+
+Looking for what the movie player *is*, rather than for another subsystem to
+suspect: `config/symbols/mgso_pal.rel.files.txt` attributes REL offset
+`0x149128` (size `0x5CC`, runtime `0x7F151214`) to **`mpegGCN.c`**, lines 905
+and 910. The intro is MPEG, decoded by translated engine code — so the
+decoder is the game's own CPU work, not a shim, and it is a file we can name
+even though the engine has no public decompilation.
+
+The string `"mpegGCN.c"` is referenced six times in the REL and all six sit
+inside that one function, so the file's full extent is **not** established —
+only that this function is in it. The two asserts bracket a pair of calls:
+one returning zero panics at line 905, one returning negative panics at line
+910. Their message strings could not be read statically; they are REL
+relocation slots, empty in the image.
+
+**`tools/resolve-addrs.py` now falls back to the file attribution.** It read
+only `*.symbols.txt`, and the REL symbol map is 87 lines, so REL addresses in
+a profile resolved to nothing at all — a column of bare hex. It now also
+reads `*.files.txt` and prints `[mpegGCN.c+0xEC]` where no name is known.
+Bracketed deliberately: `OSGetTime` is a name and `[mpegGCN.c+0xEC]` is an
+attribution, and the two must not be confusable when the output is pasted
+into a note. For reading a profile of Konami's own code — which will mostly
+never have names — this is most of the available value.
+
 ---
 
 *Record further findings here as they are established — including the ones that

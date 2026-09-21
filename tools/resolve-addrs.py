@@ -61,6 +61,41 @@ def load(path, bias=0):
     return out
 
 
+def load_files(path, bias=0):
+    """Read a file-attribution table into sorted (address, size, file) triples.
+
+    A WEAKER ANSWER THAN A NAME, AND WORTH PRINTING ANYWAY.
+
+    The engine overlay is Konami's own code with no public decompilation, so
+    most of it will never have a name. But a function that hands its own
+    __FILE__ to a panic routine says which source file it was compiled from,
+    and for reading a profile that is most of the value: "38% of the run is
+    in mpegGCN.c" is an answer, where a column of bare addresses is not.
+
+    Kept distinct from real names by the caller, which brackets these, so a
+    file attribution can never be mistaken for a symbol.
+    """
+    out = []
+    try:
+        fh = open(path)
+    except OSError:
+        return out
+    with fh:
+        for line in fh:
+            if line.lstrip().startswith('#') or not line.strip():
+                continue
+            m = re.match(r'^\s*0x([0-9A-Fa-f]+)\s+(0x[0-9A-Fa-f]+|\?)\s+'
+                         r'(\S+\.c)\b', line)
+            if not m:
+                continue
+            size = m.group(2)
+            out.append((int(m.group(1), 16) + bias,
+                        -1 if size == '?' else int(size, 16),
+                        m.group(3)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
 def resolve(table, keys, addr):
     i = bisect.bisect_right(keys, addr) - 1
     if i < 0:
@@ -88,14 +123,33 @@ def main():
     dol = load(os.path.join(ROOT, 'config/symbols/main.dol.symbols.txt'))
     rel = load(os.path.join(ROOT, 'config/symbols/mgso_pal.rel.symbols.txt'),
                bias=rel_base)
+    dol_f = load_files(os.path.join(ROOT, 'config/symbols/main.dol.files.txt'))
+    rel_f = load_files(os.path.join(ROOT, 'config/symbols/mgso_pal.rel.files.txt'),
+                       bias=rel_base)
     dol_k = [t[0] for t in dol]
     rel_k = [t[0] for t in rel]
+    dol_fk = [t[0] for t in dol_f]
+    rel_fk = [t[0] for t in rel_f]
 
     def name_for(addr):
+        """A name if one is known, else the source file, else nothing.
+
+        The file is bracketed so the two can never be confused when this
+        output is read back or pasted into a note: `OSGetTime` is a name,
+        `[mpegGCN.c+0x278]` is an attribution and no claim about a name.
+        """
         if addr >= 0x80000000:
-            return resolve(dol, dol_k, addr)
+            nm = resolve(dol, dol_k, addr)
+            if nm:
+                return nm
+            f = resolve(dol_f, dol_fk, addr)
+            return '[%s]' % f if f else None
         if addr >= 0x7E000000:
-            return resolve(rel, rel_k, addr)
+            nm = resolve(rel, rel_k, addr)
+            if nm:
+                return nm
+            f = resolve(rel_f, rel_fk, addr)
+            return '[%s]' % f if f else None
         return None
 
     streams = [open(a) for a in args] if args else [sys.stdin]
