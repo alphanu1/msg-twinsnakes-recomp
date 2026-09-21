@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,249 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,253 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **Four names out of the deadlock** (F198): `mpeg_movie_task`,
+      `mpeg_poll_stream_events`, `gcn_event_poll` and `gcn_task_table_init`,
+      **1,043 to 1,047**. The watch confirms the static reading exactly - the
+      only two changes to the mask in a boot are the loader's `memcpy`
+      bringing the image in and the initialiser zeroing it. So the `0x2450`
+      seen earlier was never a cutscene parking the game; it was the module
+      still being loaded.
 - [x] **A per-step guest watch, and a duplicate removed** (F197). The engine
       task dump already existed in `host/heaps.c`; I wrote a second one and
       both printed before I noticed. Removed, with the new part

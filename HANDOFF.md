@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,043 / 18,485 | 5.6% |
+| Functions named | 1,047 / 18,485 | 5.7% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7681,6 +7681,42 @@ the pc and link register of the step that changed it — checked **every**
 step, which is what makes the answer exact instead of "somewhere in the last
 512". The mask lives at `0x7F4BD5D8`, which the task dump now prints for
 exactly this purpose.
+
+### F198 — four names out of the deadlock, and the watch confirms the initialiser
+
+Tracing F196's chain named every function in it. All four are described
+rather than guessed at, and each claim is checkable against the disassembly:
+
+  - **`mpeg_movie_task`** (`0x149128`) — the function the task table holds for
+    the movie; the entry literally reads `fn 0x7F151214`. A state machine on
+    its node's `+0x44`: 0 opens the movie by id (the `mpegGCN.c` asserts at
+    lines 905 and 910 guard the lookup and the attach), 1 waits, 2 plays,
+    3 ends.
+  - **`mpeg_poll_stream_events`** (`0x149048`) — what state 1 calls; sets the
+    flag it is waiting on when an event of code 1 arrives.
+  - **`gcn_event_poll`** (`0x0F52A8`) — the engine's event pump, whose first
+    act is to read the global task mask and **return zero events if it is
+    non-zero**.
+  - **`gcn_task_table_init`** (`0x0F38CC`) — lays out the twelve level entries
+    and is the only `stw` to the mask anywhere in the overlay.
+
+1,043 → **1,047 functions named.**
+
+**The watch confirms the static reading exactly.** Watching `0x7F4BD5D8` every
+step, the only two changes in a boot are:
+
+    0x00000000 -> 0x00002450  at memcpy, from rel_loader_LoadRel+0x94
+    0x00002450 -> 0x00000000  at REL 0x0F38F8  (gcn_task_table_init)
+
+The first is not a write by game logic at all — it is the **loader copying
+the module image into memory**, so `0x2450` is simply what that word holds in
+the file. The second is the initialiser zeroing it, from the one `stw` the
+static scan found. Two instruments, one answer, and the earlier reading of
+`0x2450` as "a cutscene parked the game" was wrong: nothing had parked
+anything, the module was still being loaded.
+
+**And the watch costs nothing measurable** — 3M steps run in 0.323 s without
+it and 0.332 s with it, so it can be left on for any investigation.
 
 ---
 

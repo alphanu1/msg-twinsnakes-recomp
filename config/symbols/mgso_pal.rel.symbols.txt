@@ -58,7 +58,35 @@
 # --- CodeWarrior / libm ------------------------------------------------------
 .text 0x017834 0x70 sqrtf own
 
+# --- the movie player, in mpegGCN.c -----------------------------------------
+# `mpeg_movie_task` is the function the engine's task table holds for the
+# movie - the table entry reads `fn 0x7F151214`, which is this - and the
+# dispatcher calls a task with r3 still holding its own list node, so the
+# node IS this function's argument. It is a state machine on node+0x44:
+# 0 opens the movie by id (the two asserts at mpegGCN.c lines 905 and 910
+# guard the lookup and the attach), 1 waits, 2 plays, 3 ends.
+#
+# State 1 leaves only when `(*bss_55EA4)->0x3C` is non-zero, and
+# `mpeg_poll_stream_events` is what sets it - on an event whose code is 1,
+# taken from `gcn_event_poll`. That is the stall of F196: the poll returns
+# nothing at all while the task mask is non-zero.
+.text 0x149048 0x0E0 mpeg_poll_stream_events own
+.text 0x149128 0x5CC mpeg_movie_task own
+
 # --- the per-frame task scheduler (see HANDOFF F94) --------------------------
+# `gcn_task_table_init` lays the table out and is the ONLY `stw` to the mask
+# in the whole overlay: twelve entries of stride 0x44 from bss+0x23708, each
+# given its gate at +0x40 from the halfword table at data_D5E0 and its list
+# head pointed at itself, then bss+0x23A38 stored as zero. Watching that word
+# every step confirms it - the only two changes seen are the loader's memcpy
+# bringing the image in and this function zeroing it.
+#
+# `gcn_event_poll` is the engine's event pump, and its first act is the one
+# that matters: it reads the global task mask and returns ZERO EVENTS if it
+# is non-zero, so parking the game does not merely gate task levels, it stops
+# every event in the engine from being delivered (F196).
+.text 0x0F38CC 0x080 gcn_task_table_init own
+.text 0x0F52A8 0x140 gcn_event_poll own
 # The engine's whole per-frame workload is reached through a function pointer
 # in this table, which is why following `bl` targets out of the main loop
 # never arrives at the renderer.
