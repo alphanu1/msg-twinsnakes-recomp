@@ -8709,6 +8709,62 @@ entries. Each was found by disagreeing with another instrument. That is an
 argument for keeping two instruments on anything load-bearing, which is how
 this one surfaced.
 
+### F218 — the movie is paced by AUDIO CONSUMPTION, and that reframes F188
+
+Following the re-arm rather than the refill found the loop, and it runs the
+opposite way round from how I had been reading it.
+
+**What actually recycles a slot.** `fn_800534D4` (types 1/3/5) is *not* the
+only way a slot returns to service, which is what made the earlier chain look
+closed. `fn_80055114` also sets a slot to 1 — `li r0, 0x1; stb r0, 0xd4(r4)`
+— and it is reached from message types **11 and 12**, which *do* repeat in
+our run (16 and 13 times). It re-arms a slot only when a **playback
+position** reaches that slot's end marker:
+
+    if (*(obj + slot + 0x88) != position) skip;   /* not consumed yet */
+    ... slot = 1 ...
+
+Slot 0's end marker is `0x8000` — watched, written once, 32 KB.
+
+**Where the position comes from, and how far ours gets.** Type 12 carries it,
+and `fn_80056688` produces it: it copies bytes and advances a byte counter by
+however many it copied. Traced, it is called **13 times with a length of
+`0x400`** — **13 KB of the 32 KB** a slot needs. It stops less than halfway,
+so no slot is ever recycled.
+
+**And `fn_80056688` is a Vorbis read callback.** Its caller invokes it
+through a function pointer at `r30->0x118` with `(dest, 1, 0x400)` — the
+shape of an Ogg/Vorbis callback — and the file attributions around that
+caller read **`framing.c`**, Ogg's own framing layer. So the whole chain is:
+
+    audio consumer
+      -> Vorbis/Tremor decode (framing.c)
+      -> the game's read callback, 1 KB at a time
+      -> the stream's byte position advances
+      -> at a slot boundary, fn_80055114 re-arms that slot
+      -> fn_80054D14 posts it, the drain empties it
+      -> the record ring's head can advance
+      -> the refill fires and more of movie.dat is read
+
+**Every link in F209's chain was read correctly and in the wrong direction.**
+I traced it as "the disc stops, so nothing decodes". It is "nothing consumes,
+so nothing decodes, so the disc is never asked". The movie is **paced by
+audio**, which is why the picture freezes and the game keeps running: the
+video has nothing to advance *against*.
+
+**This reframes F188, which is mine to correct.** F188 concluded "audio is
+not the movie blocker" from the audio DMA running for 93 seconds. That
+measured the **hardware** — our engine streaming blocks out of a buffer — and
+said nothing about whether the game's mixer consumes decoded PCM. The DMA can
+happily play 93 seconds of whatever is in that buffer while the Vorbis
+decoder is never asked for a sample. F184's original instinct that audio was
+load-bearing was closer than the finding that dismissed it.
+
+**Next:** find what drives the decoder — the AX callback, on the design
+document's account, at 5 ms — and whether it runs in our port at all. That is
+one measurement away, and it is now a question about our runtime rather than
+about Konami's state machines.
+
 ---
 
 *Record further findings here as they are established — including the ones that

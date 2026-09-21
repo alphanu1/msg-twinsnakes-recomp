@@ -554,6 +554,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **The movie is paced by audio consumption** (F218). `fn_80055114`
+      re-arms a slot when a **playback position** reaches its end marker
+      (`0x8000`); that position is advanced by `fn_80056688`, which traced at
+      **13 calls of 0x400 bytes - 13 KB of the 32 KB needed** - and which is
+      a **Vorbis read callback** (`framing.c` surrounds its caller). So the
+      chain runs: audio consumer -> Vorbis decode -> read callback ->
+      position -> slot re-arm -> refill -> disc read. Every link of the
+      earlier chain was read correctly and **in the wrong direction**.
+      **This reframes F188:** the audio DMA running for 93 s measured the
+      hardware, not whether the game's mixer consumes decoded PCM.
 - [x] **`MGS_TRACE_FN` counts are lower bounds** (F217). `fn_80053B60` is
       called by exactly one `bl` and demonstrably ran - a watch caught it
       writing memory - while the tracer reported **0 calls**. Translated code
