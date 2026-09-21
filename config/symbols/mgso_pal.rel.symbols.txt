@@ -62,15 +62,24 @@
 # One object serves the whole engine: every caller traced passes the same
 # pool, 0x7F4EF794 at runtime, and distinguishes itself by a `kind` in r4.
 #
-#   gcn_pool_acquire(pool, kind)  searches pool->0x14 .. pool->0x24 for an
-#       entry whose header word is 0 or 0xFF and returns it, or 0 if there is
-#       none - and 0 immediately if pool->0x34 is non-zero. Entries are
-#       0x10 bytes of header followed by the payload, which is what the
-#       caller receives: the header sits at result-0x10.
-#   gcn_pool_free(pool, entry)    writes 0 to that header, marking it free.
-#   gcn_pool_clear_entry_flag(pool, entry)  clears BIT 7 of the header and
-#       stores it back. NOT a free - the entry stays allocated, which is the
-#       distinction the whole accounting in F201 turns on.
+#   gcn_pool_acquire(pool, kind)  walks from pool->0x14 to pool->0x24 looking
+#       for an entry whose header word EQUALS `kind` (`cmpw r0, r28`, r28
+#       being the second argument), and returns it, or 0 if there is none -
+#       and 0 immediately if pool->0x34 is non-zero. A header of 0xFF is a
+#       wrap marker and sends the cursor back to pool->0x8; 0 means the slot
+#       is empty. Entries are 0x10 bytes of header followed by the payload,
+#       which is what the caller receives: the header sits at result-0x10.
+#
+#       IT FINDS, IT DOES NOT ALLOCATE. The name is ours and "acquire" was
+#       first read as "allocate", which made 79% of calls returning NULL look
+#       like exhaustion instead of "no record of that kind is waiting". See
+#       the correction in F202.
+#   gcn_pool_free(pool, entry)    writes 0 to that header: the record is
+#       consumed and the slot is empty again.
+#   gcn_pool_clear_entry_flag(pool, entry)  clears BIT 7 of the header tag and
+#       stores it back, leaving the record present with a changed tag - so a
+#       later search for the original kind will not find it, but one for the
+#       cleared tag will.
 #
 # All three take the same lock (`bss_55C74`) around the header write.
 #

@@ -7887,6 +7887,67 @@ the port is deterministic in this configuration. Most likely a leftover
 process from a `pkill` overlapping the new one. Recorded rather than
 explained.
 
+### F202 — correction: the pool is a record ring, nothing leaks, and the movie simply ran out of data
+
+**F201's central claim is wrong.** I read `gcn_pool_acquire` as an allocator
+and built an accounting argument on it — 1,848 successes against 747 frees,
+a 1,101 difference matching one caller exactly, a second disposal path that
+"does not free". The arithmetic was right and the interpretation was not.
+
+Reading the search loop to the end shows what it actually does:
+
+    r0 = *cursor;                        /* the entry's TAG */
+    if (r0 == 0xFF) cursor = pool->0x8;  /* wrap marker: back to the base */
+    if (r0 == 0)    ...                  /* empty slot */
+    if (r0 == r28)  -> match             /* r28 is the KIND argument */
+
+`cmpw r0, r28` against the second parameter. **It finds a record of a given
+kind; it does not allocate one.** So:
+
+  - "79% of acquires return NULL" is not exhaustion, it is **"no record of
+    that kind is waiting"** — the ordinary answer to a poll.
+  - The five `0xNNNN0004` kinds failing 6,606 times out of 6,606 are polls
+    for records that were never produced, which their callers expect.
+  - `gcn_pool_free` marks a record **consumed**, not freed to an allocator.
+  - `gcn_pool_clear_entry_flag` changes a record's tag rather than removing
+    it, so a later search for the original kind misses it.
+  - **There is no leak.** Acquires and frees were never required to balance,
+    because they are poll and consume, not allocate and free.
+
+**What the numbers do say, read correctly.** The movie polls kind 2 and gets
+a record 719 times, then never again; the addresses climb monotonically
+through ~178 KB and never wrap. 178 KB of records against the **256 KB** of
+`movie.dat` the game read (F193) is the right order: those records *are* the
+parsed movie data. **The movie consumed everything it had been given and
+then found nothing waiting** — which is exactly what an empty stream buffer
+looks like from the consumer's side, and not a fault in the pool at all.
+
+So the chain does not terminate in a leak. It closes on itself:
+
+    no more movie data read
+      -> no kind-2 records produced
+      -> gcn_pool_acquire finds none, ctx->0x25E8 = NULL
+      -> the game parks (mask |= 8)
+      -> gcn_event_poll returns nothing while the mask is set
+      -> mpeg_movie_task never leaves state 1
+      -> the movie never ends, nothing clears the mask, nothing asks for
+         more data
+
+**How the error was made, because it is the same one twice.** F195 corrected
+"the decoder never runs", read off a truncated profile. This is the same
+shape: a name I chose — `acquire` — carried an assumption, and I then fitted
+an accounting argument to it without reading the loop to its end. The tell
+was in the data the whole time: an allocator whose returns climb
+monotonically and never reuse a freed address is not an allocator.
+
+**What is still true from F201:** the tracer works and does not perturb, the
+pointer goes NULL exactly once as the last event, all callers share one pool,
+and the counts are accurate. Only the reading of them changes.
+
+**Next:** what produces kind-2 records, and what it needs in order to produce
+more. That is the same question as "why is no more of `movie.dat` read", now
+reached from the other end.
+
 ---
 
 *Record further findings here as they are established — including the ones that

@@ -533,6 +533,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **Correction: the pool is a record ring and nothing leaks** (F202).
+      `gcn_pool_acquire` compares the entry tag to its `kind` argument - it
+      **finds** a record, it does not allocate one - so acquires and frees
+      were never required to balance and the "1,101 leaked" accounting was
+      an interpretation fitted to a name I had chosen. Read correctly, the
+      movie consumed 719 records spanning ~178 KB of the 256 KB it was given
+      and then found none waiting: an empty stream buffer, not a pool fault.
 - [x] **A guest-function tracer, and the pool that starves the movie**
       (F201). `MGS_TRACE_FN` reports a guest function's arguments, caller and
       result (`MGS_TRACE_FN_MAX=0` counts silently); validated on
