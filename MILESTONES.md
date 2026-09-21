@@ -554,6 +554,12 @@ This is the project. ~200 functions and the widest error bars in the plan.
       `0x0C` thirteen times, and the remaining pair are unread - including
       `0x80052FF8`, the slot-DONE site, which sent exactly two, matching the
       two refills. **Next: read that message's type field properly.**
+- [x] **A fourth stale copy, in `docs/decompilation-process.md`** (F211a).
+      Its summary table read 1,006 / 5.4% and 198 SDK entry points, with
+      `mgso_pal.rel` at 9 where the maps hold 27. Corrected, prose included,
+      and `--check` now verifies it. Of four places carrying these figures,
+      the two that were checked stayed right and the two that were not both
+      drifted.
 - [x] **README's progress block is generated and checked** (F211). It had
       gone stale by 46 functions - 1,006 against 1,052 - because `--check`
       covered HANDOFF and MILESTONES but not README, whose block only stayed

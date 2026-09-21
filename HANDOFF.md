@@ -8338,6 +8338,31 @@ slot done, so the natural design — "slot finished, prepare another" — has a
 candidate path. Whether it is taken, and what it depends on, is the next
 measurement.
 
+### F211a — there was a FOURTH copy, in docs/decompilation-process.md
+
+Ben's follow-up — "that's on the main readme upstream" — sent me looking
+again, and a sweep for the old figure found one more: the summary table in
+`docs/decompilation-process.md`, reading **1,006 named / 5.4%** and **198 SDK
+entry points** against the maps' 1,052 and 205, plus per-module rows saying
+`main.dol` 997/1,818 and `mgso_pal.rel` **9**/16,667 where the REL now holds
+27. Its prose was stale to match ("why 5.4% is the least useful number",
+"the remaining 237 need dynamic information" where 336 − 205 = 131).
+
+All corrected, and `--check` now verifies this table too — confirmed to bite.
+Four places carried these figures: HANDOFF, MILESTONES, README and this. The
+first two were checked and stayed right; the two that were not both drifted.
+**Three copies of a number are three chances to be wrong**, so each is now
+compared against the maps rather than against each other.
+
+**And a near-miss worth recording.** Computing the per-module rows, I wrote my
+own counting loop and got `main.dol` **1,026** where `progress.py` reports a
+total of 1,052 with 27 in the REL — 1,026 + 27 = 1,053, one too many. My
+regex accepted a symbol whose size column is `?`; `progress.py`'s requires
+`0x`. I had just written a commit message warning that lifting a generator's
+logic out to call it twice is how a generator and its check stop agreeing,
+and then immediately did it by hand. The fix was to use its own regex, which
+gives 1,025 + 27 = 1,052 exactly.
+
 ### F211 — README's progress block was stale by 46 functions, because nothing checked it
 
 Ben noticed it: the figures in `README.md` had not moved while the symbol

@@ -177,13 +177,46 @@ def main():
     avg = acc / len(rows)
 
     if '--check' in sys.argv:
-        sys.exit(check(rows, avg) + check_origins() + check_readme())
+        sys.exit(check(rows, avg) + check_origins() + check_readme()
+                 + check_process_doc(rows))
 
     print(f"| {'Measure':<42} | {'':>15} | {'':>6} |")
     print(f"|{'-'*44}|{'-'*17}|{'-'*8}|")
     for name, a, b in rows:
         print(f"| {name:<42} | {a:>6} / {b:<6} | {100*a/b:>5.1f}% |")
     print(f"| **{'Average of the five':<40}** | {'':>15} | **{avg:.1f}%** |")
+
+
+def check_process_doc(rows):
+    """Does docs/decompilation-process.md's summary table still agree?
+
+    A FOURTH place with the same figures, and the one that went unnoticed
+    longest: it read 1,006 named and 198 SDK entry points while the maps held
+    1,052 and 205. Three copies of a number are three chances to be wrong, so
+    every copy is now compared against the maps rather than against each
+    other.
+    """
+    text = open(P('docs/decompilation-process.md')).read()
+    want = {
+        '1. Functions named': (rows[0][1], rows[0][2]),
+        '3. SDK entry points the engine calls, named': (rows[2][1], rows[2][2]),
+    }
+    bad = []
+    for label, (a, b) in want.items():
+        m = re.search(r'\| \*\*%s\*\* \| ([\d,]+) / ([\d,]+) \|'
+                      % re.escape(label), text)
+        if not m:
+            bad.append("  process doc: no row for %r" % label)
+            continue
+        got = (int(m.group(1).replace(',', '')), int(m.group(2).replace(',', '')))
+        if got != (a, b):
+            bad.append("  process doc: %r says %s/%s, evidence says %s/%s"
+                       % (label, got[0], got[1], a, b))
+    if bad:
+        print("docs/decompilation-process.md's table is stale "
+              "(project rule 15):")
+        print("\n".join(bad))
+    return 1 if bad else 0
 
 
 def check_readme():

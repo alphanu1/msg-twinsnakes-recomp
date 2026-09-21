@@ -298,7 +298,7 @@ trimming range outliers so one misfiled symbol could not stretch a range across
 the binary — `__DBVECTOR` alone was swallowing DVD, VI and GX. Both were
 necessary and neither was sufficient.
 
-**The remaining 237 need dynamic information.** A Dolphin SDK-call log gives
+**The remaining 131 need dynamic information.** A Dolphin SDK-call log gives
 each entry point a name from the call itself rather than from its neighbours,
 and it is required for phase 2 regardless.
 
@@ -310,15 +310,18 @@ is the one that governs the work:
 
 | Measure | | |
 |---|---|---|
-| **1. Functions named** | 1,006 / 18,485 | **5.4%** |
-| — `main.dol` | 997 / 1,818 | 54.8% |
-| — `mgso_pal.rel` | 9 / 16,667 | 0.1% |
+| **1. Functions named** | 1,052 / 18,485 | **5.7%** |
+| — `main.dol` | 1,025 / 1,818 | 56.4% |
+| — `mgso_pal.rel` | 27 / 16,667 | 0.2% |
 | **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
-| **3. SDK entry points the engine calls, named** | 198 / 336 | **58.9%** |
-| — weighted by call sites | 6,144 / 7,078 | **86.8%** |
+| **3. SDK entry points the engine calls, named** | 205 / 336 | **61.0%** |
+| — weighted by call sites | 6,154 / 7,078 | **86.9%** |
 | **4. GX surface the game uses, named** | 81 / 81 | **100.0%** |
 
-**Why 5.4% is the least useful number here.** The engine is translated
+<sub>Regenerate with `tools/progress.py`; `--check` verifies these against
+the maps. They were hand-maintained and went stale by 46 functions.</sub>
+
+**Why 5.7% is the least useful number here.** The engine is translated
 mechanically — DolRecomp does not care what a function is called. Names in the
 REL buy debugging and hand-written patches, not correctness, which is why 0.1%
 there is not a blocker. What the runtime must replace is the **SDK boundary**,
