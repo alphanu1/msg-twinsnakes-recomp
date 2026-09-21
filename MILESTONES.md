@@ -554,6 +554,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **`MGS_TRACE_FN` counts are lower bounds** (F217). `fn_80053B60` is
+      called by exactly one `bl` and demonstrably ran - a watch caught it
+      writing memory - while the tracer reported **0 calls**. Translated code
+      calls translated code directly in C, so a function is counted only when
+      it is where a dispatch starts. **Watches and host counters are exact
+      and unaffected; trace counts are floors.** Use the tracer for *who* and
+      *with what*, not for *how many*.
 - [x] **The oracle works, and corrected the root** (F216).
       `tools/dolphin-watch.py` reads guest RAM out of a running Dolphin via
       its shared-memory mapping - no GDB stub (this build has none) and no

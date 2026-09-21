@@ -8657,6 +8657,58 @@ appeared in the command line running it, killing the shell mid-command. And
 to 15 characters, so the name to compare against is `dolphin-emu-nog`. The
 tool now reads `/proc/*/comm` directly and skips its own pid.
 
+### F217 — MGS_TRACE_FN counts are LOWER BOUNDS, and several findings must be re-read
+
+Chasing what drives the slot cycle, `fn_80053B60` turned out to be called by
+exactly one `bl`, at `0x80051830` — yet the tracer reported **0 calls** for
+it while it demonstrably ran. One run settles it:
+
+    [watch] 0x8021A078: 0 -> 3  at pc 0x80053BDC      <- inside fn_80053B60
+    traced guest functions:
+      0x80053B60  0 calls
+      0x80051830  0 calls
+
+The watch proves the function executed; the tracer says it was never entered.
+
+**Why.** The run loop sees `pc` only at a **dispatch boundary**. Translated
+code calls other translated functions **directly, in C**, without returning
+to the loop, so a function is counted only when it happens to be where a
+dispatch starts. F215 put this down to fall-through entry; that was too
+narrow. It applies to ordinary `bl` calls as well.
+
+**So every `MGS_TRACE_FN` figure in F203–F215 is a lower bound**, not a
+count. Re-reading what rests on what:
+
+  - **Safe — watches and host counters are exact.** A watch reads guest
+    memory every step; the disc tally, DVD completions and interrupt counts
+    are host-side. So: the slot states changing 5 times, the state word once,
+    the ring head 456 times, `pool->0x34`/`0x38`/`0xD6` staying zero, the
+    mask's history, 406 reads / 406 callbacks / 0 refused, `movie.dat` read
+    8 times — all stand.
+  - **`fn_80053200` "never invoked" survives, but by the other leg.** The
+    trace said 0 calls, which is now worth nothing; the *watch* on
+    `0x8027ADD4` showing `0xD6` at `0x00` for a whole run is what actually
+    establishes that bit 2 was never set. The conclusion holds; the reason
+    given for it was the weaker of the two.
+  - **Suspect — anything whose argument was a trace count.** "The pump is
+    called 2,204 times", "151 issue_reads against 406 reads", "`fn_1_8FE8`
+    1,101 times", "8,839 acquires, 1,848 successes, 747 frees". The
+    *ratios* there were doing real work, and a uniform undercount would
+    preserve them, but that is an assumption and is now flagged as one.
+    F202's correction — that the pool is a record ring and nothing leaks —
+    rests on reading the code, not on those counts, and is unaffected.
+
+**What to do instead.** Prefer a watch on a memory location the function
+writes; it is exact, costs nothing measurable, and was already the instrument
+that caught this. Use `MGS_TRACE_FN` to discover *who* and *with what* — its
+argument and caller reporting is sound — and not to count.
+
+**This is the fourth limitation of that tool found by using it**, after
+host-invoked callbacks, most-recent-match return pairing, and fall-through
+entries. Each was found by disagreeing with another instrument. That is an
+argument for keeping two instruments on anything load-bearing, which is how
+this one surfaced.
+
 ---
 
 *Record further findings here as they are established — including the ones that

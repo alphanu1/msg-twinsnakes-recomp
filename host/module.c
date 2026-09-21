@@ -671,7 +671,19 @@ static uint64_t s_fntrace_hits[MGS_FNTRACE_MAX];
  * host invokes runs in mgs_module_call_guest's own loop, and tracing only
  * the first made `gcn_stream_read_done` read as 0 calls while the host's
  * counter said 406 callbacks had run (F203). Both loops now go through
- * here, so a traced function is seen however it is reached. */
+ * here.
+ *
+ * WHAT THIS STILL CANNOT SEE, AND IT MATTERS (F217). Both loops observe `pc`
+ * only at a DISPATCH BOUNDARY. Translated code calls other translated
+ * functions directly, in C, without returning here - so a function is
+ * counted only when it happens to be where a dispatch starts. Proven:
+ * fn_80053B60 is reached by exactly one `bl`, a watch caught it writing
+ * guest memory, and this reported 0 calls for it.
+ *
+ * So these numbers are LOWER BOUNDS, not counts. Use this to learn WHO
+ * called something and WITH WHAT - the arguments and caller are sound - and
+ * put a watch on a location the function writes when the question is HOW
+ * MANY. */
 static void fntrace_step(void* cpu, uint32_t pc)
 {
     unsigned i;
