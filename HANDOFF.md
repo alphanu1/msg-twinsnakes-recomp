@@ -8095,6 +8095,47 @@ whether determinism returns. An out-of-bounds `strcpy` can corrupt anything,
 so it is a credible cause — but "credible" is not "shown", and today has
 already produced three corrections from exactly that gap.
 
+### F206 — determinism returns with the race fixed, and the pool's producer is found
+
+**Five 120M runs after the lock: byte-identical logs, 406 reads, 0 refused,
+0 failures.** Before the fix, one run in three diverged.
+
+**Stated with its strength, not louder.** P(no divergence in five trials | a
+one-in-three rate) is **0.13** — suggestive, not conclusive. What makes it
+more than a coincidence is that it agrees with the other two measurements:
+`MGS_JOBS=1`, which removes the concurrency entirely, gave three identical
+runs; and the race was in code reachable *only* from worker threads. Three
+observations, one story. Ten further trials are running; at fifteen clean
+runs the same probability is **0.0023**, which would settle it.
+
+**What this cost and what it bought.** The race was mine, introduced this
+morning in the read tally (F189) — an instrument added to answer a question
+about the movie went on to corrupt the runs used to answer it. The failure
+mode is worth remembering: *a diagnostic that writes shared state is part of
+the program*. Every measurement taken between F189 and F205 is suspect, and
+the ones that mattered were re-taken.
+
+**Meanwhile, the record producer is identified.** `fn_1_132368` is a
+lock-wrapped call to `fn_1_1321A8`, which is the pool's **pump**:
+
+    if (pool->0x38) return 1;            /* already busy */
+    fn_1_9C8();                          /* the early-REL file service */
+    if (pool->0x30 || pool->0x34) { pool->0x00 = 0; return 0; }
+    ...
+
+Two things connect here. `pool->0x34` is **exactly the flag that makes
+`gcn_pool_acquire` return NULL immediately**, so the pump and the consumer
+share a stop condition. And `fn_1_9C8` sits in the early-REL cluster with
+`gcn_worker_loop`, `gcn_stream_issue_read` and the rest of the file service —
+so the pool is fed from the stream, which closes the loop the other way:
+records exist because data was read, and data is read because records are
+wanted.
+
+**Next**, once the trials land: trace `fn_1_132368` (runtime `0x7F13A454`)
+and watch `pool->0x30`, `pool->0x34` and `pool->0x38` at `0x7F4EF794`. The
+question is whether the pump stops being called, or starts returning early —
+and which of those three flags is set when it does.
+
 ---
 
 *Record further findings here as they are established — including the ones that
