@@ -8043,6 +8043,58 @@ branch to garbage (F201, blamed on a leftover process), and a run with only
 evidence. Anything load-bearing gets repeated, and a difference between two
 runs is the first thing to suspect, not the last.
 
+### F205 — the diverging runs differ at a failed disc read, and the tally I added today is a data race
+
+Rather than reason further about F204's nondeterminism, the two diverging
+120M logs were **diffed**. They are identical until one line:
+
+    [dvd] READ FAILED: 32768 bytes at 0x2B642960 -> 0x7F49CBC0
+
+Everything after — one extra read, one refusal, small differences in
+interrupt and MMIO counts — follows from the guest retrying it. So the
+question narrowed from "why do runs diverge" to "why does *this read*
+sometimes fail", which is a far better question.
+
+**The offset is valid.** Parsing `sys/fst.bin`: 1,641 files spanning
+`0x20BF24`–`0x499C0000`, and `0x2B642960` (694.3 MB) sits inside
+`stage.dat` at relative `0xBB2C000`, comfortably within its 198,715,392
+bytes. So this is not a read outside the FST; it is a read that should have
+worked.
+
+**And on that path I had introduced a data race today.** `read_job` runs on
+the **worker pool**, and it calls `mgs_disc_read_abs`, which calls the
+per-file `disc_tally` added in F189. That tally did an unguarded
+search-then-insert — `++s_tally_n` and a `strcpy` into a fixed table — from
+however many worker threads were reading at once. Every field of it raced,
+and two threads passing the bounds check together could step past the end of
+the table. The sampled trace's `static unsigned long seen` counter raced too,
+though that one predates today and is merely a miscount.
+
+Now locked. Reads are few — about four hundred in a boot — so a plain mutex
+costs nothing next to the file I/O it guards. The attributions still come out
+right (`rel_loader_LoadRel` for the overlay, `__AMPushBuffered` for the audio
+banks).
+
+**The requester is approximate under concurrency, and now says so.** It is
+written on the guest thread as a read is issued and read on a worker thread
+as that read runs, so with several in flight a line can name the wrong
+issuer. The guest issues reads one at a time and they usually complete before
+the next, which is why the checkable cases were right — but a single line is
+a strong hint, not proof.
+
+**`READ FAILED` now says why.** The message gave no reason, and "a race on a
+file handle", "a short read" and "an offset in no file" want completely
+different fixes. `mgs_disc_read_abs` now distinguishes a read that fell
+inside a file and could not be opened or sought from one that lies in no file
+at all — the latter being expected rather than a fault, since the boot
+header, bi2, the apploader and the FST live in `sys/` on an extracted disc.
+
+**Not yet established:** whether the race *caused* the failed read. It is the
+right thing to fix either way, and five repeat runs are in flight to see
+whether determinism returns. An out-of-bounds `strcpy` can corrupt anything,
+so it is a credible cause — but "credible" is not "shown", and today has
+already produced three corrections from exactly that gap.
+
 ---
 
 *Record further findings here as they are established — including the ones that

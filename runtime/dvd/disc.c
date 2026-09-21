@@ -1,5 +1,7 @@
 #include "disc.h"
 
+#include <pthread.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -26,7 +28,30 @@ static struct {
     uint32_t last_offset, max_end;
     uint32_t first_lr[3], last_lr[3];  /* the call chain in, first and last */
 } s_tally[DISC_TALLY_MAX];
-/* Set by the DVD shims from the guest call chain before each read. */
+/* THE TALLY IS TOUCHED FROM WORKER THREADS, SO IT NEEDS A LOCK.
+ *
+ * mgs_disc_read_abs runs inside read_job, which the DVD layer submits to the
+ * worker pool - so several threads can be inside the tally at once. The
+ * first version of it had no lock at all: an unguarded search-then-insert
+ * with `++s_tally_n` and a `strcpy`, which is a data race on every field and
+ * can step past the end of the table if two threads pass the bounds check
+ * together. That is a bug I introduced today while chasing a different one.
+ *
+ * Reads are few - a whole boot is about four hundred - so a plain mutex
+ * costs nothing worth measuring next to the file I/O it guards.
+ */
+static pthread_mutex_t s_tally_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Set by the DVD shims from the guest call chain before each read.
+ *
+ * APPROXIMATE UNDER CONCURRENCY, and deliberately so. It is written on the
+ * guest thread as a read is issued and read on a worker thread as that read
+ * runs, so with several reads in flight a tally line can name the wrong
+ * issuer. The guest issues reads one at a time and they usually complete
+ * before the next, which is why the attributions it produced are right where
+ * they could be checked - `rel_loader_LoadRel` for the overlay,
+ * `__AMPushBuffered` for the audio banks. Treat a single line as a strong
+ * hint, not proof. */
 static uint32_t s_requester[3];
 void mgs_disc_set_requester3(uint32_t lr0, uint32_t lr1, uint32_t lr2)
 {
@@ -38,12 +63,14 @@ static uint64_t s_tally_lost_reads, s_tally_lost_bytes;
 static void disc_tally(const char* path, uint32_t length, uint32_t offset)
 {
     unsigned i;
+    pthread_mutex_lock(&s_tally_lock);
     for (i = 0u; i < s_tally_n; ++i) {
         if (!strcmp(s_tally[i].path, path)) break;
     }
     if (i == s_tally_n) {
         if (s_tally_n >= DISC_TALLY_MAX || strlen(path) >= sizeof s_tally[0].path) {
             ++s_tally_lost_reads; s_tally_lost_bytes += length;
+            pthread_mutex_unlock(&s_tally_lock);
             return;
         }
         ++s_tally_n;
@@ -55,6 +82,7 @@ static void disc_tally(const char* path, uint32_t length, uint32_t offset)
     s_tally[i].bytes += length;
     s_tally[i].last_offset = offset;
     if (offset + length > s_tally[i].max_end) s_tally[i].max_end = offset + length;
+    pthread_mutex_unlock(&s_tally_lock);
 }
 
 void mgs_disc_report(FILE* out)
@@ -318,8 +346,12 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
          * named, then every twentieth, so a long session cannot flood the
          * log but a stall still leaves a trail. */
         {
+            /* Shared across worker threads like everything else here, so
+             * it is counted under the same lock rather than racily. */
             static unsigned long seen;
+            pthread_mutex_lock(&s_tally_lock);
             ++seen;
+            pthread_mutex_unlock(&s_tally_lock);
             if (getenv("MGS_TRACE_DVD") || seen <= 100ul || (seen % 20ul) == 0ul)
                 fprintf(stderr, "[disc] read %7u bytes  %s + 0x%X\n",
                         length, path, offset - e.offset_or_parent);
@@ -356,7 +388,24 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
             memset((uint8_t*)out + got, 0, length - (uint32_t)got);
             got = (long)length;
         }
+        if (got < 0)
+            fprintf(stderr, "[disc] read of %u bytes at 0x%X FAILED inside "
+                            "%s (+0x%X): the file could not be opened or "
+                            "sought\n",
+                    length, offset, path, offset - e.offset_or_parent);
         return got;
     }
+    /* SAY WHY, because "READ FAILED" alone cost a whole investigation.
+     *
+     * Two runs of identical arguments diverged, and the first difference in
+     * their logs was a failed read of 32,768 bytes at 0x2B642960 with no
+     * reason given - which could equally have been a race on a file handle,
+     * a short read, or this: an offset that lies in no file at all. They
+     * want completely different fixes. A read outside every file is refused
+     * deliberately (the boot header, bi2, the apploader and the FST live in
+     * sys/ on an extracted disc), so this is the expected answer for such an
+     * offset rather than a fault - but it has to SAY so. */
+    fprintf(stderr, "[disc] read of %u bytes at 0x%X REFUSED: that offset is "
+                    "inside no file in the FST\n", length, offset);
     return -1;
 }

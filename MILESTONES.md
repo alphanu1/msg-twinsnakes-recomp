@@ -533,6 +533,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The divergence is a failed disc read, and a race of mine** (F205).
+      Diffing two diverging logs shows one extra line - `READ FAILED: 32768
+      bytes at 0x2B642960` - with everything after following from the retry.
+      The offset is valid (inside `stage.dat`), and on that path the per-file
+      tally I added today raced: `read_job` runs on the worker pool and the
+      tally did an unguarded search-then-insert from several threads. Locked,
+      the requester documented as approximate, and `READ FAILED` now says
+      why. Whether the race caused the failure is not yet shown.
 - [ ] **The port is not reliably deterministic** (F204). `MGS_JOBS=<n>` now
       sizes the worker pool so concurrency can be isolated as a cause. Three 120M runs,
       same build and arguments: two byte-identical, the third differing by
