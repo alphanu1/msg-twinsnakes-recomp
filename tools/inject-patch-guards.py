@@ -73,7 +73,17 @@ def main():
                 if addr in want:
                     # Idempotent: re-running must not stack guards, because the
                     # build regenerates chunks and this runs on every build.
-                    nxt = lines[i + 1] if i + 1 < len(lines) else ''
+                    #
+                    # LOOK PAST THE COMMENT. The guard is written as two lines
+                    # - a comment naming the function, then the call - so
+                    # checking only the next line always saw the comment,
+                    # never the call, and re-injected every time. The chunks
+                    # carried 104 guard sites for 35 patched functions:
+                    # duplicates stacked by successive runs. Harmless at
+                    # runtime, since the second call only runs when the first
+                    # returned 0, but this file claims to be idempotent and
+                    # was not.
+                    nxt = '\n'.join(lines[i + 1:i + 3])
                     if 'dolrecomp_dispatch_replacement' in nxt:
                         already += 1
                     else:

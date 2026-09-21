@@ -7060,6 +7060,54 @@ sit one route short — they pass on callees and have no agreeing caller in the
 DOL, because they are called from the overlay. They are listed by the tool on
 every run so they are not lost, and not claimed.
 
+### F184 — the audio-init crash is not about audio: shims are load-bearing
+
+F176 and F179 recorded that removing the `__OSInitAudioSystem` stub crashes
+the boot, and read that as something about the DSP. **Both attributions are
+wrong.**
+
+**The control that should have been run first.** Five runs of the unmodified
+build at 8,000,000 steps: **5 of 5 exit 0**. So the segfault is caused by the
+change, not by the run-to-run instability of F162.
+
+**The change is not audio-specific.** Removing `OSReport` — an entry with
+nothing to do with audio, with the audio stub still in place — crashes
+identically. Any entry removed from `config/sdk-implemented.txt` does it.
+
+**And the generated table is innocent.** Regenerating it after removing one
+entry changes exactly three lines: the entry, `MGS_PATCH_COUNT`, and one
+prototype. The table stays correctly sorted, and `mgs_host_patch_dispatch`
+returns 0 cleanly for an address it does not hold, so a stale guard in the
+module falls through harmlessly.
+
+**What is actually happening: the shims stand in for guest code that cannot
+run here.** Remove one and the *translated* SDK function runs for the first
+time — code that has never executed in this port because it was shimmed from
+the start — and it reaches hardware we do not model. A guest retry loop
+against a device that never answers is not a visible spin in this runtime: a
+guest call costs a host stack frame, so it is **208,840 frames and a
+segfault** (F179's reusable lesson, arriving again).
+
+`OSReport` is the clearest case. On this hardware the debug console goes out
+over **EXI channel 0 device 2**, which we do not implement — our own trace
+shows those transfers as `DROPPED: chan 0 cs 4`. Translated `OSReport` talks
+to a device that is not there.
+
+**What this means for the movie.** Testing whether audio init can run still
+requires removing its stub, and that will still crash for the reason above
+until the DSP is modelled well enough to satisfy it. The blocker is real but
+it is not "the audio init hangs" — it is that a shim cannot be withdrawn
+before the hardware beneath it exists.
+
+**A tool bug found on the way.** `inject-patch-guards.py` claimed to be
+idempotent and was not: it writes a comment line and then the guard, but
+checked only the *next* line for an existing guard, so it saw the comment and
+re-injected every time. The chunks carried **104 guard sites for 35 patched
+functions** — duplicates stacked by successive runs. Harmless at runtime,
+since a second call only runs when the first returned 0, but the file said
+one thing and did another. Fixed; the check now looks at both lines and
+reports `0 injected, 36 already present`.
+
 ---
 
 *Record further findings here as they are established — including the ones that
