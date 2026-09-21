@@ -149,13 +149,58 @@ def main():
     avg = acc / len(rows)
 
     if '--check' in sys.argv:
-        sys.exit(check(rows, avg))
+        sys.exit(check(rows, avg) + check_origins())
 
     print(f"| {'Measure':<42} | {'':>15} | {'':>6} |")
     print(f"|{'-'*44}|{'-'*17}|{'-'*8}|")
     for name, a, b in rows:
         print(f"| {name:<42} | {a:>6} / {b:<6} | {100*a/b:>5.1f}% |")
     print(f"| **{'Average of the five':<40}** | {'':>15} | **{avg:.1f}%** |")
+
+
+def check_origins():
+    """Is every origin in the maps one the provenance ledger defines?
+
+    README.md claims each symbol was produced by our own analysis or by
+    public clean-room decompilation, and the origin column is that claim's
+    evidence PER SYMBOL rather than in the aggregate (project rule 15). An
+    origin that appears in a map but not in the ledger makes the claim
+    uncheckable for those symbols - quietly, because nothing else reads the
+    column.
+
+    It had already happened: five origins were in use - callees+callers,
+    sequence, sequence+opcode, closed-region, sdk2004-align - and none of
+    them was in the table.
+    """
+    # Scoped to the ledger SECTION, not the whole document: several other
+    # tables use the same `| `x` |` shape, and matching those would define
+    # 'mkdd' and '0x80038220' as origins and pass anything.
+    doc = open(P('docs/decompilation-process.md')).read()
+    section = doc.split('## Provenance ledger', 1)
+    section = section[1] if len(section) > 1 else ''
+    section = re.split(r'^## ', section, maxsplit=1, flags=re.M)[0]
+    defined = set(re.findall(r'^\| `([a-z0-9+\-]+)` \|', section, re.M))
+    if not defined:
+        print("  origins: no provenance ledger found in "
+              "docs/decompilation-process.md")
+        return 1
+    bad = []
+    for name in ('main.dol', 'mgso_pal.rel'):
+        path = 'config/symbols/%s.symbols.txt' % name
+        for line in open(P(path)).read().splitlines():
+            if line.lstrip().startswith('#') or not line.strip():
+                continue
+            f = line.split()
+            if len(f) >= 5 and f[1].startswith('0x') and f[-1] not in defined:
+                bad.append("  %s: origin %r is not in the provenance ledger "
+                           "(%s)" % (path, f[-1], f[3]))
+    if bad:
+        print("Origins not defined in docs/decompilation-process.md "
+              "(project rule 15):")
+        for b in sorted(set(bad))[:20]:
+            print(b)
+        print("\nDefine it in the ledger, or use an origin that is defined.")
+    return 1 if bad else 0
 
 
 def check(rows, avg):

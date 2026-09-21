@@ -41,6 +41,18 @@
 # Mixing the two without marking them would be dishonest about which is
 # evidence and which is a label, so the case distinction carries it.
 #
+# ORIGINS USED IN THIS FILE
+#
+#   own            read out of this binary's instruction stream by us
+#   message        fixed by a string the function itself stores or passes
+#   closed-region  a gap bounded by two confirmed neighbours, holding exactly
+#                  as many functions as the reference source has names for it,
+#                  in a fixed order. Counted, not chosen; a gap that does not
+#                  close exactly proposes nothing
+#   struct-abi     the argument shape and the byte offsets the function reads
+#                  from its parameters match a PUBLIC third-party struct
+#                  layout uniquely. No reference binary and no message
+#
 # No symbol here may originate from leaked source. See project rule 9.
 
 # --- CodeWarrior / libm ------------------------------------------------------
@@ -82,6 +94,49 @@
 # WHY THIS MATTERS BEYOND THE NAMES. huft_build holds 81.6% of the boot's
 # samples (HANDOFF F132). The thing the boot spends its life doing is
 # building Huffman tables, which is not where anyone was looking.
+#
+# THREE MORE, BY A CLOSED REGION AND BY A STRUCT LAYOUT.
+#
+# inftrees.c defines exactly four functions, in this order: huft_build,
+# inflate_trees_bits, inflate_trees_dynamic, inflate_trees_fixed. Two of them
+# are already fixed above by their error messages, and in the binary the four
+# slots are EXACTLY CONTIGUOUS - every gap is zero bytes:
+#
+#     0x0F0F2C +0x4A4  huft_build              (message)
+#     0x0F13D0 +0x0A0  ...one slot, one name   -> inflate_trees_bits
+#     0x0F1470 +0x17C  inflate_trees_dynamic   (message)
+#     0x0F15EC +0x038  ...one slot, one name   -> inflate_trees_fixed
+#     0x0F1624 +0x180  a different translation unit
+#
+# Two anchors, two gaps, two remaining functions in a fixed source order:
+# nothing is chosen here, it is counted. 0x38 for inflate_trees_fixed also
+# agrees with the build: without BUILDFIXED its whole body is four
+# assignments and a return.
+#
+# inflate_fast is identified differently, by the shape of its parameters.
+# zlib 1.1.x declares it
+#
+#     inflate_fast(uInt bl, uInt bd, inflate_huft *tl, inflate_huft *td,
+#                  inflate_blocks_state *s, z_streamp z)
+#
+# so r7 and r8 are struct pointers, and its first five lines read z->next_in,
+# z->avail_in, s->bitb, s->bitk, s->write and s->read, then compute
+# m = q < s->read ? s->read - q - 1 : s->end - q. The prologue at 0x0F02F0
+# does exactly that, in that order, and the offsets it uses are
+#
+#     r8 +0x00 +0x04                    next_in, avail_in   (z_stream)
+#     r7 +0x1C +0x20 +0x24              bitk, bitb, hufts
+#     r7 +0x28 +0x2C +0x30 +0x34        window, end, read, write
+#
+# which is inflate_blocks_state's published layout, field for field. Seven
+# offsets agreeing by chance is not a thing that happens. The body then holds
+# the LZ77 window copy, two byte loops with the window base reloaded between
+# them for the wrap - and it is the hottest function in the whole run, which
+# is what inflate_fast exists to be. This is a 1.1.x zlib, not 1.2.x, whose
+# inflate_fast takes two arguments and could not produce this prologue.
+.text 0x0F02F0 0x454 inflate_fast struct-abi
 .text 0x0F0F2C 0x4A4 huft_build message
+.text 0x0F13D0 0x0A0 inflate_trees_bits closed-region
 .text 0x0F1470 0x17C inflate_trees_dynamic message
+.text 0x0F15EC 0x038 inflate_trees_fixed closed-region
 .text 0x28D9E4 0x26C NewFallingFloor message

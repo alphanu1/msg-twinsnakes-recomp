@@ -1508,6 +1508,91 @@ offers nothing else to go on. Closed.
 **1,035 functions named**; SDK entry points the engine calls, **205 of 336
 (61.0%)**; phase 0 at **70.7%**.
 
+## Stage 5p — Name a third-party library by its struct offsets · **DONE**
+
+The engine overlay has no reference binary and no upstream source, so stages
+4, 5, 5j and 5l cannot touch it. But the engine **embeds public libraries**,
+and a library carries its own struct layouts — which appear in the
+instruction stream as displacement constants, whether or not a single string
+survives.
+
+`zlib` was already partly named from the error messages
+`inflate_trees_dynamic` stores into `z->msg` (stage 5g). Three more follow,
+by two routes that need no message at all.
+
+### The closed region, counted rather than chosen
+
+`inftrees.c` defines exactly four functions in a fixed order. Two are already
+fixed by their messages, and in the binary the four slots are **exactly
+contiguous** — every gap zero bytes:
+
+```sh
+awk '/^# \.text:0x/{split($0,a,"size: "); sz=a[2]}
+     /^\.fn fn_1_F[01]/{print $2, sz}' \
+    build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s
+```
+
+| offset | size | |
+|---|---|---|
+| `0x0F0F2C` | `0x4A4` | `huft_build` — message |
+| `0x0F13D0` | `0x0A0` | one slot → `inflate_trees_bits` |
+| `0x0F1470` | `0x17C` | `inflate_trees_dynamic` — message |
+| `0x0F15EC` | `0x038` | one slot → `inflate_trees_fixed` |
+| `0x0F1624` | `0x180` | a different translation unit |
+
+Two anchors, two gaps, two remaining names in a fixed source order. Nothing
+is preferred here; it is counted. `0x38` for `inflate_trees_fixed` agrees
+independently: without `BUILDFIXED` its whole body is four assignments and a
+return.
+
+### The struct fingerprint
+
+`inflate_fast` is identified by the **shape of its parameters**. zlib 1.1.x
+declares it with six, the fifth and sixth being struct pointers:
+
+```c
+inflate_fast(uInt bl, uInt bd, inflate_huft *tl, inflate_huft *td,
+             inflate_blocks_state *s, z_streamp z)
+```
+
+so `r7` and `r8` are those structs. The prologue at `0x0F02F0` reads, in
+order, `z->next_in`, `z->avail_in`, `s->bitb`, `s->bitk`, `s->write`,
+`s->read`, then computes `m = q < s->read ? s->read - q - 1 : s->end - q` —
+which is that function's first five lines. **Seven displacements agree with
+the published layout, field for field:**
+
+| register | offsets | fields |
+|---|---|---|
+| `r8` | `+0x00 +0x04` | `next_in`, `avail_in` (`z_stream`) |
+| `r7` | `+0x1C +0x20 +0x24` | `bitk`, `bitb`, `hufts` |
+| `r7` | `+0x28 +0x2C +0x30 +0x34` | `window`, `end`, `read`, `write` |
+
+Seven offsets agreeing by chance is not a thing that happens. The `z_stream`
+half is checkable against any installed zlib (`/usr/include/zlib.h`); the
+`inflate_blocks_state` half is `infutil.h`'s.
+
+**How it was checked, by a second route.** The body holds the LZ77 window
+copy — two byte loops with the window base reloaded between them for the
+wrap, which no other zlib function has. And the version is cross-checked by
+the signature itself: zlib **1.2.x**'s `inflate_fast` takes *two* arguments
+and could not produce this prologue, so this is a 1.1.x. Finally it is the
+hottest function in the entire run (11.1% + 7.3% + 5.7% across three
+addresses), which is what `inflate_fast` exists to be.
+
+**Result: three names**, REL `0x0F02F0`, `0x0F13D0`, `0x0F15EC`. Functions
+named 1,035 → **1,038**; symbols 1,241 → **1,244**.
+
+Two new origins are recorded in `mgso_pal.rel.symbols.txt` for these:
+`closed-region` (already used in `main.dol`) and `struct-abi`, which is new —
+the argument shape and parameter offsets matching a public third-party layout
+uniquely, with no reference binary and no message.
+
+**What this generalises to.** Every third-party library in the engine is
+reachable this way, because a struct layout is published and survives
+compilation as displacements. It does **not** reach Konami's own code, whose
+layouts are published nowhere — for that, stage 5e's file attribution remains
+the only route.
+
 ## Stage 6 — Recover the engine · **IN PROGRESS**
 
 **In:** `mgso_pal.rel`, 4.3 MB. **Out:** function boundaries, then names.
@@ -2591,6 +2676,14 @@ are exactly:
 | `message` | named from its own diagnostic message (stage 5g) |
 | `ghidra` | recovered by our own analysis |
 | `own` | named by our own reasoning about behaviour |
+| `callees+order` | its callee set narrows it to one source file's functions, and its position among them settles which — neither leg alone decides (`CARDCheckEx`) |
+| `callees+varargs` | its callee set narrows it, and the **prologue** settles it: a variadic function spills `f1`–`f4` to the stack where its `v`-prefixed twin does not, which is what distinguishes `fprintf` from `vfprintf` when both call the same formatter |
+| `callees+callers` | named by agreement between what it calls and what calls it, each checked separately (stage 5j) |
+| `sequence` | a run of unknowns aligned in order against a reference file, where exactly one assignment satisfies every constraint (stage 5l) |
+| `sequence+opcode` | a sequence alignment that a distinguishing opcode then settles between the surviving candidates (stage 5m) |
+| `closed-region` | a gap bounded by two confirmed neighbours holding exactly as many functions as the reference has names for it, in a fixed order — counted, not chosen; a gap that does not close exactly proposes nothing (stages 5n, 5p) |
+| `sdk2004-align` | ordered alignment against `doldecomp/dolsdk2004` rather than a game decomp |
+| `struct-abi` | the argument shape and the byte offsets the function reads from its parameters match a **public** third-party struct layout uniquely — no reference binary and no message (stage 5p) |
 | `own+sdk2004` | both legs, independently: the behaviour read out of **this** binary (a register index, a struct offset, a constant pool, a bit position), and the name **and signature** confirmed in `dolsdk2004`. Neither leg alone suffices — a declaration cannot distinguish `__CARDIsReadable` from `__CARDIsWritable`, and behaviour cannot supply the spelling (stage 5h) |
 
 **There is no origin for leaked source, and there will not be one.** If a symbol

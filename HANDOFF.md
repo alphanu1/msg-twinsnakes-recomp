@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,035 / 18,485 | 5.6% |
+| Functions named | 1,038 / 18,485 | 5.6% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7369,6 +7369,57 @@ investigations today read truncated reports without noticing they were
 truncated, because a report that stops has exactly the shape of a report that
 finished. Anything captured to a file and read later needs flushing at the
 point the writing stops, not at the point the process does.
+
+### F192 — three zlib names from a struct layout, and seven symbols whose provenance was uncheckable
+
+The guest PC profile taken for the movie work put **24% of the whole run** in
+three addresses inside one REL function at `0x0F02F0`. Following that gave
+three names by a route the engine has not been open to before.
+
+**Why the engine was closed to naming, and what opens it.** Konami's code has
+no reference binary and no upstream source, so stages 4, 5j and 5l cannot
+touch it. But the engine **embeds public libraries**, and a library carries
+its own struct layouts — which survive compilation as displacement constants
+whether or not a single string does.
+
+`inflate_fast` at `0x0F02F0`. zlib 1.1.x declares it with six parameters, the
+fifth and sixth being structs, so `r7` and `r8` are those. Its prologue reads
+`z->next_in`, `z->avail_in`, `s->bitb`, `s->bitk`, `s->write`, `s->read` and
+then computes `m = q < s->read ? s->read - q - 1 : s->end - q` — its literal
+first five lines. **Seven displacements agree with the published layout,
+field for field** (`r8` `+0x00 +0x04`; `r7` `+0x1C +0x20 +0x24 +0x28 +0x2C
++0x30 +0x34`). Checked by two further routes: the body holds the LZ77 window
+copy, two byte loops with the window base reloaded between them for the wrap,
+which no other zlib function has; and zlib **1.2.x**'s `inflate_fast` takes
+*two* arguments and could not produce this prologue, so the version is
+pinned at 1.1.x.
+
+`inflate_trees_bits` at `0x0F13D0` and `inflate_trees_fixed` at `0x0F15EC`,
+by a closed region. `inftrees.c` has exactly four functions in a fixed order,
+two already fixed by their error messages, and in the binary all four slots
+are **exactly contiguous — every gap zero bytes**. Two anchors, two gaps, two
+remaining names. Nothing is preferred; it is counted. `0x38` for
+`inflate_trees_fixed` agrees independently: without `BUILDFIXED` its body is
+four assignments and a return.
+
+Functions named 1,035 → **1,038**; symbols 1,241 → **1,244**. Recorded as
+stage 5p, with a new origin `struct-abi`.
+
+**And the part that was not about names at all.** Adding those symbols meant
+declaring their origin, which meant reading the provenance ledger — and the
+ledger was **missing five origins already in use**: `callees+callers`,
+`sequence`, `sequence+opcode`, `closed-region`, `sdk2004-align`. README.md
+claims every symbol's provenance is checkable *per symbol*, and for anything
+carrying one of those it silently was not.
+
+`tools/progress.py --check` now verifies it, and on its first run found
+**two more** nobody had noticed: `callees+order` (`CARDCheckEx`) and
+`callees+varargs` (`fprintf`). All seven are now defined. Confirmed to bite
+by renaming an origin to `guessed` and watching it fail.
+
+The general point is the same one F189 made about counting: **a claim nothing
+mechanically checks is a claim that drifts.** The origin column had been
+carefully filled in for 1,244 symbols and nothing had ever read it back.
 
 ---
 

@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,241 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,244 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **zlib named by its struct offsets** (F192). `inflate_fast`,
+      `inflate_trees_bits`, `inflate_trees_fixed` - the first from seven
+      parameter displacements matching zlib's published `inflate_blocks_state`
+      and `z_stream` field for field, the other two from a closed region with
+      zero-byte gaps. **1,035 to 1,038 functions named.** Stage 5p; new origin
+      `struct-abi`. The route generalises to every public library the engine
+      embeds, and to none of Konami's own code.
+- [x] **The provenance ledger is checked, not just written** (F192).
+      Seven origins were in use and undefined, making README's per-symbol
+      provenance claim uncheckable for those symbols. `tools/progress.py
+      --check` now verifies every origin against the ledger.
 - [x] **Batch runs exit again, with their whole report** (F191). `main` holds
       the last frame until the window is closed; under `SDL_VIDEODRIVER=dummy`
       there is no window, so it waited for ever with the report sitting
