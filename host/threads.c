@@ -42,6 +42,48 @@ static int in_guest_ram(uint32_t a)
     return a >= GUEST_VMEM_BASE && a < GUEST_VMEM_BASE + GUEST_VMEM_SIZE;
 }
 
+/* WHAT THE QUEUE IT IS BLOCKED ON ACTUALLY HOLDS.
+ *
+ * "blocked on queue 0x7F4A595C" says a thread is waiting and nothing about
+ * whether it is waiting reasonably. A queue with messages in it and a thread
+ * asleep on it is a scheduling fault; an EMPTY queue is a thread waiting for
+ * something that was never sent, which is a completely different bug - and
+ * the two are indistinguishable without reading the queue.
+ *
+ * The field a thread records is the thread-queue it is parked on, which is
+ * INSIDE the OSMessageQueue rather than the queue itself: `&mq->queueReceive`
+ * for a receiver, which is mq + 8, and `&mq->queueSend` for a sender blocked
+ * on a full queue, which is mq + 0. Both are tried and the one whose counts
+ * are self-consistent is reported; if neither is, nothing is claimed, because
+ * an OSThreadQueue is also used on its own by OSSleepThread and that is not
+ * a message queue at all.
+ *
+ *     OSMessageQueue: queueSend 0x00, queueReceive 0x08, msgArray 0x10,
+ *                     msgCount 0x14, firstIndex 0x18, usedCount 0x1C
+ */
+static int describe_queue(void* cpu, uint32_t queue, uint32_t off)
+{
+    uint32_t mq = queue - off;
+    uint32_t array, count, first, used;
+
+    if (!in_guest_ram(mq) || (mq & 3u)) return 0;
+    array = mgs_module_guest_read32(cpu, mq + 0x10u);
+    count = mgs_module_guest_read32(cpu, mq + 0x14u);
+    first = mgs_module_guest_read32(cpu, mq + 0x18u);
+    used  = mgs_module_guest_read32(cpu, mq + 0x1Cu);
+
+    /* A plausible message queue: a real buffer, a sane capacity, and an
+     * occupancy and read cursor that fit inside it. Garbage fails all four. */
+    if (!in_guest_ram(array) || (array & 3u)) return 0;
+    if (count == 0u || count > 4096u) return 0;
+    if (used > count || first >= count) return 0;
+
+    printf("        %s queue 0x%08X: %u of %u slots used%s\n",
+           off ? "receive on" : "send to", mq, used, count,
+           used ? "" : "  <- EMPTY: nothing was ever sent");
+    return 1;
+}
+
 static const char* state_name(unsigned s)
 {
     switch (s) {
@@ -106,8 +148,14 @@ void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t))
                state_name(state), prio,
                susp ? " SUSPENDED" : "",
                srr0, where ? "  " : "", where ? where : "");
-        if (state == 4u)
+        if (state == 4u) {
             printf("        blocked on queue 0x%08X\n", queue);
+            /* Receiver first: it is much the commoner case, and trying the
+             * sender offset first would decode a receiver's queue against
+             * the wrong fields. */
+            if (!describe_queue(cpu, queue, 8u))
+                (void)describe_queue(cpu, queue, 0u);
+        }
 
         {
             uint32_t frame = mgs_module_guest_read32(cpu, thread + TH_CONTEXT_GPR1);

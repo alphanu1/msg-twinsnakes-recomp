@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,038 / 18,485 | 5.6% |
+| Functions named | 1,041 / 18,485 | 5.6% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7475,6 +7475,56 @@ it?**
 then `PSMTXMultVec`, `PSVECAdd`, `PSMTX44Concat`, `OSDisableInterrupts` /
 `OSRestoreInterrupts`. Decompression and matrix maths — a game loading and
 drawing, which is what the rest of this finding says it is doing.
+
+### F194 — every blocked queue is empty, and three names fell out of asking why
+
+F193 ended on "what posts to `0x7F4A595C`". The thread dump said only
+*"blocked on queue 0x7F4A595C"*, which cannot distinguish the two cases that
+matter: a queue **with** messages and a thread asleep on it is a scheduling
+fault; an **empty** queue is a thread waiting for something never sent. Same
+line, opposite bugs.
+
+The queue is now decoded. A thread records the *thread-queue it is parked on*,
+which sits inside the `OSMessageQueue` — `&mq->queueReceive` at `mq+8` for a
+receiver, `&mq->queueSend` at `mq+0` for a sender blocked on a full one. Both
+offsets are tried and only a self-consistent decode is reported, because an
+`OSThreadQueue` is also used bare by `OSSleepThread` and that is not a message
+queue at all.
+
+**Every blocked thread is on an empty queue:**
+
+    0x7F4A5630  receive on queue 0x7F4A5954:  0 of 1 slots used
+    0x80217D58  receive on queue 0x80213364:  0 of 72 slots used
+    0x802134E8  receive on queue 0x802133A4:  0 of 72 slots used
+    0x80215920  receive on queue 0x80213384:  0 of 72 slots used
+    0x8027B640  receive on queue 0x8027B4D8:  0 of 72 slots used
+
+Capacities of 1 and 72 rather than garbage is the decode checking itself.
+
+**And the overlay thread is not the bug.** Following its chain named its own
+body. `gcn_worker_loop` (REL `0x804`) is the **outermost frame** on that
+thread's stack, so it is the thread body; it marks itself idle, blocks in
+`gcn_worker_take_request` (`0x264`) — a genuine `OSReceiveMessage` with the
+blocking flag — marks itself busy through `gcn_worker_set_status` (`0x2B0`),
+and dispatches on the state the message carried. **A worker idling on an
+empty mailbox is healthy.** It is waiting correctly for work nobody sends.
+
+Their shared object's fields fall out with them: `+0x8020` status, `+0x8024`
+the request, `+0x8068` the request as latched, `+0x8D94` the queue. Functions
+named 1,038 → **1,041**.
+
+**A hazard recorded in passing:** state 3 of `gcn_worker_loop` branches back
+with the state unchanged — an infinite loop that never yields and never
+sleeps. Nothing has been seen to reach it. It is written down because a
+thread that did would look exactly like a hang and would have no stack to
+explain itself.
+
+**So the search moves up.** Every consumer is parked and correct; no producer
+runs. The main thread is alive and drawing (`GXSetVtxDesc`, called from REL
+`0x7F11C45C`) and the game reports nothing — the log carries the SDK's
+version banners and **no panic, assert or error at all**, so `mpegGCN.c`'s
+asserts at lines 905 and 910 never fired. Nothing has failed; something is
+simply never asked for.
 
 ---
 

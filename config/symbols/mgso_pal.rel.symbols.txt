@@ -65,6 +65,29 @@
 .text 0x0F394C 0xD4 gcn_task_run_all own
 .text 0x0F3A20 0x38 gcn_task_link own
 
+# --- a service thread and its mailbox ---------------------------------------
+# Found by dumping the blocked guest threads: `gcn_worker_loop` is the
+# OUTERMOST frame on a thread's stack, so it is that thread's body, and
+# nothing above it exists to be named. The three share one object, whose
+# fields they fix between them:
+#
+#     obj +0x8020  status, written by the worker (0 idle, 0x40000 busy)
+#     obj +0x8024  the request, written by whoever asks
+#     obj +0x8068  the request latched by the worker as it takes it
+#     obj +0x8D94  the OSMessageQueue it waits on - one slot, a handoff
+#
+# `gcn_worker_loop` is a state machine: state 0 marks itself idle, blocks for
+# a request, marks itself busy and takes the next state from the message;
+# state 1 does the work; states 2 and >=4 reset to 0.
+#
+# STATE 3 BRANCHES BACK WITH THE STATE UNCHANGED - an infinite loop that
+# never yields and never sleeps. Nothing has been seen to reach it, and it is
+# recorded because a thread that reached it would be indistinguishable from a
+# hang and would have no stack to explain itself.
+.text 0x000264 0x4C gcn_worker_take_request own
+.text 0x0002B0 0x08 gcn_worker_set_status own
+.text 0x000804 0x84 gcn_worker_loop own
+
 # --- sphere-map geometry (gcn_dgd.c / gcn_spheremap.c) -----------------------
 # 32 strips of 66 vertices, position and normal per vertex, built from a
 # GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT2, 66) and two three-float writes to the

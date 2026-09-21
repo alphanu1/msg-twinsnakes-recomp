@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,244 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,247 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **Blocked queues are decoded, and all are empty** (F194). "Blocked on
+      queue 0x..." cannot tell a scheduling fault from a thread waiting for
+      something never sent; the dump now decodes the `OSMessageQueue` behind
+      the thread-queue and reports occupancy. All five blocked threads sit on
+      empty queues. The overlay thread is a healthy worker idling on its
+      mailbox - which named `gcn_worker_loop`, `gcn_worker_take_request` and
+      `gcn_worker_set_status`, **1,038 to 1,041**. No producer runs, and the
+      game reports no error at all.
 - [x] **The movie fault is measured, not inferred** (F193). `movie.dat` is
       94,935,040 bytes; the game reads 262,144 - eight 32 KB reads reaching
       exactly `0x40000` - and stops. **0.28% of the file**, and a round
