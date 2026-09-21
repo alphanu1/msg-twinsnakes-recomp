@@ -28,7 +28,7 @@ import time
 MEM1 = 0x80000000
 
 
-def emulator_pid():
+def emulator_pid(exclude=frozenset()):
     """The emulator itself, not the flatpak and bwrap wrappers around it.
 
     Found by reading /proc rather than with pgrep, for two reasons that both
@@ -45,7 +45,8 @@ def emulator_pid():
             continue
         try:
             with open('/proc/%s/comm' % entry) as fh:
-                if fh.read().strip() == 'dolphin-emu-nog':
+                if (fh.read().strip() == 'dolphin-emu-nog'
+                        and int(entry) not in exclude):
                     return int(entry)
         except OSError:
             continue
@@ -72,19 +73,45 @@ def main():
         print("usage: dolphin-watch.py <disc.iso> [guest address ...]")
         return 2
     iso = sys.argv[1]
-    watch = [int(a, 0) for a in sys.argv[2:]] or [0x8021A078]
+    # An argument may be a single address, or `addr:length` for a RANGE.
+    #
+    # A range is what answers "which field moves when this works", which is
+    # the question a single address cannot: sixteen links were derived by
+    # guessing which field to look at next, and each guess cost a run. A
+    # struct diff shows them all at once.
+    watch, ranges = [], []
+    for arg in sys.argv[2:]:
+        if ':' in arg:
+            base, _, length = arg.partition(':')
+            ranges.append((int(base, 0), int(length, 0)))
+        else:
+            watch.append(int(arg, 0))
+    if not watch and not ranges:
+        watch = [0x8021A078]
     seconds = float(os.environ.get('DOLPHIN_WATCH_SECONDS', '240'))
+
+    # Whatever is already running is not ours. Attaching to a leftover
+    # emulator from an earlier launch reads a process that is about to die,
+    # which presents as "emulator went away" after a mapping is found - and
+    # cost a ninety-second run to notice.
+    already = set()
+    while True:
+        pid = emulator_pid(already)
+        if pid is None:
+            break
+        already.add(pid)
 
     proc = subprocess.Popen(
         ['flatpak', 'run', '--command=/app/bin/dolphin-emu-nogui',
          '--filesystem=home', 'org.DolphinEmu.dolphin-emu',
          '-p', 'headless', '-v', 'Null', '-e', iso],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=open(os.environ.get('DOLPHIN_LOG', '/dev/null'), 'wb'),
+        stderr=subprocess.STDOUT)
 
     pid = base = None
     for _ in range(90):
         time.sleep(1)
-        pid = pid or emulator_pid()
+        pid = pid or emulator_pid(already)
         if pid:
             base = ram_base(pid)
             if base:
@@ -102,7 +129,7 @@ def main():
         print('emulator pid %d, RAM at 0x%X, game id %r'
               % (pid, base, read(MEM1, 6)))
         sys.stdout.flush()
-        last = {}
+        last, prev = {}, {}
         start = time.time()
         while time.time() - start < seconds:
             try:
@@ -112,6 +139,20 @@ def main():
                         print('%7.1fs  0x%08X = 0x%08X'
                               % (time.time() - start, addr, value))
                         last[addr] = value
+                for base, length in ranges:
+                    now = read(base, length)
+                    was = prev.get(base)
+                    prev[base] = now
+                    if was is None or was == now:
+                        continue
+                    # Report by 4-byte word, which is how these structures are
+                    # laid out and how every offset found so far is quoted.
+                    for off in range(0, length & ~3, 4):
+                        o, n = was[off:off + 4], now[off:off + 4]
+                        if o != n:
+                            print('%7.1fs  0x%08X +0x%03X  %s -> %s'
+                                  % (time.time() - start, base, off,
+                                     o.hex(), n.hex()))
                 sys.stdout.flush()
             except OSError:
                 print('emulator went away')
