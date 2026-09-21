@@ -533,6 +533,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **A per-step guest watch, and a duplicate removed** (F197). The engine
+      task dump already existed in `host/heaps.c`; I wrote a second one and
+      both printed before I noticed. Removed, with the new part
+      (`MGS_TASK_DUMP`, dumping a task's own node) folded into the real one.
+      The mask turns out to have **exactly one `stw` in the whole overlay** -
+      the initialiser, writing zero - so `MGS_WATCH=<address>` now names the
+      writer of any guest word, checked every step.
 - [x] **The movie deadlock, traced end to end** (F196). The decoder task sits
       in state 1, which advances only on event code 1; the event poll
       `fn_1_F52A8` returns **zero events whenever the global task mask is

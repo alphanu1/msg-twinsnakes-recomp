@@ -642,6 +642,9 @@ static int service_vector(void* cpu, uint32_t pc,
  * the only thing a handler may portably touch. */
 volatile sig_atomic_t mgs_module_interrupted;
 
+/* MGS_WATCH: a guest word to report every change of, with the writer. */
+static uint32_t s_watch_addr, s_watch_last;
+
 /* The last pc the run loop saw, for a process that has to be killed.
  *
  * A wedge inside a single dispatch call cannot be reported by any of the
@@ -990,6 +993,11 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     unsigned recent_n = 0u;
 
     memset(&r, 0, sizeof r);
+    {
+        const char* env = getenv("MGS_WATCH");
+        s_watch_addr = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
+        s_watch_last = s_watch_addr ? gread32(cpu, s_watch_addr) : 0u;
+    }
     for (r.steps = 0; r.steps < max_steps && !mgs_module_interrupted; ++r.steps) {
         uint32_t pc;
 
@@ -1086,6 +1094,31 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * guest ticks, and one that waits is one the stream waits on. */
         if ((r.steps % 89ull) == 0ull)
             mgs_interrupt_aid(mod, cpu);
+
+        /* MGS_WATCH=<guest address>: who writes that word?
+         *
+         * A polled watch says a value changed and never says by whom, which
+         * is the whole question for the engine's task mask: it is read in a
+         * hundred places, written through a label in exactly ONE - the
+         * initialiser, which writes zero - and yet it observably takes three
+         * different non-zero values during a run. Something writes it
+         * through a computed pointer, and forty candidate stores share the
+         * 0x330 displacement it would use.
+         *
+         * Checked EVERY step, which is what makes the answer exact rather
+         * than "somewhere in the last five hundred". Only when asked for:
+         * the cost is a guest read per step and this is a diagnostic run,
+         * not a normal one. */
+        if (s_watch_addr) {
+            uint32_t now = gread32(cpu, s_watch_addr);
+            if (now != s_watch_last) {
+                fprintf(stderr, "[watch] 0x%08X: 0x%08X -> 0x%08X  "
+                                "at pc 0x%08X lr 0x%08X\n",
+                        s_watch_addr, s_watch_last, now,
+                        mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
+                s_watch_last = now;
+            }
+        }
 
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is

@@ -76,97 +76,6 @@ static void task_mask_watch(void* cpu)
     fflush(stdout);
 }
 
-/* EVERY TASK THE ENGINE WOULD RUN, AND WHY EACH IS OR IS NOT RUN.
- *
- * The mask above says whether a LEVEL is gated. It does not say what is in
- * the level, and that turned out to be the question: the mask reads zero -
- * nothing gated, everything eligible - for the whole of the stretch where
- * the picture is frozen (F193). A task that is eligible and still does not
- * run is either absent from the list or refused by its own flags, and
- * neither is visible from the mask.
- *
- * The dispatcher at REL 0xF394C gives the layout exactly. Twelve levels of
- * stride 0x44 from bss+0x23708, each with a list head at +0x00 and its gate
- * bits at +0x40; each node carries `next` at +0x00, its function at +0x04
- * and flags at +0x08, and the dispatcher skips a node whose flags have any
- * of bits 16..19 set, or whose function is null.
- *
- * Addresses are printed raw, like every other dump here - the host has no
- * symbol table and tools/resolve-addrs.py maps them afterwards, which also
- * means an old dump re-resolves as naming improves.
- */
-/* MGS_TASK_DUMP=<guest address of a task function>: dump that task's node. */
-static uint32_t s_task_dump_fn;
-
-static void dump_engine_tasks(void* cpu)
-{
-    uint32_t mask;
-    unsigned level;
-
-    if (!s_engine_bss) { printf("engine tasks: the overlay never linked\n"); return; }
-    {
-        const char* env = getenv("MGS_TASK_DUMP");
-        s_task_dump_fn = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
-    }
-    mask = mgs_module_guest_read32(cpu, s_engine_bss + 0x23A38u);
-    printf("engine tasks (global mask 0x%08X):\n", mask);
-
-    for (level = 0u; level < 12u; ++level) {
-        uint32_t base  = s_engine_bss + 0x23708u + level * 0x44u;
-        uint32_t gate  = mgs_module_guest_read32(cpu, base + 0x40u);
-        uint32_t node  = mgs_module_guest_read32(cpu, base);
-        unsigned n     = 0u;
-        int gated      = (gate & mask) != 0;
-
-        if (!node && !gate) continue;      /* an empty level says nothing */
-        printf("  level %2u  gate 0x%08X%s\n", level, gate,
-               gated ? "  GATED OFF" : "");
-        /* Bounded: this runs on a guest that may be in any state, and a
-         * diagnostic that follows a corrupt link for ever is worse than
-         * none. */
-        for (; node && n < 64u; ++n) {
-            uint32_t next, func, flags;
-            if (node < 0x80000000u &&
-                !(node >= GUEST_VMEM_BASE &&
-                  node < GUEST_VMEM_BASE + GUEST_VMEM_SIZE)) {
-                printf("      (link 0x%08X is not a task; list ends)\n", node);
-                break;
-            }
-            next  = mgs_module_guest_read32(cpu, node);
-            func  = mgs_module_guest_read32(cpu, node + 4u);
-            flags = mgs_module_guest_read32(cpu, node + 8u);
-            printf("      task 0x%08X  fn 0x%08X  flags 0x%08X%s%s\n",
-                   node, func, flags,
-                   func ? "" : "  NO FUNCTION",
-                   (flags & 0x000F0000u) ? "  SKIPPED BY FLAGS" : "");
-            /* THE NODE IS THE TASK'S OWN OBJECT.
-             *
-             * The dispatcher reaches `bctrl` with r3 still holding the node,
-             * so a task function is called with its own list entry as its
-             * argument - which means the node carries that task's state, and
-             * dumping it says WHY a task that does run does nothing. The
-             * movie task is a state machine on +0x44 and returns immediately
-             * for states it does not handle.
-             *
-             * Selected by function address rather than dumped for every
-             * task, because these fields mean different things to different
-             * tasks and a column of them would invite reading one task's
-             * layout onto another. */
-            if (s_task_dump_fn && func == s_task_dump_fn) {
-                unsigned w;
-                for (w = 0u; w < 0x60u; w += 0x10u) {
-                    printf("        +0x%02X %08X %08X %08X %08X\n", w,
-                           mgs_module_guest_read32(cpu, node + w),
-                           mgs_module_guest_read32(cpu, node + w + 4u),
-                           mgs_module_guest_read32(cpu, node + w + 8u),
-                           mgs_module_guest_read32(cpu, node + w + 12u));
-                }
-            }
-            node = next;
-        }
-    }
-}
-
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     task_mask_watch(cpu);
@@ -2144,7 +2053,6 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
-                        dump_engine_tasks(cpu);
                         mgs_disc_report(stdout);
                         printf("audio DMA: %llu transfers, %llu blocks "
                                "(%.2fs of sound), %s; interrupts %llu "

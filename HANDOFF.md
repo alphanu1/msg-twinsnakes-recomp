@@ -7645,6 +7645,43 @@ finding as the whole answer would repeat exactly the mistake F195 corrected.
 
 **Next:** what writes `0x8` into `bss_23A38`, and what happens at frame 960.
 
+### F197 — the task dump already existed, and the mask has exactly one writer in the binary
+
+**I rewrote a tool this project already had.** Chasing F196 I wrote an engine
+task-table dump in `main.c` — twelve levels, stride `0x44`, head at `+0x00`,
+gate at `+0x40`, node fields `next`/`func`/`flags`, skip on flag bits 16–19.
+`host/heaps.c` has held `mgs_dump_tasks` with every one of those constants,
+derived the same way from the same dispatcher, for some time. It was already
+being called; both dumps printed, one above the other, before I noticed.
+
+The duplicate is removed and what was genuinely new — dumping a selected
+task's own node — moved into the existing function as `MGS_TASK_DUMP`. Ninety
+lines deleted. The lesson is cheap to state and was evidently not cheap to
+learn: **search `host/` for the instrument before writing it.** This is the
+second thing today that existed and was not looked for, after the `--help`
+text that already documented the module search.
+
+**The mask has one writer, and it writes zero.** `bss_23A38` is referenced 212
+times in the overlay's text: 106 `lis`, 98 `lwz`, 5 `addi` that take its
+address, 2 `lwzu`, and **exactly one `stw`** — in `fn_1_F38CC`, the table
+initialiser, which lays out the twelve level entries (taking each level's
+gate from a halfword table at `data_D5E0`) and ends by storing **zero**. All
+five `addi` sites only read through the address afterwards.
+
+So nothing in the binary writes a non-zero value to that word through its
+label, and yet it observably takes `0x2450`, `0x1` and `0x8` during a run.
+It must be written through a computed pointer — and the addressing is
+visible: the table is 12 × `0x44` = `0x330` bytes, so the mask sits exactly
+`0x330` past the table base, and the binary contains a read at
+`0x330(r26)` that confirms it. There are 40 stores sharing that
+displacement, far too many to read.
+
+So `MGS_WATCH=<guest address>` now reports every change of a guest word with
+the pc and link register of the step that changed it — checked **every**
+step, which is what makes the answer exact instead of "somewhere in the last
+512". The mask lives at `0x7F4BD5D8`, which the task dump now prints for
+exactly this purpose.
+
 ---
 
 *Record further findings here as they are established — including the ones that

@@ -20,6 +20,7 @@
 #include "module.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 /* From the engine's disassembly; see the comment above. */
 #define HEAP_TABLE_OFF   0x24AD8u
@@ -212,11 +213,18 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module)
 void mgs_dump_tasks(void* cpu, uint32_t rel_bss);
 void mgs_dump_tasks(void* cpu, uint32_t rel_bss)
 {
+    const char* dump_env = getenv("MGS_TASK_DUMP");
+    uint32_t dump_fn = dump_env ? (uint32_t)strtoul(dump_env, NULL, 0) : 0u;
     uint32_t table = rel_bss + TASK_TABLE_OFF;
     uint32_t mask  = mgs_module_guest_read32(cpu, rel_bss + TASK_MASK_OFF);
     unsigned lvl, total = 0u, gated = 0u, skipped = 0u;
 
-    printf("engine tasks (table 0x%08X, global mask 0x%08X):\n", table, mask);
+    /* The mask's ADDRESS as well as its value: it is read in a hundred
+     * places and written through its label in exactly one - the initialiser,
+     * which writes zero - yet it takes three different non-zero values in a
+     * run. Finding the writer means watching the address, so print it. */
+    printf("engine tasks (table 0x%08X, global mask 0x%08X at 0x%08X):\n",
+           table, mask, rel_bss + TASK_MASK_OFF);
 
     for (lvl = 0u; lvl < TASK_LEVELS; ++lvl) {
         uint32_t head = table + lvl * TASK_LEVEL_SIZE;
@@ -245,6 +253,29 @@ void mgs_dump_tasks(void* cpu, uint32_t rel_bss)
                    node, func, flags,
                    off ? "  [flag-skipped]" : "",
                    func ? "" : "  [no function]");
+            /* MGS_TASK_DUMP=<function address>: also dump that task's node.
+             *
+             * THE NODE IS THE TASK'S OWN OBJECT. The dispatcher reaches
+             * `bctrl` with r3 still holding the node, so a task is called
+             * with its own list entry as its argument - which means the node
+             * carries that task's state, and dumping it says why a task that
+             * does run does nothing. The movie task is a state machine on
+             * +0x44 and returns at once for states it does not handle; that
+             * word reading 1 is how its stall was found (F196).
+             *
+             * Selected by function rather than dumped for every node,
+             * because these fields mean different things to different tasks
+             * and a column of them invites reading one task's layout onto
+             * another. */
+            if (dump_fn && func == dump_fn) {
+                unsigned w;
+                for (w = 0u; w < 0x60u; w += 0x10u)
+                    printf("        +0x%02X %08X %08X %08X %08X\n", w,
+                           mgs_module_guest_read32(cpu, node + w),
+                           mgs_module_guest_read32(cpu, node + w + 4u),
+                           mgs_module_guest_read32(cpu, node + w + 8u),
+                           mgs_module_guest_read32(cpu, node + w + 12u));
+            }
             if (off || !func) ++skipped;
             ++total;
             node = next;
