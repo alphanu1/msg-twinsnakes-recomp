@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,247 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,249 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The read path is proved innocent, and an over-claim corrected**
+      (F195). Reads now record three frames of guest call chain; the movie's
+      ended in our own host->guest sentinel, naming `gcn_stream_read_done`
+      (the DVD callback) and `gcn_stream_issue_read`, **1,041 to 1,043**.
+      406 reads, 406 callbacks, 0 refused: the movie was handed its data and
+      told so. And the engine task table shows the `mpegGCN.c` task
+      **registered, ungated and not skipped** - so "the decoder never runs",
+      asserted twice, was read off a top-30 profile of 2,765 addresses whose
+      last row was 0.5%. Depth is now `MGS_PROFILE_TOP`.
 - [x] **Blocked queues are decoded, and all are empty** (F194). "Blocked on
       queue 0x..." cannot tell a scheduling fault from a thread waiting for
       something never sent; the dump now decodes the `OSMessageQueue` behind

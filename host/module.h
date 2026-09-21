@@ -113,6 +113,7 @@ uint32_t mgs_module_msr(const void* cpu);
 uint32_t mgs_module_guest_read32(void* cpu, uint32_t addr);
 void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t));
 uint32_t* mgs_module_msr_ptr(void* cpu);
+uint32_t* mgs_module_lr_ptr(void* cpu);
 uint32_t mgs_module_current_context(void* cpu);
 int      mgs_module_take_exception(void* cpu, uint32_t handler, uint32_t number);
 int   mgs_module_load(MgsModule* mod, const char* path);

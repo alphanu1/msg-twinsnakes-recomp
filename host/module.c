@@ -489,6 +489,18 @@ uint32_t* mgs_module_msr_ptr(void* cpu)
     return (uint32_t*)((uint8_t*)cpu + CPU_MSR);
 }
 
+/* The link register, for shims that want to know WHO called them.
+ *
+ * A shim reads its arguments from the register file and that says what was
+ * asked for; the link register says who asked. For a DVD read that is the
+ * difference between "the movie was read eight times" and "the movie was
+ * read eight times by this function", which is the whole question when
+ * reads stop and nothing says why. */
+uint32_t* mgs_module_lr_ptr(void* cpu)
+{
+    return (uint32_t*)((uint8_t*)cpu + CPU_LR_OFFSET);
+}
+
 uint32_t mgs_module_guest_read32(void* cpu, uint32_t addr)
 {
     return gread32(cpu, addr);

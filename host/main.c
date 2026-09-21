@@ -76,6 +76,67 @@ static void task_mask_watch(void* cpu)
     fflush(stdout);
 }
 
+/* EVERY TASK THE ENGINE WOULD RUN, AND WHY EACH IS OR IS NOT RUN.
+ *
+ * The mask above says whether a LEVEL is gated. It does not say what is in
+ * the level, and that turned out to be the question: the mask reads zero -
+ * nothing gated, everything eligible - for the whole of the stretch where
+ * the picture is frozen (F193). A task that is eligible and still does not
+ * run is either absent from the list or refused by its own flags, and
+ * neither is visible from the mask.
+ *
+ * The dispatcher at REL 0xF394C gives the layout exactly. Twelve levels of
+ * stride 0x44 from bss+0x23708, each with a list head at +0x00 and its gate
+ * bits at +0x40; each node carries `next` at +0x00, its function at +0x04
+ * and flags at +0x08, and the dispatcher skips a node whose flags have any
+ * of bits 16..19 set, or whose function is null.
+ *
+ * Addresses are printed raw, like every other dump here - the host has no
+ * symbol table and tools/resolve-addrs.py maps them afterwards, which also
+ * means an old dump re-resolves as naming improves.
+ */
+static void dump_engine_tasks(void* cpu)
+{
+    uint32_t mask;
+    unsigned level;
+
+    if (!s_engine_bss) { printf("engine tasks: the overlay never linked\n"); return; }
+    mask = mgs_module_guest_read32(cpu, s_engine_bss + 0x23A38u);
+    printf("engine tasks (global mask 0x%08X):\n", mask);
+
+    for (level = 0u; level < 12u; ++level) {
+        uint32_t base  = s_engine_bss + 0x23708u + level * 0x44u;
+        uint32_t gate  = mgs_module_guest_read32(cpu, base + 0x40u);
+        uint32_t node  = mgs_module_guest_read32(cpu, base);
+        unsigned n     = 0u;
+        int gated      = (gate & mask) != 0;
+
+        if (!node && !gate) continue;      /* an empty level says nothing */
+        printf("  level %2u  gate 0x%08X%s\n", level, gate,
+               gated ? "  GATED OFF" : "");
+        /* Bounded: this runs on a guest that may be in any state, and a
+         * diagnostic that follows a corrupt link for ever is worse than
+         * none. */
+        for (; node && n < 64u; ++n) {
+            uint32_t next, func, flags;
+            if (node < 0x80000000u &&
+                !(node >= GUEST_VMEM_BASE &&
+                  node < GUEST_VMEM_BASE + GUEST_VMEM_SIZE)) {
+                printf("      (link 0x%08X is not a task; list ends)\n", node);
+                break;
+            }
+            next  = mgs_module_guest_read32(cpu, node);
+            func  = mgs_module_guest_read32(cpu, node + 4u);
+            flags = mgs_module_guest_read32(cpu, node + 8u);
+            printf("      task 0x%08X  fn 0x%08X  flags 0x%08X%s%s\n",
+                   node, func, flags,
+                   func ? "" : "  NO FUNCTION",
+                   (flags & 0x000F0000u) ? "  SKIPPED BY FLAGS" : "");
+            node = next;
+        }
+    }
+}
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     task_mask_watch(cpu);
@@ -1348,6 +1409,7 @@ int main(int argc, char** argv)
                      * shim reads exactly what the translated code passed. */
                     mgs_cpu_bind_registers(mgs_module_gpr(cpu));
                     mgs_cpu_bind_msr(mgs_module_msr_ptr(cpu));
+                    mgs_cpu_bind_lr(mgs_module_lr_ptr(cpu));
                     mgs_host_install_spr_handler(cpu);
                     mgs_host_set_vmem(rt.mem.vmem);
                     mgs_module_set_vmem(rt.mem.vmem);
@@ -2010,7 +2072,24 @@ int main(int argc, char** argv)
                         /* Where the guest actually spent its time. Printed
                          * last because it is the longest, and only when
                          * asked for. */
-                        mgs_module_profile_dump(stdout, 30u);
+                        {
+                            /* HOW DEEP, because 30 was not deep enough and
+                             * the shortfall was read as a fact.
+                             *
+                             * "mpegGCN.c never appears in the profile" was
+                             * concluded from this dump and used to argue the
+                             * movie decoder never runs. The dump showed the
+                             * top 30 of 2,765 distinct addresses and its last
+                             * row was already down to 0.5% - so anything
+                             * quieter than that was invisible, not absent.
+                             * The engine's task table then showed the decoder
+                             * REGISTERED, ungated and not skipped, which is
+                             * what caught it. */
+                            const char* env = getenv("MGS_PROFILE_TOP");
+                            unsigned top = env ? (unsigned)strtoul(env, NULL, 0) : 30u;
+                            if (top > 4096u) top = 4096u;
+                            mgs_module_profile_dump(stdout, top ? top : 30u);
+                        }
                         {
                             /* MGS_DUMP_ADDR=0x... prints guest words at exit.
                              *
@@ -2035,6 +2114,7 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
+                        dump_engine_tasks(cpu);
                         mgs_disc_report(stdout);
                         printf("audio DMA: %llu transfers, %llu blocks "
                                "(%.2fs of sound), %s; interrupts %llu "

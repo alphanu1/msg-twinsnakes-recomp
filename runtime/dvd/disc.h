@@ -57,4 +57,9 @@ long mgs_disc_file_size(MgsDisc* disc, const char* path);
  * each the game got. Answers "where did it stop" without a re-run. */
 void mgs_disc_report(FILE* out);
 
+/* Who asked for the next read. Set by the DVD shims from the guest link
+ * register just before the read happens, so the tally can say which code
+ * reads each file - the question that matters when reads stop. */
+void mgs_disc_set_requester3(uint32_t lr0, uint32_t lr1, uint32_t lr2);
+
 #endif

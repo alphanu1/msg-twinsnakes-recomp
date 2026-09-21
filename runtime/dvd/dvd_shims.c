@@ -84,6 +84,41 @@ void mgs_DVDFastOpen(CPUState* ctx)
     mgs_set_guest_gpr(s_rt, 3, 1u);            /* TRUE */
 }
 
+/* WHO ASKED FOR THIS READ, THREE FRAMES DEEP.
+ *
+ * The link register alone names the SDK, not the game: a read by path
+ * arrives here from `DVDReadPrio`, which every caller in the binary goes
+ * through, so it identifies nothing. The frame above it is the one worth
+ * having.
+ *
+ * A patched shim is native and pushes no guest frame, so `r1` still points
+ * at the frame of the function that called us. PowerPC's ABI puts the back
+ * chain at `0(r1)` and a function's return address at `4(` its caller's
+ * frame `)`, so walking the chain gives the path in.
+ *
+ * Every frame is bounds-checked before it is followed: this runs on a guest
+ * that may be in any state, and a diagnostic that faults is worse than none.
+ */
+static void read_requester(void)
+{
+    uint32_t chain[3] = { 0u, 0u, 0u };
+    uint32_t sp = mgs_guest_gpr(s_rt, 1);
+    unsigned i;
+
+    chain[0] = mgs_guest_lr();
+    for (i = 1u; i < 3u; ++i) {
+        uint32_t next;
+        if (!sp || (sp & 3u)) break;
+        next = guest_read32(&s_rt->mem, sp);
+        /* A frame must be above the one below it and word-aligned, or the
+         * chain has been walked off the end of a stack. */
+        if (next <= sp || (next & 3u)) break;
+        chain[i] = guest_read32(&s_rt->mem, next + 4u);
+        sp = next;
+    }
+    mgs_disc_set_requester3(chain[0], chain[1], chain[2]);
+}
+
 /* BOOL DVDOpen(char* fileName, DVDFileInfo* fileInfo) */
 void mgs_DVDOpen(CPUState* ctx)
 {
@@ -194,6 +229,9 @@ void mgs_DVDReadAsync(CPUState* ctx)
     guest_write32(&s_rt->mem, fi + DVD_CB_OFFSET, offset);
     guest_write32(&s_rt->mem, fi + DVD_FI_CALLBACK, callback);
 
+    /* Name the caller before the read, so the tally can say which code
+     * reads each file rather than only that it was read. */
+    read_requester();
     mgs_set_guest_gpr(s_rt, 3,
         mgs_dvd_read_abs_async(s_dvd, start + offset, dest, length,
                                callback, fi)
@@ -237,6 +275,7 @@ void mgs_DVDReadAbsAsyncPrio(CPUState* ctx)
     guest_write32(&s_rt->mem, block + DVD_CB_OFFSET, offset);
     guest_write32(&s_rt->mem, block + DVD_CB_CALLBACK, callback);
 
+    read_requester();
     mgs_set_guest_gpr(s_rt, 3,
         mgs_dvd_read_abs_async(s_dvd, offset, dest, length, callback, block)
             ? 1u : 0u);

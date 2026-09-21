@@ -65,6 +65,36 @@
 .text 0x0F394C 0xD4 gcn_task_run_all own
 .text 0x0F3A20 0x38 gcn_task_link own
 
+# --- the chunked file stream ------------------------------------------------
+# The pair that reads a file a chunk at a time, and the evidence is in the
+# instruction stream rather than inferred: `gcn_stream_issue_read` loads the
+# callback argument for `DVDReadAsyncPrio` with
+#
+#     addi r30, r3, fn_1_320@l     ...     mr r7, r30
+#
+# so the function it hands the drive as its completion IS the one named
+# `gcn_stream_read_done` below. Nothing about that is a guess.
+#
+# gcn_stream_read_done, on each completion:
+#
+#     if (desc->0x08 > 0)  gcn_stream_issue_read(desc);   /* next chunk */
+#     else { ...; if (desc->0x0C) (*desc->0x0C)(ctx, status); }
+#
+# so 0x08 is the count still to read and 0x0C the stream's OWN completion,
+# called once the last chunk lands. `desc->0x20` is an embedded DVDFileInfo -
+# it is what is passed as the file - and `desc->0x9C` points at the context
+# holding the running offset and length.
+#
+# gcn_stream_issue_read RETRIES: `DVDReadAsyncPrio` returning 0 branches back
+# and asks again, with priority 2. Worth knowing, because a drive model that
+# refused reads would spin here rather than fail.
+#
+# THIS PATH IS NOT THE MOVIE FAULT (F195). It ran 406 reads with 406
+# callbacks and no refusals, and the movie's own 8 chunks completed through
+# it correctly.
+.text 0x000320 0x130 gcn_stream_read_done own
+.text 0x000450 0x0F8 gcn_stream_issue_read own
+
 # --- a service thread and its mailbox ---------------------------------------
 # Found by dumping the blocked guest threads: `gcn_worker_loop` is the
 # OUTERMOST frame on a thread's stack, so it is that thread's body, and
@@ -85,7 +115,7 @@
 # recorded because a thread that reached it would be indistinguishable from a
 # hang and would have no stack to explain itself.
 .text 0x000264 0x4C gcn_worker_take_request own
-.text 0x0002B0 0x08 gcn_worker_set_status own
+.text 0x0002B0 0x0C gcn_worker_set_status own
 .text 0x000804 0x84 gcn_worker_loop own
 
 # --- sphere-map geometry (gcn_dgd.c / gcn_spheremap.c) -----------------------

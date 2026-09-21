@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,041 / 18,485 | 5.6% |
+| Functions named | 1,043 / 18,485 | 5.6% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7525,6 +7525,67 @@ runs. The main thread is alive and drawing (`GXSetVtxDesc`, called from REL
 version banners and **no panic, assert or error at all**, so `mpegGCN.c`'s
 asserts at lines 905 and 910 never fired. Nothing has failed; something is
 simply never asked for.
+
+### F195 — the whole read path is innocent, and "the decoder never runs" was an over-claim
+
+Chasing F194's "no producer runs", the DVD shims now record **who asked** for
+each read — three frames of guest call chain, captured from the link register
+and the stack back-chain at the moment of the read. A patched shim is native
+and pushes no guest frame, so `r1` still points at the caller's frame and the
+ABI's chain gives the path in.
+
+It validates against things already known: `mgso_pal.rel` is read by
+`rel_loader_LoadRel`, the audio banks by `__AMPushBuffered`.
+
+**The movie's chain ended in `0x0DEADBEC`, which is ours.**
+`MGS_GUEST_RETURN_SENTINEL` is the return address the host pushes when it
+calls into guest code, so the walk had reached a host→guest entry. That
+identifies the caller exactly: `fn_1_320` is the **DVD completion callback**,
+and `fn_1_450` the function that issues each chunk. Confirmed from the
+instruction stream rather than inferred — `gcn_stream_issue_read` loads the
+callback argument for `DVDReadAsyncPrio` with `addi r30, r3, fn_1_320@l`,
+so the function handed to the drive *is* the other one. Named
+`gcn_stream_read_done` and `gcn_stream_issue_read`; 1,041 → **1,043**.
+
+`gcn_stream_read_done` on each completion:
+
+    if (desc->0x08 > 0)  gcn_stream_issue_read(desc);      /* next chunk */
+    else { ...; if (desc->0x0C) (*desc->0x0C)(ctx, status); }
+
+**So the read path is innocent, and provably.** `DVD reads completed: 406,
+callbacks run: 406, reads refused: 0`. The movie's eight chunks completed,
+the chain ran to its end, `desc->0x08` reached zero, and the stream's own
+completion callback was invoked. Nothing was dropped, no request slot leaked
+(the documented "NO FREE REQUEST SLOT" path never fired). The movie player
+was handed its data and told so.
+
+**And then the correction, which matters more than any of it.**
+
+F193 and F194 both asserted that `mpegGCN.c` *never runs*, on the grounds
+that it appears nowhere in the guest profile. Dumping the engine's task table
+shows otherwise:
+
+    level  1  gate 0x00000000
+        task 0x811CDDE0  fn 0x7F151214  [mpegGCN.c]  flags 0x000080B0
+
+**The decoder is registered, on a level that is not gated, with flags the
+dispatcher does not skip** (it skips only bits 16–19, and `0x80B0` has none).
+By the dispatcher's own rules it is eligible and should run.
+
+The profile never said it didn't. `mgs_module_profile_dump(stdout, 30u)`
+prints the **top 30 of 2,765 distinct addresses**, and its last row was
+already at 0.5% — so anything quieter than that was *invisible, not absent*.
+I read a truncated instrument as a fact, which is the same mistake F189
+recorded about the sampled disc log and F192 about the unread origin column,
+for the third time in one day. The dump depth is now `MGS_PROFILE_TOP`.
+
+**What the task table does show**, taken at the end of a run with the global
+mask at `0x8`: levels 2 through 6 carry gate bits `0x19`/`0x1F`, all of which
+include bit 3, so **one bit in the mask gates five levels off at once** — and
+level 3 holds `0x7F151E70` and `0x7F14D568`, both in the movie's
+neighbourhood. That is worth following, but carefully: the freeze begins at
+frame 960 while the mask still reads `0x00000000`, so this gating arrives
+after the picture has already stopped.
 
 ---
 

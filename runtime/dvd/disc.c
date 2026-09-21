@@ -24,7 +24,14 @@ static struct {
     char     path[128];
     uint64_t reads, bytes;
     uint32_t last_offset, max_end;
+    uint32_t first_lr[3], last_lr[3];  /* the call chain in, first and last */
 } s_tally[DISC_TALLY_MAX];
+/* Set by the DVD shims from the guest call chain before each read. */
+static uint32_t s_requester[3];
+void mgs_disc_set_requester3(uint32_t lr0, uint32_t lr1, uint32_t lr2)
+{
+    s_requester[0] = lr0; s_requester[1] = lr1; s_requester[2] = lr2;
+}
 static unsigned s_tally_n;
 static uint64_t s_tally_lost_reads, s_tally_lost_bytes;
 
@@ -42,6 +49,8 @@ static void disc_tally(const char* path, uint32_t length, uint32_t offset)
         ++s_tally_n;
         strcpy(s_tally[i].path, path);
     }
+    if (!s_tally[i].reads) memcpy(s_tally[i].first_lr, s_requester, sizeof s_requester);
+    memcpy(s_tally[i].last_lr, s_requester, sizeof s_requester);
     ++s_tally[i].reads;
     s_tally[i].bytes += length;
     s_tally[i].last_offset = offset;
@@ -70,6 +79,19 @@ void mgs_disc_report(FILE* out)
                 (unsigned long long)s_tally[j].reads,
                 (unsigned long long)s_tally[j].bytes,
                 s_tally[j].last_offset, s_tally[j].max_end);
+        /* Both ends, because they differ exactly when it matters: a file
+         * opened by one piece of code and streamed by another says where to
+         * look when the streaming stops. */
+        if (s_tally[j].first_lr[0])
+            fprintf(out, "      first asked by 0x%08X < 0x%08X < 0x%08X\n",
+                    s_tally[j].first_lr[0], s_tally[j].first_lr[1],
+                    s_tally[j].first_lr[2]);
+        if (s_tally[j].last_lr[0] &&
+            memcmp(s_tally[j].last_lr, s_tally[j].first_lr,
+                   sizeof s_tally[j].last_lr))
+            fprintf(out, "      last  asked by 0x%08X < 0x%08X < 0x%08X\n",
+                    s_tally[j].last_lr[0], s_tally[j].last_lr[1],
+                    s_tally[j].last_lr[2]);
     }
     if (s_tally_lost_reads)
         fprintf(out, "  (%llu reads of %llu bytes not attributed: table full)\n",

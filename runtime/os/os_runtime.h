@@ -52,6 +52,8 @@ typedef struct MgsRuntime {
  */
 MgsRuntime* mgs_runtime_from(CPUState* ctx);
 uint32_t    mgs_guest_gpr(const MgsRuntime* rt, unsigned index);
+/* Who called the shim: the guest link register, or 0 with no module bound. */
+uint32_t    mgs_guest_lr(void);
 void        mgs_set_guest_gpr(MgsRuntime* rt, unsigned index, uint32_t value);
 
 /* Fill the low-memory globals the boot ROM would have left. Must run BEFORE
@@ -66,6 +68,7 @@ void mgs_sched_init(MgsRuntime* rt);
  * free-standing so the runtime can be run and tested without one. */
 void mgs_cpu_bind_registers(uint32_t* gpr_array);
 void mgs_cpu_bind_msr(uint32_t* msr);
+void mgs_cpu_bind_lr(uint32_t* lr);
 uint32_t mgs_cpu_msr(void);
 void mgs_cpu_set_msr(uint32_t value);
 void mgs_cpu_unbind(void);
