@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,047 / 18,485 | 5.7% |
+| Functions named | 1,049 / 18,485 | 5.7% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 205 / 336 | 61.0% |
 | SDK call sites covered | 6,154 / 7,078 | 86.9% |
@@ -7759,6 +7759,67 @@ because both sites wanted the same counters, but the same hazard.
 the program (first "too slow", then "nondeterministic") when it was a
 property of a change I had just made. The bisect took four minutes and should
 have come first.
+
+### F200 — the park is traced to one NULL pointer, six links back from the frozen picture
+
+With the watch working on a healthy build, the mask's whole history in a boot
+is four game-logic changes, each with its writer named:
+
+    0 -> 0x2450   memcpy, from rel_loader_LoadRel+0x94     (the loader)
+    0x2450 -> 0   the module's own init                     (table set-up)
+    0 -> 0x1      REL 0x0F45EC, called from REL 0x24A300
+    0x1 -> 0      REL 0x0F4600, called from REL 0x249E10
+    0 -> 0x8      REL 0x0F45EC, called from REL 0x249CB4    <- never cleared
+
+**Why the static search found only one `stw`.** `gcn_task_mask_set` and
+`gcn_task_mask_clear` are three instructions each and use **`lwzu`** — load
+with update — so the mask's address is left in the base register and the
+store is `stw r0, 0x0(r4)`, naming no label. That is exactly the two `lwzu`
+hits the earlier classification counted and dismissed. A label search can
+only find what a label names.
+
+**The park is a deliberate `if`, and its condition is a null check.** The
+function that sets `0x8` also clears it, a few instructions apart:
+
+    r0 = *(ctx + 0x25E8);
+    if (r0 == 0)  gcn_task_mask_set(8);      /* park   */
+    else          gcn_task_mask_clear(8);    /* unpark */
+
+So nothing is stuck or missed: the engine parks because **that pointer is
+NULL**, and would unpark the moment it were not.
+
+**And the pointer is NULL because an acquire returned NULL.** It has exactly
+two writers in the overlay: one zeroing it at init, and one real setter —
+
+    if (ctx->0x25E8) release(ctx->0x25EC);
+    ctx->0x25E8 = fn_1_1323C4(ctx->0x25EC, 2);
+
+`fn_1_1323C4` takes a lock, returns **0 immediately if `obj->0x34` is
+non-zero**, otherwise searches an array of slots (base `obj->0x14`, count
+`obj->0x24`) for one whose first word is `0` or `0xFF`, and returns 0 if it
+finds none. Either way the caller stores NULL and the game parks.
+
+**The chain, end to end:**
+
+    fn_1_1323C4 returns NULL
+      -> ctx->0x25E8 stays NULL
+      -> gcn_task_mask_set(8): the game parks
+      -> gcn_event_poll returns zero events while the mask is non-zero
+      -> mpeg_poll_stream_events never sees event code 1
+      -> mpeg_movie_task never leaves state 1
+      -> the movie never ends, so nothing clears the mask
+
+`gcn_task_mask_set` and `gcn_task_mask_clear` named; 1,047 → **1,049**.
+
+**Next, and it needs a runtime answer rather than more reading:** which of
+`fn_1_1323C4`'s two failure routes is taken — the `obj->0x34` busy check or
+an exhausted slot array — and what `obj` is. That wants a facility to trace
+one guest function's arguments and result, which the host does not yet have
+in a general form.
+
+**Still unexplained, and still not to be glossed:** the picture stops at
+frame 960 and this park arrives after frame 1,560. This is why nothing
+recovers. What stops it is still open.
 
 ---
 

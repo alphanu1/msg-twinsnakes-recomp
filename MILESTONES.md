@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-19
 
-**Phase 0, in progress — 1,253 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,255 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -533,6 +533,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **The park traced to one NULL pointer** (F200). The mask's whole
+      history is four game-logic writes, each with its writer named; the one
+      that sticks is `gcn_task_mask_set(8)`, and it is a deliberate `if`
+      whose condition is `*(ctx + 0x25E8) == 0`. That pointer has one real
+      setter, `ctx->0x25E8 = fn_1_1323C4(...)`, and that function returns
+      NULL either on a busy flag or an exhausted slot array. **1,047 to
+      1,049.** Next needs a runtime trace of one guest function's arguments,
+      which the host cannot yet do generally.
 - [x] **A duplicate `static` broke the boot, and is now checked** (F199).
       `module.c` already held `s_watch_addr` - OSLink's address, from which
       the overlay's `.bss` base is read - and the new memory watch declared

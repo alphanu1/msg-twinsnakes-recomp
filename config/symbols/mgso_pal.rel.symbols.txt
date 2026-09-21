@@ -85,6 +85,19 @@
 # that matters: it reads the global task mask and returns ZERO EVENTS if it
 # is non-zero, so parking the game does not merely gate task levels, it stops
 # every event in the engine from being delivered (F196).
+# And the two that CHANGE it. They are why a search for `stw ... @l` found
+# only the initialiser: both use `lwzu` to load the mask and leave its address
+# in the base register, so the store is `stw r0, 0x0(r4)` and names no label
+# at all. Three instructions each, and unambiguous:
+#
+#     gcn_task_mask_set(bits)    mask |=  bits      /* park */
+#     gcn_task_mask_clear(bits)  mask &= ~bits      /* unpark */
+#
+# Watching the mask every step shows exactly four calls in a boot: set 0x1,
+# clear 0x1, and set 0x8 - which is the one the movie never recovers from
+# (F200).
+.text 0x0F45EC 0x014 gcn_task_mask_set own
+.text 0x0F4600 0x014 gcn_task_mask_clear own
 .text 0x0F38CC 0x080 gcn_task_table_init own
 .text 0x0F52A8 0x140 gcn_event_poll own
 # The engine's whole per-frame workload is reached through a function pointer
