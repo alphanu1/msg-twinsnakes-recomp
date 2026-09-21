@@ -7230,6 +7230,61 @@ streaming audio path and this game decodes Vorbis in software, so it may
 never be used — but "may" is not "does not", and it is the next thing to
 check if the stream still stops.
 
+### F188 — the audio DMA works, the game uses it, and it is NOT the movie blocker
+
+F187 built the engine; this is what the game does with it. Both halves
+matter, and the second is the one that costs a hypothesis.
+
+**The game uses it, and the model is right.** A 120M-step run reports:
+
+    audio DMA: 1 transfers, 373714 blocks (93.43s of sound), running;
+               interrupts 18686 delivered, 4638 refused
+
+One enable and no more is exactly right — the engine relatches itself, so a
+stream that plays for ever shows a single transfer. Two numbers then confirm
+the rate independently of anything that was assumed while building it:
+
+  - 373,714 blocks over 18,686 interrupts is **20.0 blocks per buffer**. Twenty
+    32-byte blocks is 640 bytes, 160 stereo frames, **5.000 ms at 32 kHz** —
+    and 5 ms is the AX callback period the design document names. The buffer
+    size was never told to our engine; it falls out of the game's own
+    programming against our block rate.
+  - 93.43 s of sound in 94.81 s of guest time is 98.5%, the shortfall being
+    the boot before the DMA is enabled. Audio streams continuously for
+    essentially the whole run.
+
+**And the movie still does not advance.** Disc reads: 115 logged, exactly as
+before, stopping at the same `shared/movie.dat + 0x38000`. Not one read more.
+
+**So audio is falsified as the explanation.** It had been down as "the only
+live hypothesis" since F184, by elimination — the disc, the threads, the
+scheduler, the card, the texture format, the copy encoder, the clock and the
+ARAM interrupts having each been cleared. Elimination is how it got there and
+elimination is why it was weak: it was never positive evidence, just the last
+thing standing. The stream now runs for 93 seconds and starves nothing.
+
+**The game is not stuck, which is the other thing this run says.** A previous
+run's step limit landed at pc `0x8004186C`, which resolves to the first
+instruction of `GXSetTexCoordGen2` — a busy rendering function, not a spin.
+The game is alive and drawing the whole time. So this is **a condition that
+is never satisfied, not a deadlock**, and the thing to find is what the movie
+player is testing rather than what it is blocked on.
+
+**The calibrated clock is worse, not better, and reproducibly so.** The same
+build at `MGS_TICK_RATE=337` — the figure derived from 675,000 ticks per
+60 Hz field — made **zero** disc reads and never reached the movie at all,
+against 115 at the default 32. That agrees with the earlier sweep (32 → 11
+frames, 337 → 13, 2000 → 1) in direction while being far more stark, and it
+says something is calibrated against the wrong clock and would have to move
+with it. Not the movie blocker either way: at 337 the boot does not get that
+far.
+
+**Next: measure rather than hypothesise.** The guest PC profiler
+(`MGS_PROFILE=1`, resolved through `tools/resolve-addrs.py`) samples the
+translated code, and since most of a run's steps fall after the freeze, a
+whole-run profile is mostly the frozen behaviour. That is the next evidence,
+and it does not depend on guessing which subsystem to suspect.
+
 ---
 
 *Record further findings here as they are established — including the ones that
