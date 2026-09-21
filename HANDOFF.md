@@ -8100,13 +8100,18 @@ already produced three corrections from exactly that gap.
 **Five 120M runs after the lock: byte-identical logs, 406 reads, 0 refused,
 0 failures.** Before the fix, one run in three diverged.
 
-**Stated with its strength, not louder.** P(no divergence in five trials | a
-one-in-three rate) is **0.13** — suggestive, not conclusive. What makes it
-more than a coincidence is that it agrees with the other two measurements:
-`MGS_JOBS=1`, which removes the concurrency entirely, gave three identical
-runs; and the race was in code reachable *only* from worker threads. Three
-observations, one story. Ten further trials are running; at fifteen clean
-runs the same probability is **0.0023**, which would settle it.
+**Settled: fifteen consecutive byte-identical runs.** Five, then ten more,
+all 406 reads, 0 refused, 0 failures, one distinct log between them. Against
+the observed one-in-three divergence rate that is **P = 0.0023**. It agrees
+with the other two measurements too: `MGS_JOBS=1`, which removes the
+concurrency entirely, gave three identical runs, and the race was in code
+reachable *only* from worker threads.
+
+A caution kept for the record: the first pass at this comparison reported
+"3 distinct of 5" and was wrong — the glob had swept up two stale logs from a
+previous day, and a third file was still being written when it was hashed.
+Nothing was amiss; the measurement was. **Check what the glob matched and
+that each run finished before comparing anything.**
 
 **What this cost and what it bought.** The race was mine, introduced this
 morning in the read tally (F189) — an instrument added to answer a question

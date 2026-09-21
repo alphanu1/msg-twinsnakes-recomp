@@ -544,8 +544,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [x] **Determinism returns with the race fixed** (F206). Five 120M runs
       byte-identical where one in three diverged before; `MGS_JOBS=1` gives
       three identical runs; and the race was reachable only from worker
-      threads. Three observations agreeing, though five clean trials alone
-      are only P=0.13 against a one-in-three rate - ten more running.
+      threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
+      the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
 - [x] **The record producer is found** (F206). `fn_1_132368` wraps
       `fn_1_1321A8`, the pool's pump, which bails on `pool->0x34` - exactly
