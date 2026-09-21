@@ -554,7 +554,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
-- [ ] **Use Dolphin as the oracle for the stream state** (F215). It is
+- [x] **The oracle works, and corrected the root** (F216).
+      `tools/dolphin-watch.py` reads guest RAM out of a running Dolphin via
+      its shared-memory mapping - no GDB stub (this build has none) and no
+      UI. First measurement: `0x8021A078` reads **3 in a working run**, the
+      same as ours, so **F214's root cause was wrong** - 3 is the configured
+      mode, not a stall. The real divergence is that the slot bytes
+      **recycle** in Dolphin (~10 times in 76 s) and are frozen in ours.
+      Caveat: the two runs are not yet aligned to the same game moment.
+- [x] **Use Dolphin as the oracle for the stream state** (F215). It is
       installed and both discs are on disk; watching `0x8021A078` in a
       working run answers what advances it, which sixteen links of backward
       derivation have not.

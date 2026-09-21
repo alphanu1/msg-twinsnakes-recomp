@@ -8602,6 +8602,61 @@ backwards, and each new level reveals another state field. Watching
 `0x8021A078` in a working run answers it directly. Dolphin's GDB stub is the
 likely route.
 
+### F216 — the oracle answers in one run, and F214's root cause was wrong
+
+`tools/dolphin-watch.py` reads guest memory out of a running Dolphin, and the
+first thing it measured overturned the conclusion sixteen links of backward
+derivation had reached.
+
+**How it reads memory.** Dolphin backs emulated RAM with a shared-memory
+mapping, so guest memory is readable straight out of the emulator's address
+space. Offset 0 of that region is physical 0, which is guest `0x80000000`.
+The flatpak build has **no GDB stub compiled in** — `strings` finds no "gdb"
+at all — so the debugger route was closed, and this needed none. It launches
+Dolphin itself because `kernel.yama.ptrace_scope` is 1 here: only an ancestor
+may read `/proc/<pid>/mem`, and a sibling is not enough. The game ID at
+offset 0 reading `GGSPA4` is the check that the right region was found.
+
+**The measurement, against ours:**
+
+    address                      Dolphin          our port
+    0x8021A078  state word       3                3        <- SAME
+    0x8021A184  state word (2)   4                4        <- SAME
+    0x8027ADD4  slot bytes       cycles 0303 <->  frozen at 0303
+                                 0203 and 0302,
+                                 ~10 times in 76s
+
+**So F214 was wrong.** It concluded the root was `0x8021A078` being written
+once to 3 and never moving, with sixteen links following from that. A working
+run holds **exactly the same value**. Three is not a stall, it is the
+configured mode, and everything derived from "the state never leaves 3" —
+that the refill request is unreachable *because* of it — was reasoning from a
+normal value to a fault.
+
+What survives from that chain is the *mechanism*: the slot states, the ring
+head, the refill trigger and their gating are all read correctly. What was
+wrong is which end of it is the cause.
+
+**What the oracle says the fault actually is:** the slots **recycle** in a
+working run and stop in ours. Both reach `0303`; Dolphin leaves it about ten
+times in 76 seconds and we never do. Notably the transitions are `3 -> 2`
+directly, with no `1` observed at 50 ms sampling — so a slot returns to
+service by a route that does not linger in state 1.
+
+**A caveat kept explicit:** it is not established that Dolphin had reached the
+same point in the game. 76 seconds of headless boot may still be in the
+logos, and the cycling seen could belong to another stream (the audio banks
+use the same machinery). The state words matching is strong evidence on its
+own; the cycling needs the two runs aligned to the same moment before it is
+more than suggestive.
+
+**Two process-level traps hit twice each, worth naming.** `pkill -f
+<pattern>` matched this session's own shell — twice — because the pattern
+appeared in the command line running it, killing the shell mid-command. And
+`pgrep -x dolphin-emu-nogui` matches **nothing**: the kernel truncates `comm`
+to 15 characters, so the name to compare against is `dolphin-emu-nog`. The
+tool now reads `/proc/*/comm` directly and skips its own pid.
+
 ---
 
 *Record further findings here as they are established — including the ones that
