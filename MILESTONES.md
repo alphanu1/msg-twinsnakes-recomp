@@ -547,6 +547,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The refill message type is never sent** (F213). The dispatch maps
+      precisely: **types 3 and 5 alone** return a slot to service, type 5 is
+      a one-shot start (2 calls, one per stream object, from two distinct
+      sites), and **type 3 - "prepare a slot, reply with type 4" - is never
+      sent by anyone.** Every message reaching the queue is accounted for:
+      a routed type 5 x2, a wake-up sentinel x2, and 26 of types the table
+      sends elsewhere. The refill case is compiled, reachable and correct,
+      and nothing asks for it. **Open: what should send type 3.**
 - [x] **The stream thread's dispatch is mapped** (F212). A 17-entry jump
       table on `msg->0x08`; **exactly two types, 3 and 5, make a slot ready**
       and both go through `fn_800534D4`, which runs **twice in a whole run**.

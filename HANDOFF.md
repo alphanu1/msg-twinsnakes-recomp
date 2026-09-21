@@ -8446,6 +8446,58 @@ object `0x8027AD00`'s bytes `0xD4`–`0xD7`): `00 00 → 01 01 → 02 01 → 02 
 03 02 → 03 03`, and nothing after. Two slots, each made ready once, posted
 once, marked done once, never returned.
 
+### F213 — the refill message type exists, is handled, and is never sent
+
+The stream thread's jump table, mapped to real addresses rather than
+offsets:
+
+    type  3 -> 0x800552CC   fn_800534D4(obj), then retype the message to 4
+                            and send it on  <- THE REFILL REQUEST
+    type  5 -> 0x80055300   fn_800534D4(obj), then send on  <- START
+    type  7 -> 0x800553A4   type 8 shares this case
+    type 11 -> 0x800553D8   type 12 -> 0x80055410, 16 -> 0x80055448
+    all others -> 0x80055484, the wake-up scan
+
+Only **3 and 5** call `fn_800534D4`, the function that returns a slot to
+state 1. `fn_800534D4` runs **twice** in a whole run, both times from
+`0x80055310`, which falls inside type 5's case.
+
+**Type 5 is a start, not a refill.** `fn_80053930` originates it, and is
+called 34 times — 17 per stream object — with the type in `r6`: **5 twice**,
+7 sixteen times, 0xB sixteen times. The two type-5 calls come from two
+distinct one-shot sites, `0x80053B20` and `0x80053B48`, one per object. So
+the two slot-preparations are initialisation, exactly as many as there are
+stream objects, and nothing is wrong with them.
+
+**Type 3 is never sent.** Every message that reached the thread's queue in a
+run is accounted for: the router at `0x800525CC` forwarding type 5 (×2),
+`fn_80052FAC`'s wake-up sentinel — the literal value `1`, which the loop
+tests for and skips (×2) — `fn_80056688` (×13) and `0x80056790` sending type
+`0x0C` (×13). **None is type 3.** The case that would put a slot back into
+service is compiled, reachable and correct, and nothing in the run asks for
+it.
+
+**How the pipeline was traced, which is reusable.** The router forwards a
+message *unchanged*, so the same pointer appears in several sends. Grouping
+the captured `OSSendMessage` calls by their message argument reconstructs
+each message's whole journey without tracing a single extra function:
+
+    msg 0x8021A154:  0x80053974 -> queue 0x802133A4     (origin)
+                     0x800525CC -> queue 0x80213364     (routed, type 5)
+                     0x8005533C -> queue 0x8027B4D8     (thread's reply)
+                     0x800562E0 -> queue 0x802133A4
+                     0x800525E0 -> queue 0x80213384
+
+while `msg 0x8022AA40` shows the same four-step cycle repeating **13 times** —
+a loop that is still turning while the type-5 one has run once and stopped.
+
+**The open question, stated exactly:** what should send type 3, and under what
+condition. It is not the wake-up sentinel (that path scans slots and posts
+ready ones, which is a different job), and it is not any sender observed. The
+answer is either a call site never reached or a condition never satisfied,
+and the next step is to find the type-3 construction in the binary the way
+`fn_80052FAC`'s was found — by reading the function, not a grep window.
+
 ---
 
 *Record further findings here as they are established — including the ones that
