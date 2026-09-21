@@ -73,7 +73,6 @@ typedef struct MgsMmio {
     uint8_t      exi_cs;
     int          trace_dsp;
     unsigned     dsp_traced;
-    int          dsp_halted;     /* the coprocessor is held, so it owes a mail */
     uint8_t      exi_tcint[3];   /* transfer-complete, per channel */
     uint64_t     exi_transfers, exi_to_card;
     int          trace_exi;

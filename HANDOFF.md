@@ -7136,6 +7136,44 @@ With the disc, the threads, the scheduler, the card, the format, the clock
 and now the interrupt path all cleared, audio remains the only live
 hypothesis — and F184 explains why testing it is expensive.
 
+### F186 — the DSP model already satisfies every wait in audio start-up, and a duplicate boot mail was removed
+
+F184 left audio as the only live hypothesis for the movie freeze, and also
+established that testing it by withdrawing the shim is expensive: the
+translated SDK then reaches hardware we do not model and crashes for reasons
+that have nothing to do with audio. So the sequence was driven directly
+instead, without booting the game.
+
+`tests/test_dsp_init.c` walks `__OSInitAudioSystem`'s exact register
+sequence against `MgsMmio`: reset, wait for the mailbox to drain, two ARAM
+DMAs each raising 0x20, wait for 0x400 to clear, un-halt, wait for boot mail,
+final reset. **Every wait passes.** Whatever stalls the movie, it is not the
+DSP register handshake — that part of the model is already good enough for
+the SDK's own start-up to complete.
+
+**The value assertion was wrong, not the model.** The test first failed on a
+boot-mail comparison: it read `0x8071FEED` where the assertion wanted
+`0x80544348`. `0x8071FEED` is the authentic DSP boot-ROM value and
+`__DSP_boot_task` asserts on exactly it. The SDK does compare the mail
+arithmetically, but **the body of that comparison is empty** — the value is
+acted on nowhere. Only bit `0x8000`, "a message is present", is load-bearing.
+The assertion now checks the authentic value and says why.
+
+**A duplicate boot-mail path was removed from `mmio.c`.** That wrong reading
+had also produced a second mechanism posting `0x80544348` whenever the halt
+bit cleared, alongside the pre-existing one that posts `0x8071FEED` on the
+**rising edge** of bit `0x800`. The pre-existing one is correct, and its
+comment records why the edge matters: arming on "the bit is set" re-posts the
+boot message over later task mail. The duplicate armed on every halt-clear
+and would have reintroduced exactly that bug. Removed; the `MGS_TRACE_DSP`
+control trace that had been sharing the block was kept, on its own.
+
+**What this costs the audio hypothesis.** It does not clear audio — it
+narrows it. The register handshake completes, so a stall would have to be
+above it: in what start-up does between the waits, or in the timing shift
+that running audio for real introduces. The next probe should drive that,
+not the registers.
+
 ---
 
 *Record further findings here as they are established — including the ones that

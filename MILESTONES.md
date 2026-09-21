@@ -533,6 +533,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       completes, reading the mailbox's low half empties it, and unhalting the
       DSP posts the boot message. **The handshake, not a DSP** - no microcode
       runs. 90,000,000 steps of spinning became 60,000,000 of running.
+- [x] **Audio start-up is driven by a test, not by a boot** (F186).
+      `tests/test_dsp_init.c` walks `__OSInitAudioSystem`'s register sequence
+      against `MgsMmio` directly - reset, mailbox drain, two ARAM DMAs, the
+      0x400 wait, un-halt, boot mail, final reset. **Every wait passes**, so
+      the handshake is not what stalls the movie. It exists because F184
+      showed withdrawing the audio shim crashes for unrelated reasons, which
+      makes booting a useless way to test this. A duplicate boot-mail path
+      posting 0x80544348 was removed: it contradicted F105 above, and the
+      SDK's comparison of that value has an empty body.
 - [x] **`rand` and `PSMTX44Identity`** (F106) — 472 call sites between them.
       `rand` is identifiable from its constants alone: 1103515245 and 12345,
       the ISO C standard's own example generator. **Call sites covered 76.1%

@@ -60,3 +60,7 @@ add_test(NAME mem_shims COMMAND test_mem_shims)
 add_executable(test_card test_card.c)
 target_link_libraries(test_card PRIVATE mgs_runtime)
 add_test(NAME card COMMAND test_card)
+
+add_executable(test_dsp_init test_dsp_init.c)
+target_link_libraries(test_dsp_init PRIVATE mgs_runtime)
+add_test(NAME dsp_init COMMAND test_dsp_init)

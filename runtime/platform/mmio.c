@@ -802,37 +802,19 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
         ++m->dsp_mails_sent;
     }
 
-    /* THE DSP REPORTS IN ONCE IT IS LET RUN.
+    /* NAME EVERY CONTROL WRITE UNDER MGS_TRACE_DSP.
      *
-     * Start-up loads a small program into the coprocessor, takes it out of
-     * halt, and then waits to be told it booted - a mail from the DSP with
-     * its top bit set, carrying a fixed value the SDK checks. Nothing here
-     * ever sent it, so the wait never ended and audio never started, which is
-     * why the audio interface reads STOPPED after a whole run.
-     *
-     * Answering is what a DSP does at that point, so it is answered here:
-     * clearing the halt bit hands over the mail. The value is the one the
-     * SDK's own arithmetic tests for.
+     * This is how a spin in the audio start-up is identified: it waits on
+     * several bits in turn, and the last value written before the log goes
+     * quiet says which one it stopped on. Purely observational - it changes
+     * no state.
      */
-    if (addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
-        uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
-        uint16_t now = (uint16_t)((cr[0] << 8) | cr[1]);
-        /* MGS_TRACE_DSP names every control write, which is how a spin in the
-         * audio start-up is identified: it waits on several bits in turn, and
-         * the last value written before the log goes quiet says which. */
-        if (m->trace_dsp && m->dsp_traced < 80u) {
-            ++m->dsp_traced;
-            fprintf(stderr, "[dsp] control <- 0x%04X\n", now);
-        }
-        if (m->dsp_halted && !(now & 0x0004u)) {
-            uint8_t* hi = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_HI) - MMIO_BASE];
-            uint8_t* lo = &m->regs[(MMIO_DSP + DSP_CPU_MBOX_LO) - MMIO_BASE];
-            hi[0] = 0x80u; hi[1] = 0x54u;      /* top bit: mail is waiting */
-            lo[0] = 0x43u; lo[1] = 0x48u;
-            m->dsp_halted = 0;
-        } else if (now & 0x0004u) {
-            m->dsp_halted = 1;
-        }
+    if (m->trace_dsp && m->dsp_traced < 80u &&
+        addr >= MMIO_DSP + DSP_CONTROL && addr < MMIO_DSP + DSP_CONTROL + 2u) {
+        const uint8_t* cr = &m->regs[(MMIO_DSP + DSP_CONTROL) - MMIO_BASE];
+        ++m->dsp_traced;
+        fprintf(stderr, "[dsp] control <- 0x%04X\n",
+                (unsigned)((cr[0] << 8) | cr[1]));
     }
 
     /* THE THREE STATUS BITS ARE WRITE-ONE-TO-CLEAR.
