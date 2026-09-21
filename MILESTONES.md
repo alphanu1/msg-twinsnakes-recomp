@@ -547,6 +547,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       threads. **Fifteen consecutive byte-identical runs**, P=0.0023 against
       the old one-in-three rate.
       **A diagnostic that writes shared state is part of the program.**
+- [x] **The refill fires twice in a whole run** (F207). The pump is healthy -
+      2,204 calls, all normal exits, `pool->0x38` zero throughout - and the
+      trigger it guards, `free > capacity/3`, is true only **twice**. The
+      ring reclaims space from the **front only**, stopping at the first
+      occupied record, so one unconsumed record at the head pins it for ever
+      and the refill never fires again. **That is why nothing asks for the
+      next byte of `movie.dat`.** Next: which record sits at the head.
 - [x] **The record producer is found** (F206). `fn_1_132368` wraps
       `fn_1_1321A8`, the pool's pump, which bails on `pool->0x34` - exactly
       the flag that makes `gcn_pool_acquire` return NULL - and feeds from

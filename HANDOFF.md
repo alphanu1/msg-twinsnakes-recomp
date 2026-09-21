@@ -8141,6 +8141,64 @@ and watch `pool->0x30`, `pool->0x34` and `pool->0x38` at `0x7F4EF794`. The
 question is whether the pump stops being called, or starts returning early —
 and which of those three flags is set when it does.
 
+### F207 — nothing asks for more data because the ring head is pinned, and the refill fires twice in a whole run
+
+On runs that now reproduce, the producer side measures cleanly.
+
+**The pump is healthy.** `fn_1_132368` → `fn_1_1321A8` is called **2,204
+times** across a run and returns 1 every time. I first read that as its early
+exit — `if (pool->0x38) return 1` — and said so. Wrong: `.L_1322BC: li r3,
+0x1` is the **normal** exit, reached after the work is done. Two independent
+checks agree that it is the normal path: `pool->0x38` is watched for a whole
+run and is **zero throughout** (its only two changes are the loader's memcpy
+and the module's own init), and `fn_1_9C8`, the file-service call the pump
+makes, is traced returning **0 on 2,356 of 2,359 calls**. Neither early exit
+is being taken. *(Third time today a partial read of a function produced a
+confident wrong answer; the fix each time was to read it to the end.)*
+
+**The refill is requested twice.** Just before that normal exit sits the
+trigger:
+
+    free = pool->0x0C - fn_1_13200C(pool, pool->0x14, pool->0x20);
+    if (free > pool->0x0C / 3) fn_1_132030(pool);    /* ask for more */
+
+`fn_1_132030` is traced at **2 calls in a 120M-step run**, both on the movie's
+pool, both returning 0. So the machinery that would fetch the next chunk of
+`movie.dat` is not broken, not blocked and not gated — **its condition is
+simply never true again.**
+
+**Why `free` never recovers: the ring reclaims from the front only.** The
+pump's scan walks from `pool->0x14` and stops at the **first record that is
+still occupied**, skipping only a run of consecutive freed ones before it:
+
+    r7 = pool->0x14;
+    if (*r7 == 0xFF) r7 = pool->0x8;   /* wrap marker */
+    if (*r7 != 0) goto done;           /* STOP - occupied */
+    r7 += *(r7 + 4);                   /* skip a freed record */
+    ...
+    done: pool->0x14 = r7;
+
+That is textbook head-of-line blocking. **One record at the head that nobody
+consumes pins the head for ever**, however much is freed behind it, `free`
+stays under a third of capacity, and the refill never fires again.
+
+**So the chain finally has a mechanism at its far end**, and it is not
+circular after all:
+
+    a record at the ring head is never consumed
+      -> the head cannot advance, so free space never recovers
+      -> the refill condition (free > capacity/3) is never true
+      -> no more of movie.dat is read
+      -> no new kind-2 records
+      -> the movie task starves, the game parks, the mask deadlock closes
+
+**Next, and it is now a small question:** which record is at the head, and
+who was supposed to consume it. `gcn_pool_clear_entry_flag` is the suspect
+disposal — it clears bit 7 and leaves the record **occupied**, which is a
+re-queue rather than a consume, and `fn_1_8FE8` takes that branch on almost
+every one of its 1,101 kind-1 finds. Whether those are legitimately still
+wanted or are the thing that pins the head is the measurement to make.
+
 ---
 
 *Record further findings here as they are established — including the ones that
