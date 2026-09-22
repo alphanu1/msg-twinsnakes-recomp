@@ -1532,3 +1532,21 @@
 # 0x801EDF20 out — but `dolsdk2004` does not carry that function, and the
 # SDK spelling would be asserted rather than confirmed.
 .text 0x8003416C 0x110 AXSetVoiceAddr own+sdk2004
+
+# ---- AX's voice service, and the block the DSP owns (F235) -----------------
+#
+# `__AXServiceVPB` matches `dolsdk2004`'s AXVPB.c statement for statement: it
+# increments a voice counter, indexes an array at `index * 0xF4` (which is
+# `sizeof(AXPB)`), and on `sync == 0` copies back exactly four fields from
+# the DSP's block to the user's — `state` (+0x0E), `ve.currentVolume`
+# (+0x64) and `addr.currentAddress` (+0x7A/+0x7C). The array it indexes is
+# therefore `__AXPB`, the block AX hands to the DSP, and the counter is
+# `__AXNumVoices`, which `__AXGetNumVoices` returns in two instructions.
+#
+# Reading `__AXNumVoices` is what showed AX was servicing no voices at all
+# before the resume mail was enabled: it read 0, and that function only ever
+# increments it.
+.text 0x80033330 0x74C __AXServiceVPB own+sdk2004
+.text 0x80033328 0x8 __AXGetNumVoices own+sdk2004
+.bss 0x801F5E00 0x3D00 __AXPB own+sdk2004
+.sbss 0x8027DF50 0x4 __AXNumVoices own+sdk2004

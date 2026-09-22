@@ -340,6 +340,26 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         hash = src ? content_hash(src, nbytes) : 0u;
     }
 
+    /* THE PALETTE IS PART OF THE TEXTURE'S CONTENT, NOT PART OF ITS ADDRESS.
+     *
+     * The cache keyed on the TLUT's *address* and hashed only the texels, so
+     * a palette reloaded with different colours at the same address returned
+     * the previous decode. The game does exactly that: the subtitles came
+     * out pink or blue depending on what the movie had last loaded into that
+     * TLUT, which is how this was found - Ben noticed the colour tracked
+     * whether the video frame beside it had decoded.
+     *
+     * Folding the palette bytes into the same hash makes a recoloured
+     * palette a content change, which the existing "same texture, new
+     * contents: take this slot back" path then handles correctly. */
+    if (format == 0x8u || format == 0x9u || format == 0xAu) {
+        unsigned pentries =
+            (format == 0x8u) ? 16u : (format == 0x9u) ? 256u : 16384u;
+        const uint8_t* pal = guest_ptr(mem, tlut_addr, pentries * 2u);
+        if (pal) hash = hash * 1099511628211ull
+                      ^ content_hash(pal, pentries * 2u);
+    }
+
     /* ONE ENTRY PER TEXTURE IDENTITY, NOT ONE PER VERSION.
      *
      * A changed texture must REPLACE its entry, never add a second one.

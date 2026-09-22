@@ -310,8 +310,8 @@ is the one that governs the work:
 
 | Measure | | |
 |---|---|---|
-| **1. Functions named** | 1,076 / 18,485 | **5.8%** |
-| — `main.dol` | 1,032 / 1,818 | 56.8% |
+| **1. Functions named** | 1,078 / 18,485 | **5.8%** |
+| — `main.dol` | 1,034 / 1,818 | 56.9% |
 | — `mgso_pal.rel` | 44 / 16,667 | 0.3% |
 | **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
 | **3. SDK entry points the engine calls, named** | 206 / 336 | **61.3%** |
@@ -2726,7 +2726,8 @@ different population in a working run would have been wrong.
 1,052 → **1,072**. A follow-on pass (F233) added `AXRegisterCallback`,
 `__AXUserFrameCallback`, `sd_ax_frame_callback` and `sd_stream_pump`, taking
 `main.dol` to 1,031 and the total to **1,075**; `AXSetVoiceAddr` (F234)
-takes it to 1,032 and **1,076**.
+takes it to 1,032 and **1,076**; `__AXServiceVPB`, `__AXGetNumVoices`,
+`__AXPB` and `__AXNumVoices` (F235) take it to 1,034 and **1,078**.
 
 ## Stage 9 — Verify against the original · **PLANNED**
 

@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,076 / 18,485 | 5.8% |
+| Functions named | 1,078 / 18,485 | 5.8% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 206 / 336 | 61.3% |
 | SDK call sites covered | 6,155 / 7,078 | 87.0% |
@@ -10076,6 +10076,53 @@ roughness 25, but that is the composited EFB copy read back as a texture, and
 its roughness is measured at decode rather than after the combiner runs. What
 the picture actually looks like now needs a person to look at it. Given how
 today has gone, that is stated as pending rather than claimed.
+
+---
+
+### F243 — the palette was not part of a texture's identity, and 5 frames in 200,000
+
+Ben played it and reported three things. Two are progress and one is a new
+diagnosis handed over ready-made.
+
+**"Some movie frames are not garbage."** The per-stage TEV fix (F242) works
+in part. The decoded shapes confirm the structure is right:
+
+    fmt 0x1  512x320   x5     luma
+    fmt 0x1  256x160   x10    chroma, exactly two per luma frame
+
+Two chroma planes per luminance frame is 4:2:0 and is what a correct YUV
+triple looks like. Before F242 there were none.
+
+**"Subtitles change colour, pink when garbage and blue when not."** That
+correlation is the bug report. The texture cache keyed a paletted texture on
+its TLUT **address** and hashed only the **texel** bytes, so a palette
+reloaded with different colours at the same address returned the previous
+decode. The subtitle's colour therefore tracked whatever the movie had last
+loaded into that TLUT — which is precisely the symptom, and it would never
+have been found from the metrics, because a stale cache hit looks like a hit.
+
+Fixed by folding the palette bytes into the same content hash, so a
+recoloured palette is a content change and the existing "same texture, new
+contents: take this slot back" path handles it.
+
+**Honestly: not verified against the symptom.** The run after the fix decodes
+the same 161 textures as the run before, so this sequence never actually
+recolours a palette in place. The fix removes a real class of stale-cache
+bug and costs nothing; whether it is *the* cause of the pink/blue subtitles
+needs a look at the screen.
+
+**"About one frame for a few seconds, then it skips."** Measured, and it is
+stark: **5 luma frames decoded across 200,000 retraces**. The movie only
+decodes while its task is in state 2, and F239 measured that state machine
+running `0 -> 2 -> 1 -> 2 -> 1` — **two visits to the playing state in a
+whole run**. So this is not a frame-rate problem or a decoder problem: the
+movie is being *stopped*, repeatedly, by the code-0 events F239 found, and
+spends almost all of its time parked in state 1.
+
+**"Starting the game freezes."** Noted, not yet investigated. Ben attributes
+it to unnamed functions; that is unlikely to be the mechanism — names are
+documentation, not behaviour — so it deserves its own measurement rather
+than an assumption.
 
 ---
 
