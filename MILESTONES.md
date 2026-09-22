@@ -554,6 +554,13 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **Correction: AX neither breaks nor fixes the stream** (F222). Repeated
+      runs show `MGS_DSP_RESUME=1` and the default are **identical** - slots
+      5, 9 files, 8 movie reads - so "AX breaks the stream setup" was one bad
+      measurement taken under load. And 32,989 AX frames leave the decode
+      buffer's fill advancing **20 times in both**: running AX changes
+      nothing. The game's AX callback *is* registered (`0x8004EB8C`, beside
+      `sd_sound.c`). **The blocker is downstream of AX, not at it.**
 - [~] **AX frames can be driven, paced by the audio DMA** (F221). AX is
       initialised and its callback registered (`__AID_Callback` = 
       `__AXOutAiCallback`, watched). Under `MGS_DSP_RESUME=1` the real frame

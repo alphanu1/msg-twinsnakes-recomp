@@ -8877,6 +8877,48 @@ demand, with one variable. What remains is that the audio path and the stream
 setup now interfere, which is genuine phase-4 work rather than a constant to
 flip — and the design document always said audio was phase 4.
 
+### F222 — correction: AX does NOT break the stream, and running it changes nothing
+
+Two things from F221 have to be withdrawn, and a third result is new.
+
+**1. "Making AX run has broken the stream's setup" is wrong.** That rested on
+one measurement of the slot bytes reading 0 changes under `MGS_DSP_RESUME=1`
+against the default's 5. Repeated, with two runs of each configuration:
+
+    default  run1/run2:  slots 5 | 9 files | movie.dat 8 reads
+    RESUME   run1/run2:  slots 5 | 9 files | movie.dat 8 reads
+
+**Identical.** The earlier zero was a bad run, taken while the machine was at
+load 20+ — exactly the condition F220 said made measurements untrustworthy,
+and I used one anyway. A second stream object at `+0xDC` does differ (2
+changes against 0), but object 0 — the one the movie uses — is the same.
+
+**2. Running AX changes the data flow not at all.** The decode buffer's fill
+pointer advances **20 times in both configurations**. So 32,989 AX frames
+buy exactly nothing: the Vorbis reader still stops at 13 KB.
+
+**3. And it is not for want of a callback.** Watching `0x8027DF00`, the
+pointer `__AXOutNewFrame` calls per frame, the game registers **`0x8004EB8C`**
+— which sits beside `sd_sound.c` in the file attributions, so it is Konami's
+own sound update. AX frames run, the game's callback is registered and
+called, and no more Vorbis data is pulled.
+
+**What this does to F218.** Its *structure* stands and is read from code: a
+slot re-arms when a playback position reaches its end marker, that position
+is advanced by `fn_80056688`, and that function is a Vorbis read callback.
+What does **not** stand is the inference I drew next — that driving AX frames
+would therefore advance it. It does not. Something between the AX callback
+and the decoder is gating, and identifying it needs an instrument the
+function tracer cannot provide: both `fn_80060924` and `fn_80060768` report 0
+calls while demonstrably running, because translated code calls them directly
+in C (F217).
+
+**What is solid after all this**, and worth keeping separate from what is
+not: AX is initialised, its AI callback is registered and correct, its frame
+cycle can be driven at the right rate by pacing the DSP resume to the audio
+DMA, and the game's sound callback is registered and runs. None of that moves
+the movie. The blocker is downstream of AX, not at it.
+
 ---
 
 *Record further findings here as they are established — including the ones that
