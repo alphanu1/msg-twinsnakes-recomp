@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,072 / 18,485 | 5.8% |
+| Functions named | 1,075 / 18,485 | 5.8% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 206 / 336 | 61.3% |
 | SDK call sites covered | 6,155 / 7,078 | 87.0% |
@@ -9478,6 +9478,75 @@ earlier session nearly recorded "zero sends" as the root cause on the
 strength of that line. It now prints the read cursor too, which does
 distinguish the two, and says "drained (it has carried messages)" when the
 cursor has moved.
+
+---
+
+### F233 — the external driver found, and it is present in our run too
+
+F232 left "what breaks the wake-up cycle on hardware, because it is not
+obviously AX". It is AX, through a callback I had missed.
+
+**The indirect call I looked straight past.** My first search of
+`__AXOutNewFrame` was `grep -E "bl fn_|bctrl"`, which finds neither of the
+two forms that matter: the call is a **`blrl`**, at `0x80032758`:
+
+    80032748  lwz    r12, lbl_8027DF00@sda21(r0)
+    8003274C  cmplwi r12, 0x0
+    80032750  beq    .L_8003275C
+    80032754  mtlr   r12
+    80032758  blrl
+
+**`0x80032E20` is `AXRegisterCallback`, beyond doubt.** `dolsdk2004`'s
+AXOut.c body is five statements — read the old pointer, disable interrupts,
+store the new one, restore, return the old — and this function is those five
+in that order around `0x8027DF00`, which is therefore
+`__AXUserFrameCallback`. It is called exactly once, from `fn_8004ECC8` in
+`sd_sound.c`, registering `fn_8004EB8C`.
+
+**The full driver chain**, every step read from the binary:
+
+    AI/DSP interrupt -> __AXOutNewFrame
+      -> [*__AXUserFrameCallback] = sd_ax_frame_callback (0x8004EB8C)
+      -> sd_stream_pump (0x80054958): eight channels, stride 0x10C,
+         from 0x8021A070, acting on those in state 9
+      -> fn_80052E84 -> OSSendMessage(0x80213384) -> wakes a sound thread
+
+That is the **only** driver from outside the sound subsystem; every other
+sender is one sound thread waking another.
+
+**And it is not missing in our run.** Four things were checked and all four
+match the oracle:
+
+| | Dolphin | ours |
+|---|---|---|
+| `__AXUserFrameCallback` | `0x8004EB8C` at 3.1s | `0x8004EB8C` |
+| channel 0 state | `0 -> 3 -> 5 -> 9` | `0 -> 1 -> … -> 9` |
+| channel 1 state | reaches 9 | reaches 9 |
+| channels 2-7 | 0 | 0 |
+
+So the callback is registered, the channels are configured, and two of them
+are in the working state — exactly as in a run that plays the movie. The
+sound queues have also each **carried traffic and stopped**: read cursors of
+30, 34 and 70 on `0x80213364`, `0x80213384` and `0x8027B4D8`. This is a
+system that ran and then quiesced, not one that never started.
+
+**What this rules out, and what it leaves.** Not the registration, not the
+channel setup, not the AX frame path existing. What remains is inside the
+pump: it posts only when `channel->0x20` is zero and flag `0x10` is clear,
+and it does no further work at all when `channel->0x20` is zero. A work
+pointer left permanently non-null would silence it for good while every
+other symptom looked healthy. That is the measurement in flight.
+
+**A caveat on an instrument, again.** `MGS_TRACE_FN=0x8004EB8C` reported **0
+calls**, and that is worth nothing here: F-earlier established these counts
+are lower bounds, because translated code calling translated code goes
+direct in C and never passes the dispatcher. It is not evidence the callback
+did not run, and reading it as such would have sent this the wrong way.
+
+**Named from this:** `AXRegisterCallback` and `__AXUserFrameCallback`
+(origin `own+sdk2004` — the instruction sequence here and the name and
+signature in `dolsdk2004`), plus `sd_ax_frame_callback` and `sd_stream_pump`
+(origin `own`).
 
 ---
 

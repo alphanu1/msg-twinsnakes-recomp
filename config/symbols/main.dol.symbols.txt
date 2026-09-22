@@ -1499,3 +1499,23 @@
 .text 0x80055264 0x4C4 sd_stream_thread own
 .text 0x80006814 0x140 rel_loader_LoadEngine own
 .bss 0x801E7DD8 0x1 gGameLanguage own
+
+# ---- the AX frame callback, and what it drives (F233) ----------------------
+#
+# `AXRegisterCallback` is identified beyond doubt: `dolsdk2004`'s AXOut.c
+# body is five statements — read the old pointer, disable interrupts, store
+# the new one, restore, return the old — and this function is those five
+# instructions in that order around the word at 0x8027DF00, which is
+# therefore `__AXUserFrameCallback`. `__AXOutNewFrame` calls it through
+# `blrl` when it is non-null, once per AX frame.
+#
+# `sd_ax_frame_callback` is what this game registers there, and
+# `sd_stream_pump` is the part of it that matters to streamed media: it walks
+# eight channels of stride 0x10C from 0x8021A070 and, for a channel in state
+# 9, posts to the sound threads. That is the only driver of the sound
+# subsystem that comes from outside it — every other sender is one sound
+# thread waking another.
+.text 0x80032E20 0x44 AXRegisterCallback own+sdk2004
+.sbss 0x8027DF00 0x4 __AXUserFrameCallback own+sdk2004
+.text 0x8004EB8C 0x44 sd_ax_frame_callback own
+.text 0x80054958 0x348 sd_stream_pump own

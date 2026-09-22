@@ -310,8 +310,8 @@ is the one that governs the work:
 
 | Measure | | |
 |---|---|---|
-| **1. Functions named** | 1,072 / 18,485 | **5.8%** |
-| — `main.dol` | 1,028 / 1,818 | 56.5% |
+| **1. Functions named** | 1,075 / 18,485 | **5.8%** |
+| — `main.dol` | 1,031 / 1,818 | 56.7% |
 | — `mgso_pal.rel` | 44 / 16,667 | 0.3% |
 | **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
 | **3. SDK entry points the engine calls, named** | 206 / 336 | **61.3%** |
@@ -2723,7 +2723,9 @@ different population in a working run would have been wrong.
   established.
 
 **Out:** 20 symbols. `main.dol` 1,025 → 1,028; `mgso_pal.rel` 27 → 44; total
-1,052 → **1,072**.
+1,052 → **1,072**. A follow-on pass (F233) added `AXRegisterCallback`,
+`__AXUserFrameCallback`, `sd_ax_frame_callback` and `sd_stream_pump`, taking
+`main.dol` to 1,031 and the total to **1,075**.
 
 ## Stage 9 — Verify against the original · **PLANNED**
 

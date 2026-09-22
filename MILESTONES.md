@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-22
 
-**Phase 0, in progress — 1,279 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,283 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -570,6 +570,20 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **The external driver found — and it is present in our run** (F233).
+      `__AXOutNewFrame` calls a user hook through a **`blrl`** (not a
+      `bctrl`, which is why the first search missed it) at `0x8027DF00` =
+      `__AXUserFrameCallback`; `0x80032E20` is `AXRegisterCallback`, matching
+      `dolsdk2004`'s five-statement body instruction for instruction. The
+      chain is AI/DSP interrupt → `sd_ax_frame_callback` → `sd_stream_pump`
+      (8 channels, stride `0x10C`, acting on state 9) → `OSSendMessage`, and
+      it is the **only** driver from outside the sound subsystem. **All of it
+      is present in our run**: the callback pointer, both active channels in
+      state 9, six idle — identical to Dolphin — and all three sound queues
+      have carried traffic (cursors 30, 34, 70) and stopped. So the fault is
+      inside the pump, which posts only while `channel->0x20` is zero.
+      **`MGS_TRACE_FN` reported 0 calls for the callback and that means
+      nothing** — those counts are lower bounds.
 - [x] **The whole stall, end to end — the sound layer stops asking** (F231).
       `fn_1_8FE8`'s 64 KB buffer is **completely full** (`+0xBC` = `+0xB8` =
       `0x10000`), and across a run `+0xBC` shows **17 increases and 3
