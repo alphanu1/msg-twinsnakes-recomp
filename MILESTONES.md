@@ -583,6 +583,19 @@ This is the project. ~200 functions and the widest error bars in the plan.
       the good configuration reproduces to the exact step. **F220's rule
       again: check `uptime` before believing a run.** Tree reverted to
       F236's state; the diagnostic kept.
+- [x] **Palette refusals: 3,198 → 0** (F241). `BP_LOAD_TLUT0` took 24 bits of
+      the TLUT address; the GameCube decodes **25 bits of the shifted value**
+      and ignores the rest, which this game sets. Unmasked they folded to
+      offsets of 148 MB and 81 MB into a 24 MB block, so every CI-format
+      texture was refused. Masking with `0x01FFFFFF` collapses the three
+      observed values onto **two** real palettes — two different register
+      values landing on the same palette is the check that the mask is right,
+      not merely in range. Dolphin does the same and names the symptom
+      ("Some games (WW, MKDD) set them"); recorded in `THIRD_PARTY.md`
+      against `extern/dolphin` @ `ee018d0` per rule 11. Now: **0 refusals,
+      151 decoded, 29,338 hits**, and `fmt 0x9 335x17` decodes clean at
+      roughness 0. **Does not fix** the `fmt 0x6 512x448` noise, which is a
+      different texture.
 - [x] **movie.dat STREAMS, and real video frames decode** (F240). The
       `pc = 0x800` crash is fixed: `mgs_fp_unavailable` now accepts a context
       outside MEM1 when **the OS vouches for it** — `OSContext` is

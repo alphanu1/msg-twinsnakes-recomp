@@ -9983,5 +9983,55 @@ quiet machine before discarding a change.
 
 ---
 
+### F241 — 3,198 palette refusals were 3 bits of address the hardware ignores
+
+F240 left "3,198 texture refusals, all `palette`" as the next thread. It is
+one line, and the fix is exact.
+
+**What was refused.** The refusal path printed a count and nothing else, so
+it was made to say which address, as the decode path already did:
+
+    [tex] refused PALETTE: format=0x9 335x17 tlut=0x88DC2600 entries=256
+    2388 x  64x64   tlut=0x88DC1C00 entries=16
+     512 x  64x64   tlut=0x84DC1C00 entries=16
+      42 x 335x17   tlut=0x88DC2600 entries=256
+
+`guest_ptr` folds an address with `& 0x3FFFFFFF`, so `0x88DC2600` becomes an
+offset of **148 MB** into a 24 MB block and `0x84DC1C00` one of 81 MB. Both
+are refused, correctly — they are not addresses.
+
+**Why they look like that.** `BP_LOAD_TLUT0` carries the palette's address in
+32-byte units, and this code took 24 bits of it. The GameCube decodes 25 bits
+of the *shifted* value and ignores anything above. Masking accordingly:
+
+    0x08DC2600 & 0x01FFFFFF -> 0x80DC2600
+    0x08DC1C00 & 0x01FFFFFF -> 0x80DC1C00
+    0x04DC1C00 & 0x01FFFFFF -> 0x80DC1C00
+
+**The third line is the check.** Two *different* register values collapse onto
+the same palette, which a wrong mask would not do — it is what distinguishes
+this from a mask that merely brings the number into range.
+
+**Dolphin says the same thing and names the symptom**, in `BPStructs.cpp`:
+`addr = addr & 0x01FFFFFF` with the comment "The GameCube ignores the upper
+bits of this address. Some games (WW, MKDD) set them." Twin Snakes is another
+such game. Recorded in `THIRD_PARTY.md` against `extern/dolphin` @ `ee018d0`
+per rule 11.
+
+**Result:**
+
+    texture refusals: 0 size, 0 texels, 0 palette, 0 alloc, 0 decode
+    textures: 151 decoded, 29338 hits, 151 misses, 0 refused, 0 evicted
+
+and a texture shape that had never decoded appears, clean:
+`fmt 0x9 335x17 mean 0 max 0`.
+
+**What this does NOT fix.** `fmt 0x6 512x448` still decodes at roughness 25,
+which is still the noise on screen. That is a different texture and a
+different problem; the paletted ones are CI-format artwork (UI and overlays),
+not the movie's video frame.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

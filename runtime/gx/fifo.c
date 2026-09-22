@@ -343,8 +343,25 @@ static void bp_side_effect(MgsGx* gx, uint8_t reg, uint32_t val)
 {
     if (reg == BP_LOAD_TLUT0) {
         /* The address, in 32-byte units, as everything in the command stream
-         * is. Using it unshifted lands 32 times too low. */
-        gx->bp.pending_tlut_addr = 0x80000000u | ((val & 0x00FFFFFFu) << 5);
+         * is. Using it unshifted lands 32 times too low.
+         *
+         * AND THE TOP BITS ARE RUBBISH THE HARDWARE IGNORES. This game sets
+         * bits above the 25 the GameCube decodes, so the shifted value
+         * arrives as 0x88DC2600 or 0x84DC1C00 - folded by `guest_ptr` those
+         * are offsets of 148 MB and 81 MB into a 24 MB block, so every
+         * paletted texture was refused: 3,198 of them in a run, which is
+         * every CI-format texture the movie draws.
+         *
+         * Masking to 25 bits collapses all three observed values onto two
+         * real palettes (0x80DC2600 and 0x80DC1C00, the latter from two
+         * different encodings - which is the check that the mask is right
+         * rather than merely plausible).
+         *
+         * Dolphin does the same and says why, in BPStructs.cpp: "The
+         * GameCube ignores the upper bits of this address. Some games (WW,
+         * MKDD) set them." Twin Snakes is another. */
+        gx->bp.pending_tlut_addr =
+            0x80000000u | (((val & 0x00FFFFFFu) << 5) & 0x01FFFFFFu);
         return;
     }
     if (reg == BP_LOAD_TLUT1) {

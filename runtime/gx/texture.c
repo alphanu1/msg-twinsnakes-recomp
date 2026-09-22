@@ -374,7 +374,20 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     if (format == 0x8u || format == 0x9u || format == 0xAu) {
         unsigned entries = (format == 0x8u) ? 16u : (format == 0x9u) ? 256u : 16384u;
         const uint8_t* p = guest_ptr(mem, tlut_addr, entries * 2u);
-        if (!p) { ++c->refused; ++c->refused_palette; return NULL; }
+        if (!p) {
+            ++c->refused; ++c->refused_palette;
+            /* SAY WHICH ADDRESS, as the decode path already does. A count
+             * of 3,198 palette refusals says a paletted texture never
+             * reaches the screen and nothing about whether the TLUT address
+             * is zero (never loaded), out of range, or simply too short for
+             * the entry count this format implies. */
+            if (c->trace_refusals)
+                fprintf(stderr, "[tex] refused PALETTE: format=0x%X %ux%u "
+                                "tlut=0x%08X entries=%u tlutfmt=%u\n",
+                        format, width, height, tlut_addr, entries,
+                        tlut_format);
+            return NULL;
+        }
         for (i = 0; i < entries; ++i) palette_copy[i] = be16(p + i * 2u);
         palette = palette_copy;
     }

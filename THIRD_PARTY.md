@@ -54,6 +54,16 @@ Two things still apply:
 | `ww` (Wind Waker recomp) | **MIT** | reference | The shape of a true native port: own recompiler, GX→D3D11, TEV→HLSL. MIT, so lifting from it is actually permitted — the one reference here without a licence cost. |
 | `RecompCore` | **GPL-2.0+/GPLv3-compatible** | liftable | Dolphin fork with static-recomp core and interpreter fallback. The fallback design can now be taken, not just read. 102 MB, the largest entry. |
 
+### Behaviour taken from Dolphin, with the commit
+
+Rule 11 wants a commit hash, not "copied from Dolphin". These are behaviours
+read out of `extern/dolphin` @ `ee018d0` and reimplemented here, rather than
+files copied — but the *knowledge* is Dolphin's and is recorded as such.
+
+| What | Where here | Dolphin source |
+|---|---|---|
+| The TLUT load address is 25 bits; the GameCube ignores the rest | `runtime/gx/fifo.c`, `BP_LOAD_TLUT0` | `Source/Core/VideoCommon/BPStructs.cpp`, `BPMEM_LOADTLUT1`: `addr = addr & 0x01FFFFFF` with the comment "The GameCube ignores the upper bits of this address. Some games (WW, MKDD) set them." Twin Snakes is another such game — it set them, and every CI-format texture in the movie was refused until this matched the hardware (HANDOFF F241). |
+
 ### The memory card's wire protocol
 
 `runtime/platform/exi_card.c` implements the card as an EXI device. The
