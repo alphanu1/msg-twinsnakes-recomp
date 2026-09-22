@@ -43,12 +43,44 @@ phase 3.
 | 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **boots — Konami logo at ~43 fps**; one interpreter fallback remains |
 | 2b | *(within 2)* Our own renderer | — | — | **the Konami logo is drawn by `runtime/gx/`**, 0 parser desyncs; the 86% of the boot that was `memcpy`/`__fill_mem` is now native (F92) — measured before the change, effect not yet re-measured |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **runs 2M steps without faulting**; waiting on MMIO we have not built |
+| **2c** | **Audio — moved from phase 4 on 2026-09-22** | AX voice mixer, per-voice SRC, SDL output; music, codec and SFX match Dolphin within tolerance, **and the movie plays at the right rate** | 3–6 weeks | **IN PROGRESS** — the DSP's *pacing* is already modelled (`host/ax_dsp.c`); what remains is the mixer and an audio device |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
-| 4 | Audio | Music, codec calls and SFX match Dolphin within tolerance | 3–6 weeks | blocked on 3 |
+| ~~4~~ | *moved to 2c, 2026-09-22* | — | — | — |
 | 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 4 |
 | 6 | Port features | Public release | ongoing | blocked on 5 |
 
 ---
+
+## Audio moved out of phase 4 (2026-09-22)
+
+**It is not an output, it is the clock**, and that is why it cannot wait.
+
+`mpeg_movie_task` takes the movie's playback position straight from the sound
+system — `sd_sound.c`'s position function, scaled by 300/1000, stored as
+`stream->0x08` — and every record timestamp in the streamed-media pipeline is
+compared against it. Audio does not decorate the picture; it paces it.
+
+**What was believed:** that the game "runs silently without it", so audio
+could be last. **What is now known,** established over F218–F245:
+
+- With no DSP mixing, the AX voice's `currentAddress` never advances → the
+  stream pump never sees a block complete → four sound threads sleep on empty
+  queues → the decode buffer never drains → the record ring's head pins → the
+  movie parks in state 1 with **321 decoded video records unread**. Every link
+  measured (F231–F236).
+- Modelling that one field — no mixing, no samples — unfroze it (F236), and
+  the same change let **`movie.dat` stream for the first time since F187**
+  (F240).
+- Guest video time was running **10.6× ahead** of guest audio time; correcting
+  it improved streaming again (F245).
+
+**Two consequences for the order.** Deferring audio does not defer its cost —
+it pays it as mis-attributed *rendering* bugs, because the renderer is being
+judged against a picture whose timing is wrong for audio reasons. And it
+withholds the best debugging instrument available: **a sound output is a
+continuous, audible check on pacing** that no counter in a log replaces.
+
+`twin-snakes-native-port-design.md` is updated in the same change (rule 12).
 
 ## Why this order
 

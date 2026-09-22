@@ -259,8 +259,9 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | 0. Ground truth and symbols | Dump both discs, identify the SDK build from `main.dol` strings, signature-match SDK functions, run the game in Dolphin and log every SDK call for the first 60 s | A symbol map covering every SDK entry point the game calls, plus function boundaries for the engine code | 2–4 weeks |
 | 1. Boot in ModernGekko | Run DolRecomp on both `main.dol` files; run under the ModernGekko/RecompCore template so Dolphin provides GX and audio | Title screen renders through recompiled CPU code with no interpreter fallback hits for the boot path | 1–2 weeks |
 | 2. Native OS + DVD + PAD, headless | Replace the Dolphin runtime with your own for OS, DVD (including the virtual two-disc mount), VI stubs, PAD; GX calls log and discard | Game runs its main loop headless, reads assets, responds to input, `OSReport` output matches Dolphin's | 3–4 weeks |
+| **2c. Audio (moved from phase 4, 2026-09-22)** | AX voice mixer, per-voice SRC, mix to SDL output; disc streaming for voice-over and music | Music, codec calls and SFX match Dolphin output within tolerance, **and the movie plays at the right rate** | 3–6 weeks |
 | 3. GX renderer | Vertex converter, TEV shader generator, texture decoder, EFB copies, Vulkan backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
-| 4. Audio | AX voice mixer, ADPCM, disc streaming for voice-over and music | Music, codec calls and SFX match Dolphin output within tolerance | 3–6 weeks |
+| ~~4. Audio~~ **moved to 2c** | — | — | — |
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
 
@@ -310,11 +311,51 @@ phase 3 row is unchanged.
 flowchart LR
     A[0 Ground truth + symbols] --> B[1 Boot in ModernGekko]
     B --> C[2 Native OS/DVD/PAD]
-    C --> D[3 GX renderer]
-    D --> E[4 Audio]
-    E --> F[5 Complete]
+    C --> D2[2c Audio]
+    D2 --> D[3 GX renderer]
+    D --> F[5 Complete]
     F --> G[6 Port features]
 ```
+
+### Why audio moved out of phase 4, and what it cost to learn
+
+**What was believed.** That audio could be last because "the game runs
+silently without it" — the wording in the SDK-replacement section above. The
+phase table put it after the renderer on that basis.
+
+**What is now known.** It is not an output, it is the **clock**. This game's
+movie player takes its playback position straight from the sound system:
+`mpeg_movie_task` calls `sd_sound.c`'s position function, scales the result
+by 300/1000 and stores it as `stream->0x08`, which is what every record
+timestamp is then compared against. Audio does not decorate the picture; it
+paces it.
+
+**How that was established**, over F218-F245:
+
+- With no DSP mixing the AX voice's `currentAddress` never advances, so the
+  stream pump never sees a block complete, so four sound threads sleep on
+  empty queues, so the engine's decode buffer never drains, so the record
+  ring's head pins, so the movie parks in state 1 with 321 decoded video
+  records unread. Every link measured (F231-F236).
+- Modelling *only* that one field — no mixing, no samples — unfroze it
+  (F236), and the same change let `movie.dat` stream for the first time
+  since F187 (F240).
+- The instruction that slaves the movie clock to the audio position was then
+  read directly out of `mpeg_movie_task` (F245), confirming F218's original
+  claim, which had been withdrawn in F222/F223 on weaker evidence.
+- Guest video time was running **10.6x** ahead of guest audio time, and
+  correcting it improved streaming again (F245).
+
+**What that means for the order.** Everything downstream of the movie — the
+renderer's own correctness included — is being judged against a picture whose
+timing is wrong for audio reasons. Deferring audio does not defer the cost;
+it pays it in mis-attributed rendering bugs. It also removes the best
+debugging instrument available: **a sound output is a continuous, audible
+check on pacing** that no counter in a log replaces.
+
+**Decided 2026-09-22.** Audio becomes phase 2c and is done now, before the
+renderer's remaining work. `host/ax_dsp.c` already models the DSP's pacing;
+what phase 2c adds is the real voice mixer and an SDL audio device.
 
 Phase 1 is deliberately a throwaway: running under the Dolphin-derived runtime first proves the recompiled CPU code is correct before you can blame your own SDK shims. Diff the two runtimes' `OSReport` logs and memory snapshots at fixed frame counts; that harness stays useful for the rest of the project.
 
