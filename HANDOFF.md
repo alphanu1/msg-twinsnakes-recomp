@@ -9339,5 +9339,88 @@ slower; runs are bounded by `MGS_STEPS` alone.
 
 ---
 
+### F231 — the whole stall, end to end: the sound layer stops asking for audio
+
+Every link is now measured rather than inferred, and they form one chain from
+Konami's sound layer to the frozen picture.
+
+**The consumer's buffer fills and is never drained.** `fn_1_8FE8`'s node
+(`0x8109D760`) dumped at the stall:
+
+    +0x40 00002000        chunk it needs free (8 KB)
+    +0xB0 00000000        not at end of stream
+    +0xB8 00010000        buffer size, 64 KB
+    +0xBC 00010000        bytes currently buffered  <- completely full
+    +0xC0 810EA600        read pointer, still at the base
+    +0xC4 810EA600        write pointer, wrapped
+    +0xC8 810EA600        buffer base
+
+`avail = 0xB8 - 0xBC` is **0**, so `avail < 0x40` is taken on every call and
+every tag-1 record is handed back with `gcn_pool_clear_entry_flag`. Watching
+`+0xBC` across a run: **17 increases, 3 decreases** — and of the three, one
+is the allocator's `memset` at init and two are resets from `fn_1_8D98`. It
+climbs 0x2000 at a time from 0 to 0x10000, written from module `0x90D0`
+(`fn_1_8FE8`'s own `memcpy`), and after the last fill nothing reduces it
+again.
+
+**The drain is request-driven, and the requests stop.** `fn_1_8D98` services
+a queue:
+
+    addi r3, r28, 0x48          the node's OSMessageQueue
+    addi r4, r1, 0x8
+    li   r5, 0x0
+    bl   fn_80020C3C            OSReceiveMessage, non-blocking
+
+Each message is a request with a destination at `+0x00` and a byte count at
+`+0x04`; the handler copies that many bytes out of the ring buffer and
+reduces `+0xBC`. Two were served in our run — the two decreases — and then
+none. `fn_1_8D98` also calls **`fn_80053178`**, which by the file attribution
+in `config/symbols/main.dol.files.txt` falls inside **`sd_stream2.c`**
+(between the attributed rows at line 1234 and line 1607). That is Konami's
+own streaming **sound** layer.
+
+**So the blocker is audio, and this is the measurement that shows it.**
+Earlier sessions inferred it from pacing (F218) and then withdrew most of
+that (F222, F223). This is a different and much harder line of evidence: a
+buffer that provably fills and stops, a drain that provably runs on messages
+that provably stop arriving, and a requester that is provably in the sound
+layer's translation unit.
+
+**The chain, in full.** Each arrow is a measurement in this session or an
+instruction read in the binary:
+
+    sd_stream2.c stops sending requests
+      -> fn_1_8D98's OSReceiveMessage returns nothing
+      -> the 64 KB buffer never drains (0xBC pinned at 0x10000)
+      -> fn_1_8FE8 refuses each tag-1 record (avail 0 < 0x2000)
+         and returns it with the claim bit cleared
+      -> ring 0's read cursor cannot advance past the head
+      -> the ring stays 80% full, so the refill correctly declines
+         (free 0xB6D0 <= size/3 0x15555)
+      -> no tag-2 record is ever produced
+      -> gcn_pool_acquire(ring 0, 2) returns null in fn_1_249A64
+      -> obj->0x25E8 stays null
+      -> fn_1_249AB8 sets task mask bit 3 and never clears it
+      -> level 3 is gated, so the movie object's own node never runs
+      -> mpeg_movie_task stays in state 1 and never claims any of its
+         321 tag-0xE video records
+      -> the picture is frozen and event 0x006647BA is never posted
+
+F225's "an event key nothing posts" is the far end of this. Nothing is wrong
+with the key, the event system, the disc reads, the record rings, the refill
+or the video data — all of those were suspected in turn and each has now been
+eliminated by measurement.
+
+**Next, and stated as a question rather than an answer.** Why does
+`sd_stream2.c` stop sending requests? That is where this rejoins the audio
+work, and the open items there are real: `__OSInitAudioSystem` is still
+stubbed, blocked behind `EXIGetID+0x2D0` recursing without bound when
+`EXILock` never succeeds. Whether the requester is driven by the AX frame
+callback, by the audio DMA interrupt, or by a thread waiting on a queue of
+its own is **not yet established**, and guessing between them is exactly what
+cost F218-F221.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

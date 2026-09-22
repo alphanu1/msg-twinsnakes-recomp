@@ -570,6 +570,22 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **The whole stall, end to end — the sound layer stops asking** (F231).
+      `fn_1_8FE8`'s 64 KB buffer is **completely full** (`+0xBC` = `+0xB8` =
+      `0x10000`), and across a run `+0xBC` shows **17 increases and 3
+      decreases** — one the allocator's `memset`, two resets from
+      `fn_1_8D98`. That drain is **request-driven**: it services an
+      `OSMessageQueue` at `node+0x48` via `OSReceiveMessage`, and it also
+      calls `fn_80053178`, which the file attribution places inside
+      **`sd_stream2.c`** — Konami's streaming sound layer. Two requests were
+      served, then none. **Audio is the blocker, by measurement**: buffer
+      fills and stops, drain runs on messages, messages stop, requester is in
+      the sound layer. Everything downstream — the pinned ring, the gated
+      level 3, the movie parked in state 1 with 321 unread video records,
+      F225's unposted key — follows from that one stop.
+      **Open and deliberately not guessed:** what drives the requester (AX
+      frame callback, audio DMA interrupt, or its own thread). Guessing
+      between those is what cost F218–F221.
 - [x] **The video is all there; the pin is one consumer** (F230). There are
       **two** rings (`bss_55BF4` is an array of two descriptors). The movie's
       own ring holds **321 records, all tag `0xE`** — the *same 321* Dolphin
