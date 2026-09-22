@@ -40,16 +40,33 @@ phase 3.
 | Phase | Goal | Exit criterion | Estimate | State |
 |---|---|---|---|---|
 | 0 | Ground truth and symbols | Symbol map covering every SDK entry point the game calls, plus engine function boundaries | 2–4 weeks | **in progress** — discs extracted, SDK identified |
-| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **boots — Konami logo at ~43 fps**; one interpreter fallback remains |
+| 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **BYPASSED, not completed.** This phase means running under the *Dolphin-derived* template so Dolphin supplies GX and audio. We never did: the own runtime came first. Its purpose — proving the recompiled CPU before blaming our own shims — was therefore never bought, and every CPU-level doubt since has had to be settled another way. The host-instruction fallback now reports **unhandled: 0**. |
 | 2b | *(within 2)* Our own renderer | — | — | **the Konami logo is drawn by `runtime/gx/`**, 0 parser desyncs; the 86% of the boot that was `memcpy`/`__fill_mem` is now native (F92) — measured before the change, effect not yet re-measured |
-| 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **runs 2M steps without faulting**; waiting on MMIO we have not built |
+| 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **THIS IS WHERE WE ARE.** Runs **400M steps with no fault**, reads 9 files / 21 MB, **reaches the main menu and responds to input**, streams `movie.dat` and `demo.dat`. Exit criterion **not** met: the `OSReport`-against-Dolphin comparison has never been run. |
 | **2c** | **Audio — moved from phase 4 on 2026-09-22** | AX voice mixer, per-voice SRC, SDL output; music, codec and SFX match Dolphin within tolerance, **and the movie plays at the right rate** | 3–6 weeks | **IN PROGRESS** — the DSP's *pacing* is already modelled (`host/ax_dsp.c`); what remains is the mixer and an audio device |
-| 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | blocked on 2 |
+| 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | **partly underway, not blocked.** The software rasteriser draws textured geometry, video frames and subtitles with **0 parser desyncs** and 0 texture refusals; per-stage TEV added (F242). No Vulkan backend, and nothing frame-compared against Dolphin yet. |
 | ~~4~~ | *moved to 2c, 2026-09-22* | — | — | — |
-| 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 4 |
+| 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 3 |
 | 6 | Port features | Public release | ongoing | blocked on 5 |
 
 ---
+
+## Where we actually are (2026-09-22)
+
+**Phase 2**, with parts of 3 underway. Worth stating plainly because the
+numbering had drifted from the truth and the table said "runs 2M steps"
+while the game was reaching its main menu.
+
+**Phase 1 was bypassed, not completed.** It means running under the
+Dolphin-derived template so Dolphin supplies GX and audio, and we never did
+it — the own runtime came first. Its whole purpose was to prove the
+recompiled CPU *before* our own shims could be blamed for anything, and that
+insurance was never bought. Every CPU-level doubt since has had to be settled
+some other way, which is a real cost and is why it is recorded rather than
+quietly ticked.
+
+Audio is **2c** because it sits inside phase 2, alongside 2b's renderer —
+not after phase 3.
 
 ## Audio moved out of phase 4 (2026-09-22)
 
