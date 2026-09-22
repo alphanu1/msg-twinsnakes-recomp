@@ -9767,5 +9767,51 @@ always stopped — what moved is `demo.dat` and the record ring.
 
 ---
 
+### F237 — two attempted fixes for the FP fault, and why neither is judged yet
+
+F236 left one bug: an FP-unavailable exception (`pc = 0x800`) refused because
+`mgs_fp_unavailable` requires `OS_CURRENTCONTEXT` to be sane. A one-shot
+diagnostic now names the address, and it is a **real thread**:
+
+    [fp] refused: OSCurrentContext = 0x7F4A5630 is not a usable context
+
+`0x7F4A5630` is the prio-10 worker blocked in `gcn_worker_take_request` in
+the thread dump. So the context is genuine; `context_is_sane` rejects it only
+because it lives in the overlay's BAT-mapped window and the test predates
+that window — it demands `addr >> 28 >= 8` and `off + 768 <= 24 MB`, and
+`gptr` a few hundred lines above has known about both windows all along.
+
+**Two fixes were tried.** Widening `context_is_sane` to accept the second
+window; and, narrower, a structural test — `OSContext` is the first member of
+`OSThread` (dolsdk2004 OSThread.h), so a genuine current context *equals*
+`OSCurrentThread`, which uninitialised memory cannot satisfy by accident,
+applied to the lazy-FP path alone.
+
+**Both runs looked much worse, and both measurements are INCONCLUSIVE.**
+They were taken while three `quartus_fit` processes were using roughly 1,800%
+CPU between them; `uptime` read a load average of **32**. F220 established
+that determinism here is load-dependent, and the evidence that it had gone is
+in the numbers themselves: the two "bad" runs stopped at **2,595,625** and
+**2,689,294** steps, two different values, where the good configuration
+reproduces to the exact step (112,962,303, twice). A run that no longer
+reproduces is not measuring the change.
+
+**So nothing is concluded about either fix.** The tree is back to the state
+that produced F236's result — strict `context_is_sane`, plus the new
+diagnostic, which is worth keeping on its own. The dead helper was removed
+rather than left commented-in, because a function nobody calls carrying a
+conclusion nobody can support is worse than no function.
+
+**This is the same trap as F222 and F220, walked into again**, and the tell
+was available before the conclusion: F220's own rule is that a measurement
+taken under load is not a measurement. Check `uptime` before believing a run,
+not after.
+
+**What the default path does, checked at the same time:** unchanged and
+clean. 40M steps, no fault, `pc = 0x7F0F8450` at the step limit. The audio
+work is behind `MGS_DSP_RESUME` and cannot affect it.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

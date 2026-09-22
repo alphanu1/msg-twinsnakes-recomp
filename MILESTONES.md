@@ -570,6 +570,19 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **The FP fault is named, and two fixes are UNJUDGED** (F237). A
+      one-shot diagnostic gives the refused address: `OSCurrentContext =
+      0x7F4A5630`, which the thread dump shows is a **real** worker thread —
+      `context_is_sane` rejects it only for living in the overlay's
+      BAT-mapped window, a window `gptr` has always known about. Widening the
+      test, and a narrower structural test (`OSContext` is `OSThread`'s first
+      member, so a genuine context equals `OSCurrentThread`), both *looked*
+      far worse — **and both measurements are void**: taken at load average
+      **32** under three `quartus_fit` processes, and the tell is that they
+      stopped at 2,595,625 and 2,689,294 steps, two different values, where
+      the good configuration reproduces to the exact step. **F220's rule
+      again: check `uptime` before believing a run.** Tree reverted to
+      F236's state; the diagnostic kept.
 - [x] **THE STALL IS FIXED — the movie decodes and draws** (F236).
       `host/ax_dsp.c` models the DSP's one observable effect: each AX voice's
       `currentAddress` advances by `160 * srcRatio` per frame, looping at

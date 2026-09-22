@@ -337,6 +337,15 @@ static void gwrite_f32(void* cpu, uint32_t addr, double d)
  * still be initialising - a bad pointer here would scribble 768 bytes over
  * whatever it points at, and that corruption would surface somewhere else
  * entirely. */
+/* MEM1 ONLY, AND STRICTLY. Widening this to the overlay's BAT-mapped window
+ * was tried and is WRONG (F237): it let `fpu_save`/`fpu_load` write 768 bytes
+ * through pointers that were not contexts at all, and the run got worse, not
+ * better - 53M steps to a wild jump against 113M to a clean report, with zero
+ * voice advances and an uninitialised ring. The strictness is load-bearing:
+ * this accessor writes a register file through a guest pointer, and refusing
+ * to guess is the whole point of it. What the refusal costs is a real
+ * exception reported instead of serviced, which is a diagnostic problem, not
+ * a reason to write through an address that failed its own check. */
 static int context_is_sane(uint32_t addr)
 {
     uint32_t off = addr & 0x3FFFFFFFu;
@@ -425,8 +434,18 @@ static int mgs_fp_unavailable(void* cpu)
     uint32_t owner = gread32(cpu, OS_FPUCONTEXT);
     uint32_t srr0, srr1;
 
-    if (!context_is_sane(ctx))
+    if (!context_is_sane(ctx)) {
+        /* Say WHICH address was refused, once. "Unhandled exception at
+         * 0x800" with no context value is what made F236's crash look like
+         * an audio bug for as long as it did. */
+        static int said;
+        if (!said) {
+            said = 1;
+            fprintf(stderr, "[fp] refused: OSCurrentContext = 0x%08X is not "
+                            "a usable context\n", ctx);
+        }
         return 0;                /* no current context: report, do not guess */
+    }
 
     if (owner != ctx) {
         gwrite32(cpu, OS_FPUCONTEXT, ctx);
