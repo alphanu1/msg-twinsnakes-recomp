@@ -583,6 +583,20 @@ This is the project. ~200 functions and the widest error bars in the plan.
       the good configuration reproduces to the exact step. **F220's rule
       again: check `uptime` before believing a run.** Tree reverted to
       F236's state; the diagnostic kept.
+- [x] **The event IS posted now; the movie reaches PLAYING** (F239).
+      `MGS_FIND_WORD=0x006647BA` finds the key in the **event table**
+      (`bss_253F0 + 0`), where F225 watched 822 writes and never saw it. It is
+      delivered too: the context's `+0x3C` goes `0 → 1`, `+0x40` is consumed
+      and cleared to `-1`, and `+0x44`/`+0x48` pick up **512 × 320**. The task
+      state runs `0 → 2 → 1 → 2 → 1`: it reaches **state 2 (playing) twice**,
+      where it advances the stream clock by `0xC` per call — and that clock is
+      what record timestamps are compared against, so **ring 1 drains only
+      while state 2 runs**. It ran twice, hence 321 records still unread and
+      `movie.dat` still at `+0x38000`. Both `2 → 1` transitions come from
+      `mpeg_poll_stream_events`' code-**0** branch: something posts a *stop*.
+      **Not yet judged** — Dolphin cycles the same field too (1 at 25.4s, 0 at
+      25.7s, 1 at 64.4s), so a start/stop/restart may be normal and the
+      difference may be that ours never restarts.
 - [x] **The AUDIO path unblocks — and the picture is NOISE** (F236, corrected
       by F238). `host/ax_dsp.c` plus `MGS_DSP_RESUME=1` genuinely unblocks the
       audio half: ring-0 tag-2 records **0 → 204**, the read cursor moves, the

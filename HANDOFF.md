@@ -9859,5 +9859,73 @@ I quoted around it.
 
 ---
 
+### F239 — the event IS posted now, and the movie reaches its playing state
+
+F238 said the video side was untouched by the audio fix. That was measured at
+exit only, and it is wrong in an interesting way: the video side *did* move,
+it just does not stay moved.
+
+**F225's central claim no longer holds.** Searching guest memory for the
+movie's key with `MGS_FIND_WORD=0x006647BA` finds it in two places:
+
+    MEM1    0x8107F0B8 = 0x006647BA   the movie's own copy (context +0x38)
+    overlay 0x7F4BEF90 = 0x006647BA   bss_253F0 + 0 -- THE EVENT TABLE
+
+F225 watched 822 writes to that table and never saw this key. It is there
+now. The entry is complete: key, `0x00010001` at +0x04, a payload pointer
+`0x7F4BF794` (which is the buffer's own `+0x804`, just past the count word),
+and `1` at +0x0C.
+
+**And it is delivered.** Watching the context's `+0x38..+0x4F` through a run:
+
+    +0x3C:  0 -> 1        the event arrives, state 1 is released
+    +0x40:  0 -> -1       consumed and cleared, which is fn_1_149048's
+                          first path: g->0x3C = g->0x40; g->0x40 = -1
+    +0x3C:  1 -> 0
+    +0x44:  0 -> 0x200    512
+    +0x48:  0 -> 0x140    320
+
+So the movie is told to start, and sets up a 512x320 picture.
+
+**The state machine reaches PLAYING, twice, and is stopped both times.**
+Watching the task node's `+0x44`:
+
+    0 -> 2 -> 1 -> 2 -> 1      four transitions, then state 1 for ever
+
+State 2 is where the movie does its work, and the important line is:
+
+    0014948C  lwz r4, 0x3c(r30)     the stream
+    00149490  lwz r3, 0x8(r4)       its playback clock
+    00149494  addi r0, r3, 0xc
+    00149498  stw r0, 0x8(r4)       advance by 12 per call
+
+That clock is exactly what `fn_1_1482FC` compares record timestamps against
+before claiming them, so **ring 1 drains only while state 2 runs**. It ran
+twice. Hence 321 records still sitting there and `movie.dat` never read past
+`+0x38000`.
+
+**What stops it** is `mpeg_poll_stream_events`' code-**0** branch — an event
+whose payload code is 0 rather than 1:
+
+    001490D4  li  r0, 0x1
+    001490D8  stw r0, 0x44(r3)      task back to state 1
+    001490EC  stw r0, 0x3c(r3)      and g->0x3C = 0
+
+Both `2 -> 1` transitions are at that pc. So something posts a stop.
+
+**Not yet judged: whether that is even wrong.** Dolphin's same field cycles
+too — `+0x3C` reads 1 at 25.4s, 0 at 25.7s and 1 again at 64.4s — so a start,
+a stop 0.3s later and a restart is what the working run does as well. The
+difference may be that ours never gets the restart, or that ours never
+advances the clock far enough in between. That is the next measurement, and
+it wants a quiet machine.
+
+**So the corrected picture:** the audio fix unblocked the event path as well
+as the audio path. The movie now starts, sizes its picture and enters its
+playing state; it does not stay there long enough to consume a single video
+record, and what is drawn is therefore still noise.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
