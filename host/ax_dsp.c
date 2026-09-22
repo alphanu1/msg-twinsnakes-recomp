@@ -229,7 +229,7 @@ static void wr32pair(void* cpu, uint32_t at, uint32_t v)
 
 static uint64_t s_frames, s_advanced, s_looped, s_ended;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
-static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
+static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples, s_wrapped_fwd;
 static int      s_peak;
 static int      s_trace = -1;
 static unsigned s_traced;
@@ -273,6 +273,17 @@ void mgs_ax_dsp_frame(void* cpu)
         vl  = rd16(cpu, pb + PB_MIX_VL);
         vr  = rd16(cpu, pb + PB_MIX_VR);
 
+
+        /* MGS_AX_NO_ADPCM restores the pre-F248 behaviour - ADPCM voices
+         * skipped entirely, so their positions never move - purely so that
+         * "did decoding ADPCM change the guest's behaviour" can be answered
+         * by measurement instead of by argument. It is a bisect switch, not
+         * a mode anyone should run in. */
+        if (format == AX_FMT_ADPCM) {
+            static int no_adpcm = -1;
+            if (no_adpcm < 0) no_adpcm = getenv("MGS_AX_NO_ADPCM") != NULL;
+            if (no_adpcm) { ++s_adpcm_skipped; continue; }
+        }
 
         ++s_mixed_voices;
         ++s_advanced;
@@ -345,9 +356,37 @@ void mgs_ax_dsp_frame(void* cpu)
                     curr = loop + (curr - end - 1u);
                     ++s_looped;
                 } else if (looping) {
-                    curr = end;
+                    /* JUMP TO THE NEXT BLOCK, DO NOT RUN PAST IT.
+                     *
+                     * `loop > end` is the game saying "continue at `loop`"
+                     * before it has extended `end` to cover that block. Two
+                     * wrong answers were measured first: holding at `end`
+                     * stops the position and the movie goes back to the
+                     * F225 stall (8 reads of movie.dat against 34), and
+                     * running on keeps the movie but reads past the data
+                     * into unwritten ARAM, which took non-silent frames from
+                     * 53,159 to 369. Taking the loop point does both jobs -
+                     * the position moves forward, and it moves to where the
+                     * data actually is. */
+                    curr = loop;
                     ++s_starved;
-                    break;
+                    ++s_wrapped_fwd;
+                } else if (0) {
+                    /* HOLDING HERE STOPS THE MACHINE (F249).
+                     *
+                     * `loop > end` means the game has not yet rewritten the
+                     * window for the next block. Pinning the voice at `end`
+                     * looks tidy and is fatal: `sd_stream_pump` decides a
+                     * block has been consumed by watching this very position
+                     * move, so a position that stops means a stream that is
+                     * never refilled - and the movie went straight back to
+                     * the F225 stall, 8 reads of movie.dat instead of 34.
+                     *
+                     * So the position runs on instead. It is reading past
+                     * the block the game meant, which is wrong and is
+                     * counted; it keeps time, which is what everything
+                     * downstream is built on. */
+                    ++s_starved;
                 } else {
                     curr = end;
                     wr16(cpu, pb + PB_STATE, 0u);
@@ -398,11 +437,13 @@ void mgs_ax_dsp_report(void)
            (unsigned long long)s_mixed_voices,
            (unsigned long long)s_looped, (unsigned long long)s_ended);
     printf("  ADPCM samples decoded: %llu (voices skipped: %llu);"
-           " samples read outside ARAM: %llu; voices starved: %llu\n",
+           " samples read outside ARAM: %llu; voices starved: %llu"
+           " (%llu jumped to the next block)\n",
            (unsigned long long)s_adpcm_samples,
            (unsigned long long)s_adpcm_skipped,
            (unsigned long long)s_silent_reads,
-           (unsigned long long)s_starved);
+           (unsigned long long)s_starved,
+           (unsigned long long)s_wrapped_fwd);
     printf("  output: peak %d of 32767 (%.1f%% of full scale), "
            "%llu of %llu frames not silent\n",
            s_peak, 100.0 * s_peak / 32767.0,

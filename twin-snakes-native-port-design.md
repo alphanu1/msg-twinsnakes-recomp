@@ -64,7 +64,7 @@ Tools by stage:
 | PowerPC to C | DolRecomp (C11 or LLVM 19/20 objects) | Generated code; treat as a build artefact, never edit |
 | Native runtime | Your own C++20 library (see next sections) | SDK reimplementation |
 | Platform layer | SDL3 | Window, input, audio device, gamepad, filesystem |
-| Graphics | Vulkan with a D3D12 backend later, or SDL3 GPU if you want one code path | GX translation target |
+| Graphics | **SDL3 GPU — decided 2026-09-22.** One code path; SDL picks Vulkan, D3D12 or Metal | GX translation target |
 | Build | CMake + Ninja, vcpkg or system packages on Linux | One tree, both platforms |
 | Reference | Dolphin source (GPL) for exact hardware semantics; libogc headers for the public GX/OS API shapes | Read for behaviour, do not copy code unless you accept GPL for the whole port |
 
@@ -122,7 +122,7 @@ flowchart TD
     G[Generated C from main.dol + RELs<br/>never hand-edited] --> M[Guest memory + CPU context<br/>24 MB MEM1, 16 MB ARAM, big-endian]
     G --> P[Patch table<br/>SDK symbol → native function]
     P --> S[SDK shim layer<br/>OS, GX, DVD, PAD, AX, CARD, VI]
-    S --> R[Renderer<br/>GX state machine → Vulkan / D3D12]
+    S --> R[Renderer<br/>GX state machine → SDL3 GPU]
     S --> A[Audio mixer<br/>AX voices → float PCM]
     S --> F[Asset loader<br/>disc image or extracted folder]
     R --> H[Platform layer: SDL3<br/>window, input, audio device, files]
@@ -224,7 +224,7 @@ recomp/
 ├── runtime/          the native SDK (no game knowledge)
 │   ├── os/  dvd/  gx/  vi/  pad/  ax/  card/  aram/
 │   ├── memory/       guest memory, byte-swap accessors, PPCContext
-│   ├── gfx/          Vulkan backend, shader cache, texture decoder
+│   ├── gfx/          SDL3 GPU backend, shader cache, texture decoder
 │   └── platform/     SDL3 window, input, audio, paths
 ├── game/             game-specific glue: asset paths, REL list, hooks, enhancements
 ├── patches/          hand-written replacements for individual translated functions
@@ -244,7 +244,7 @@ Platform decisions:
 | Concern | Windows | Linux |
 | --- | --- | --- |
 | Compiler | Clang (clang-cl) preferred; MSVC works but is slower on the multi-MB generated files | Clang or GCC 13+ |
-| Graphics | Vulkan first; D3D12 later only if driver problems surface | Vulkan |
+| Graphics | **SDL3 GPU**, one backend, driver chosen at runtime | SDL3 GPU |
 | Packaging | Portable zip with a launcher that asks for the ISO | AppImage or Flatpak; Steam Deck is a first-class target given the ecosystem |
 | CI | GitHub Actions matrix; the CI builds the runtime and tools only, never the game (no DOL available) | Same |
 
@@ -260,7 +260,7 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | 1. Boot in ModernGekko | Run DolRecomp on both `main.dol` files; run under the ModernGekko/RecompCore template so Dolphin provides GX and audio | Title screen renders through recompiled CPU code with no interpreter fallback hits for the boot path | 1–2 weeks |
 | 2. Native OS + DVD + PAD, headless | Replace the Dolphin runtime with your own for OS, DVD (including the virtual two-disc mount), VI stubs, PAD; GX calls log and discard | Game runs its main loop headless, reads assets, responds to input, `OSReport` output matches Dolphin's | 3–4 weeks |
 | **2c. Audio (moved from phase 4, 2026-09-22)** | AX voice mixer, per-voice SRC, mix to SDL output; disc streaming for voice-over and music | Music, codec calls and SFX match Dolphin output within tolerance, **and the movie plays at the right rate** | 3–6 weeks |
-| 3. GX renderer | Vertex converter, TEV shader generator, texture decoder, EFB copies, Vulkan backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
+| 3. GX renderer | Vertex converter, TEV shader generator, texture decoder, EFB copies, SDL3 GPU backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
 | ~~4. Audio~~ **moved to 2c** | — | — | — |
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
@@ -318,6 +318,29 @@ flowchart LR
     F --> G[6 Port features]
     G --> H[7 Enhancements]
 ```
+
+### One renderer backend, not two (decided 2026-09-22)
+
+**What was written:** "Vulkan with a D3D12 backend later", and a repository
+layout naming a Vulkan backend. That is two backends to write, debug and keep
+in step, for one game.
+
+**What is now decided:** target **SDL3's GPU API** and write the backend
+once. Checked against the SDL3 actually installed here (3.4.14): `SDL_gpu.h`
+supports **Vulkan (SPIR-V), D3D12 (DXBC/DXIL) and Metal (MSL)**, and
+`SDL_HINT_GPU_DRIVER` selects between them at runtime. So Windows and Linux
+are the same code, and the driver becomes a setting rather than a port.
+
+**One correction to the idea as first put, because it matters for what we
+promise in the options menu:** *OpenGL is not an SDL GPU backend.* SDL3 ships
+GL headers and a 2D `SDL_Renderer` that can run on GL, but the GPU API is
+Vulkan/D3D12/Metal only. Offering the player "OpenGL or Vulkan" would
+therefore mean writing a second backend by hand, not setting a flag. If
+OpenGL is wanted later — for older hardware — it is a real piece of work and
+should be costed as one, not assumed to come free with SDL.
+
+**So the option we can honestly offer** is the GPU driver (Vulkan, D3D12,
+Metal as the platform allows), defaulting to SDL's own choice.
 
 ### Why audio moved out of phase 4, and what it cost to learn
 

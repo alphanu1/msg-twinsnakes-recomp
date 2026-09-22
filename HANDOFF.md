@@ -10373,5 +10373,50 @@ the mixer running without a device, so a batch run's timing is unchanged.
 
 ---
 
+### F249 — the voice position IS the stream's clock, and pinning it stalls everything
+
+Ben tested and reported the movie stuck again. It was, and the cause was my
+own "tidy" fix from F246.
+
+**Bisected, not guessed.** `MGS_AX_NO_ADPCM` was added to restore the
+pre-F248 behaviour exactly: with ADPCM decoding disabled, `movie.dat` still
+read **8** times. So F248 was not the cause, and the remaining suspect was
+F246's starve handling.
+
+**What that fix did.** When a streaming voice holds `loop > end` — the game
+saying "continue at `loop`" before it has extended `end` — F246 pinned the
+voice at `end` and stopped advancing it. That is tidy and it is fatal:
+`sd_stream_pump` decides a block has been consumed **by watching that
+position move**. A position that stops is a stream that is never refilled.
+
+Three behaviours, measured:
+
+| on `loop > end` | movie.dat | non-silent frames |
+|---|---|---|
+| pin at `end` (F246) | **8 reads** — the F225 stall | 53,159 |
+| run on past `end` | **34 reads** | 369 |
+| **jump to `loop`** | **34 reads** | 402 |
+
+Jumping to the loop point is what the hardware does and is what is now in
+the tree: the position moves forward *and* moves to where the data is.
+
+**The movie is back**: 34 reads of `movie.dat`, 124 of `demo.dat`, 7 luma
+frames and 14 chroma planes, with the mixer still at peak 10,750.
+
+**What is still wrong, plainly.** Only **402 of 62,763** frames are
+non-silent. The PCM voices spend most of their time reading a block the game
+has not written yet, so the movie's own audio is largely silence even though
+the ADPCM voices give a healthy peak. The fix is not another guess at the
+wrap rule: it is that the voice should not be overrunning at all, which means
+the refill is late, which is the next thing to measure.
+
+**The lesson.** F246's starve handling was introduced to fix a real defect
+(286,628 wraps in 62,763 frames) and replaced it with a worse one, because
+"hold still when you have no data" is correct for an audio device and wrong
+for a clock. In this game the voice position is not only how sound is played;
+it is how the engine tells the time.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -52,6 +52,21 @@ phase 3.
 
 ---
 
+## One renderer backend, not two (2026-09-22)
+
+The renderer targets **SDL3's GPU API**, written once. SDL3 (3.4.14 here)
+supports **Vulkan, D3D12 and Metal** through it, selected at runtime by
+`SDL_HINT_GPU_DRIVER`, so Windows and Linux are one code path and the driver
+is a setting rather than a second port. The design document said "Vulkan with
+a D3D12 backend later"; that is two backends to write and keep in step, for
+one game.
+
+**Correction to the idea as first put:** *OpenGL is not an SDL GPU backend.*
+SDL3 ships GL headers and a 2D `SDL_Renderer`, but the GPU API is
+Vulkan/D3D12/Metal. "OpenGL or Vulkan" in the options menu would mean writing
+a second backend by hand, and should be costed as such if it is ever wanted.
+What can honestly be offered is the **GPU driver** choice.
+
 ## Phase 7 — Enhancements, deliberately separated from phase 6
 
 Added 2026-09-22. Upscaling (FSR, DLSS) and temporal anti-aliasing (TXAA)
