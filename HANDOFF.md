@@ -8919,6 +8919,55 @@ cycle can be driven at the right rate by pacing the DSP resume to the audio
 DMA, and the game's sound callback is registered and runs. None of that moves
 the movie. The blocker is downstream of AX, not at it.
 
+### F223 — AX mixes 16,506 frames either way, so audio mixing is not the blocker
+
+Measuring instead of inferring, at last, and it dismantles most of F218–F221.
+
+**AX mixes, and always has.** `__AXOutDspReady` has two paths out, not one:
+the AI callback's `1 -> 0`, and — the one I had ignored —
+`__AXDSPResumeCallback`'s `2 -> 0`, which calls `__AXOutNewFrame` directly.
+Counting both:
+
+    default  mix via AI callback:    11    via resume callback: 16,495
+    RESUME   mix via AI callback:    11    via resume callback: 16,495
+
+**Identical, and ~16,500 frames in both.** I had counted only the first path,
+got 11, and concluded AX was not running. It was running the whole time.
+
+**`MGS_DSP_RESUME` changes nothing measurable.** Slots, files read, movie
+reads, decode-buffer advances and now mixing frames are the same either way.
+The `done`-versus-`resume` analysis (F219) is right about what the SDK's
+handler does with each mail; it is not what gates the movie.
+
+**And the mixer is not pulling the movie's audio.** 16,506 mixing frames
+against **13** Vorbis read-callback calls. So whatever those frames mix, it
+is not the movie's Vorbis stream — most likely the `.spd` banks, which the
+disc tally shows being read normally. F218's chain is real where it was read
+from code (a slot re-arms on a playback position; that position comes from a
+Vorbis read callback) and wrong where I inferred the driver: **the AX mixer
+does not drive that decode.**
+
+**What was genuinely fixed here.** Posting task mails while
+`__DSP_curr_task` is null makes the SDK's handler execute
+`stw r0, 0x0(r5)` through a null pointer, into guest low memory. It showed
+as a destroyed thread list — one entry, priority 1081872, a link into
+nothing — against nine clean threads by default. Gated on the task pointer
+(`0x8027DF94`), and the list is clean again. This runtime's own comment had
+warned about the same null for the *init* mail; the resume needed the same
+care.
+
+**New diagnostic.** The report now says why a DSP task mail was withheld:
+`16507 posted; 420 not booted, 0 mail unread, 0 no current task, 10168 no
+frame due, 2172 undelivered, of 29276 offers`. That is what showed the mails
+were being posted and read all along, which is what forced the recount above.
+
+**Where this leaves the movie.** Audio init, AX, the AI callback, the mixer
+and the DSP task cycle are all working and none of them is the blocker. The
+one measured fact that still stands is narrow and unexplained: the Vorbis
+read callback runs **13 times, 1 KB each**, and stops — while 64 KB has
+already been delivered into the buffer it reads from. What asks it for data,
+and why it stops asking, is the question. It is not AX.
+
 ---
 
 *Record further findings here as they are established — including the ones that

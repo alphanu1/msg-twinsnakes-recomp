@@ -554,6 +554,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **AX mixes 16,506 frames either way** (F223). `__AXOutDspReady` has two
+      exits and I counted one: including `__AXDSPResumeCallback`'s path, both
+      configurations mix ~16,500 frames. **AX was never stopped**, and
+      `MGS_DSP_RESUME` changes nothing measurable. The mixer is not pulling
+      the movie's audio either - 16,506 frames against **13** Vorbis read
+      calls. Genuinely fixed: posting task mails with `__DSP_curr_task` null
+      wrote through a null pointer into guest low memory and destroyed the
+      thread list; now gated, list clean. The report also says why each mail
+      was withheld.
 - [x] **Correction: AX neither breaks nor fixes the stream** (F222). Repeated
       runs show `MGS_DSP_RESUME=1` and the default are **identical** - slots
       5, 9 files, 8 movie reads - so "AX breaks the stream setup" was one bad

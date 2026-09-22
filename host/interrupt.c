@@ -232,6 +232,17 @@ int mgs_interrupt_dsp(const MgsModule* mod, void* cpu)
  * a message the boot sequence was waiting to send.
  */
 static uint64_t s_dsp_tasks;
+static uint64_t s_dsp_offers, s_dsp_not_booted, s_dsp_mail_pending;
+static uint64_t s_dsp_no_task, s_dsp_no_frame, s_dsp_undelivered;
+uint64_t mgs_dsp_task_stats(uint64_t* o, uint64_t* nb, uint64_t* mp,
+                            uint64_t* nt, uint64_t* nf, uint64_t* ud);
+uint64_t mgs_dsp_task_stats(uint64_t* o, uint64_t* nb, uint64_t* mp,
+                            uint64_t* nt, uint64_t* nf, uint64_t* ud)
+{
+    *o = s_dsp_offers; *nb = s_dsp_not_booted; *mp = s_dsp_mail_pending;
+    *nt = s_dsp_no_task; *nf = s_dsp_no_frame; *ud = s_dsp_undelivered;
+    return s_dsp_tasks;
+}
 uint64_t mgs_interrupt_dsp_tasks(void);
 uint64_t mgs_interrupt_dsp_tasks(void) { return s_dsp_tasks; }
 
@@ -303,6 +314,11 @@ int mgs_interrupt_aid(const MgsModule* mod, void* cpu)
     return 0;
 }
 
+/* `__DSP_curr_task` in main.dol: the SDK's current DSP task, or null when
+ * there is none. Read before posting a task mail, because the handler
+ * dereferences it without checking (see below). */
+#define GUEST_DSP_CURR_TASK 0x8027DF94u
+
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
 {
@@ -325,9 +341,16 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
             last = now;
         }
     }
-    if (!mgs_mmio_dsp_booted(m)) return 0;
+    /* WHY A TASK MAIL DID NOT GO OUT, counted.
+     *
+     * Six resumes were delivered in a run where the audio DMA fired 18,686
+     * times, and "six" says nothing about which of the four gates below
+     * stopped the rest. Counting each is how that becomes answerable
+     * without another guess. Reported at exit. */
+    ++s_dsp_offers;
+    if (!mgs_mmio_dsp_booted(m)) { ++s_dsp_not_booted; return 0; }
     /* The guest has not read what is already there. */
-    if (mgs_mmio_dsp_mail_pending(m)) return 0;
+    if (mgs_mmio_dsp_mail_pending(m)) { ++s_dsp_mail_pending; return 0; }
 
     /* AND THE UPLOAD HAS TO HAVE FINISHED.
      *
@@ -418,7 +441,27 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
          */
         if (resume_mail && phase != 0) {
             uint64_t aid = mgs_interrupt_aid_raised();
-            if (aid == seen_sends) return 0;        /* no frame is due yet */
+
+            /* AND ONLY WHILE A TASK ACTUALLY EXISTS.
+             *
+             * `__DSP_curr_task` is the SDK's pointer to the running task,
+             * and its handler dereferences it the moment a mail arrives:
+             * `lwz r0, 0x8(r5)` then, for a resume, `stw r0, 0x0(r5)`. The
+             * assertion that would have caught a null is compiled out of a
+             * release build, so a mail posted when no task is current writes
+             * 1 to guest address ZERO - into the OS's low memory.
+             *
+             * It does exactly that. With resumes posted on the audio-DMA
+             * clock alone, a run ends with the guest thread list destroyed:
+             * one entry, priority 1081872, and a link into nothing, against
+             * nine clean threads by default. This runtime's own comment a
+             * few lines up warned about the same null for the INIT mail;
+             * the resume needed the same care and did not have it.
+             */
+            if (!mgs_module_guest_read32(cpu, GUEST_DSP_CURR_TASK)) {
+                ++s_dsp_no_task; return 0;
+            }
+            if (aid == seen_sends) { ++s_dsp_no_frame; return 0; }
             seen_sends = (uint32_t)aid;
         }
 
@@ -432,6 +475,7 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
              * that presents as the boot never getting its callback. */
             mgs_mmio_dsp_post_mail(m, 0u);
             mgs_mmio_dsp_clear_mail(m);
+            ++s_dsp_undelivered;
             return 0;
         }
         if (mail == 0xDCD10000u) { phase = 1; return 1; }

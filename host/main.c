@@ -2072,6 +2072,21 @@ int main(int argc, char** argv)
                                                                      : "stopped",
                                (unsigned long long)mgs_interrupt_aid_raised(),
                                (unsigned long long)mgs_interrupt_aid_refused());
+                        {
+                            uint64_t o,nb,mp,nt,nf,ud,done;
+                            done = mgs_dsp_task_stats(&o,&nb,&mp,&nt,&nf,&ud);
+                            printf("DSP task mails: %llu posted; withheld: "
+                                   "%llu not booted, %llu mail unread, "
+                                   "%llu no current task, %llu no frame due, "
+                                   "%llu undelivered (of %llu offers)\n",
+                                   (unsigned long long)done,
+                                   (unsigned long long)nb,
+                                   (unsigned long long)mp,
+                                   (unsigned long long)nt,
+                                   (unsigned long long)nf,
+                                   (unsigned long long)ud,
+                                   (unsigned long long)o);
+                        }
                         printf("lazy FP context switches: %llu\n",
                                (unsigned long long)r.fp_switches);
                         printf("SDK calls served natively: %lu\n",

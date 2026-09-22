@@ -169,6 +169,9 @@ uint64_t mgs_interrupt_aram_refused(void);
 int      mgs_interrupt_aid(const MgsModule* mod, void* cpu);
 uint64_t mgs_interrupt_aid_raised(void);
 uint64_t mgs_interrupt_aid_refused(void);
+uint64_t mgs_dsp_task_stats(uint64_t* offers, uint64_t* not_booted,
+                            uint64_t* mail_pending, uint64_t* no_task,
+                            uint64_t* no_frame, uint64_t* undelivered);
 int      mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 uint64_t mgs_interrupt_dsp_tasks(void);
 uint64_t mgs_interrupt_pe_seen(void);
