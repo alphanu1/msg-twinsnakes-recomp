@@ -236,7 +236,7 @@ static uint64_t s_vol_zero, s_mix_zero;
 static uint64_t s_loop_has_data, s_loop_empty;
 static int      s_peak;
 static int      s_trace = -1;
-static unsigned s_traced;
+static unsigned s_traced, s_ovr_logged;
 
 /* One AX frame: 5 ms of 32 kHz stereo. */
 #define AX_FRAME_SAMPLES AX_SAMPLES_PER_FRAME
@@ -409,6 +409,19 @@ void mgs_ax_dsp_frame(void* cpu)
                     ++s_looped;
                 } else if (looping) {
                     int ok3;
+                    /* HOW BIG IS THE BLOCK THE GAME IS GIVING US?
+                     *
+                     * 4.1 overruns per frame against 220 samples consumed
+                     * implies blocks of about 54 samples, which would be
+                     * absurd for a streamed voice - so either the game is
+                     * not extending `end`, or we are misreading it. Logging
+                     * the geometry of the first few settles which. */
+                    if (s_trace && s_ovr_logged < 10u) {
+                        ++s_ovr_logged;
+                        fprintf(stderr, "[axovr] voice %02u curr %08X end %08X"
+                                        " loop %08X span(loop..end) %d\n",
+                                i, curr, end, loop, (int)(end - loop));
+                    }
                     int probe = (format == AX_FMT_ADPCM)
                               ? 1 : sample_at(format, loop, &ok3);
                     if (format == AX_FMT_ADPCM || (ok3 && probe))

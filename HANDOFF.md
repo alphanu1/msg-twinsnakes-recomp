@@ -10462,5 +10462,58 @@ not addressing and not the refill.
 
 ---
 
+### F251 — the voice's end address is tiny, and the oracle's is 7.6 million samples
+
+F250 left "is the game not setting a volume, or is AX not propagating it".
+Neither: the game is **deliberately fading the voice out**, and the reason it
+does so is upstream.
+
+**The volume is propagated and then ramped down.** Watching the DSP-side
+`ve.currentVolume` for the movie voice:
+
+    0x7FFF0000   volume 7FFF, delta 0        <- set, by __AXServiceVPB
+    0x7FFFFFFE   delta -2
+    0x7E880000   volume 7E88
+    0x2AFFFF78   volume 2AFF, delta -136
+    0x0E42FFD3   volume 0E42, delta -45
+
+Written by `__AXServiceVPB` (`0x80033330`) and two sound-layer functions. So
+propagation works and the deltas are real — the sound system is muting this
+voice on purpose. It is not a gain bug; it is the sound system reacting to a
+stream that is failing.
+
+**Why it is failing, from the geometry.** Logging the first overruns:
+
+    [axovr] voice 62 curr 00003000 end 00002FFF loop 00003000 span -1
+            curr 00003001 -> overrun -> back to 3000, for ever
+
+`end` is **never extended**. `loop` is `end + 1`, so the voice ping-pongs
+across a one-sample boundary: the position never advances, and
+`sd_stream_pump` decides a block is consumed *by watching that position
+move*. 257,103 overruns in a run is this, over and over.
+
+**And the oracle shows how wrong the geometry is.** Dolphin's same parameter
+block, decoded from the words that straddle the halfword fields:
+
+    0x801F998C = 0x80020074   loopAddressLo 8002, endAddressHi 0074
+    0x801F9990 = 0xA0F70060   endAddressLo  A0F7, currentAddressHi 0060
+
+so **end = 0x0074A0F7 — 7,643,383 samples** — and the current address climbs
+steadily, its high halfword ticking about every 1.3 s, which is ~50k
+samples/sec and therefore a 48 kHz voice playing a large contiguous region.
+
+Ours is `end = 0x2FFF`, later `0x6FFF`: **twelve thousand samples against
+seven and a half million.** That is a structural difference, not a timing
+one. A voice given a 15 MB region overruns rarely; one given 4 KB overruns
+constantly, and everything else here — the fade-out, the silence, the
+starves — follows from it.
+
+**Open, and the next thing to establish:** whether Dolphin's voice 62 is the
+same voice as ours (the indices need not match) and, if it is, which call
+sets that end address and why ours gets a small one. Comparing the two runs'
+`AXSetVoiceAddr` arguments would settle it directly.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
