@@ -249,10 +249,15 @@ void mgs_dump_tasks(void* cpu, uint32_t rel_bss)
             uint32_t flags = mgs_module_guest_read32(cpu, node + TASK_FLAGS);
             int off = (flags & 0x000F0000u) != 0u;   /* rlwinm 0, 12, 15 */
 
-            printf("      node 0x%08X  fn 0x%08X  flags 0x%08X%s%s\n",
-                   node, func, flags,
-                   off ? "  [flag-skipped]" : "",
-                   func ? "" : "  [no function]");
+            {   /* The name is what makes this table readable: twelve
+                 * raw pointers had to be resolved by hand against the
+                 * disassembly before, one run at a time. */
+                const char* who = mgs_symbol_for(func);
+                printf("      node 0x%08X  fn 0x%08X %-28s flags 0x%08X%s%s\n",
+                       node, func, who ? who : "", flags,
+                       off ? "  [flag-skipped]" : "",
+                       func ? "" : "  [no function]");
+            }
             /* MGS_TASK_DUMP=<function address>: also dump that task's node.
              *
              * THE NODE IS THE TASK'S OWN OBJECT. The dispatcher reaches

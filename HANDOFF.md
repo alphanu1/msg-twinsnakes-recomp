@@ -9051,6 +9051,161 @@ state our runtime has left in a different condition. The neighbouring keys
 `00541E36` and `00541E37` differ by one, so these look like identifiers with
 sub-indices rather than arbitrary hashes, which is worth following.
 
+### F226 — WRONG: "Dolphin never links the overlay". It does; I searched the wrong 24 MB
+
+Recorded in full because the mistake is instructive and the instrument that
+produced it is still in the tree.
+
+**What I claimed.** Watching the guest word holding `lis r4, bss_55EA4@ha`
+through a Dolphin boot, it read `0x3C800000` — `lis r4, 0`, the unrelocated
+file content — from 1.5s until the memory was reused at 8.4s, and never took
+a relocated value. Whole-RAM snapshots agreed: 344 of the overlay's 444
+string literals resident between 4.6s and 8.1s, 15 at 11.1s, 60s, 120s and
+180s. I concluded the real game reads `mgso_pal.rel` and discards it without
+linking, and therefore that our port runs a module the game never links and
+`mpeg_movie_task` should not exist at all.
+
+**Why it was wrong.** `rel_loader_LoadRel` (`0x800066F8`) does this:
+
+    fn_8004E7BC(size, 1, "rel_loader.c", 0x7B)   temp buffer
+    fn_800270D8(&fileInfo, temp, size, 0, 2)     DVDReadPrio, whole file
+    memcpy(dest, temp, size)                     the real copy
+    fn_8004E830(temp, "rel_loader.c", 0x83)      temp freed
+    fn_8004E7BC(dest->bssSize, ...)              bss
+    fn_80020AD8(dest, bss)                       OSLink
+
+The address I watched was the **temporary read buffer**, which by design is
+never relocated and is freed the moment the copy is made. Its caller passes
+`dest = 0x7F008000`:
+
+    lis r4, 0x7f01 ; addi r4, r4, -0x8000     -> 0x7F008000
+    lis r5, 0x7c   ; addi r5, r5, 0x3800      -> max 0x7C3800
+
+`0x7F008000` is not in MEM1. It is a **BAT-mapped** address, and Dolphin
+backs those with a separate "fake VMEM" mapping at shared-memory file offset
+`0x02040000` covering `0x7E000000-0x7FFFFFFF`. Every snapshot and every
+search had covered `0x80000000` and up only, so the linked module was never
+in the data at all.
+
+**What is actually true.** Reading the right window, the module is at
+`0x7F008000` (`0x00000001`, its module id) at 2.6s, and the relocation is
+applied immediately:
+
+    2.6s  0x7F1525E0 = 0x3C800000   copied in, unrelocated
+    2.6s  0x7F1525E0 = 0x3C80805A   relocated
+    2.6s  0x7F1525E4 = 0x93E40024
+
+So `bss_55EA4` is `0x805A0024`, putting the overlay's bss base at
+`0x805A0024 - 0x55EA4 = 0x8054A180` — **the same address our port's `OSLink
+saw:` line reports across 277 runs**. Both runs link the same module to the
+same place. The one number F226 got right, it got right by accident.
+
+**The lesson worth keeping.** A same-section `bl` needs no relocation: it is
+already correct in the REL file. `bl fn_1_F3AD4` reading `0x4BFA95E9` and
+resolving correctly *relative to the image* looked like proof the module was
+linked, and it proves nothing. Only a reference that the linker must rewrite
+— an `@ha`/`@l` pair — distinguishes a linked module from a file in a buffer.
+
+### F227 — the key is right, and the divergence is the task mask
+
+With the BAT window readable, the oracle answers F225's open question
+directly.
+
+**The movie object exists in a working run.** `*bss_55EA4` becomes non-zero
+at 25.2s: context `0x8107F120`, with `bss_55EA8` = `0x811CDE60`, its task
+node. Ours are `0x8107F080` and `0x811CDDE0` — 0xA0 apart, which is an
+allocation difference, not a structural one.
+
+**The key is identical.** Dolphin's `context + 0x38` reads **`0x006647BA`**,
+the same value our run polls for. So F225's second reading is eliminated: the
+key is not computed wrong, and the object waiting for it is legitimate. What
+remains is F225's first reading — something that should post it never runs.
+
+**The task mask is where the two runs part.** Polling the mask
+(`bss + 0x23A38`, `0x8056DBB8` in the emulator) across 150s:
+
+    0.0s   0x00000000
+    0.8s   0xC8410070     uninitialised
+    2.6s   0x00000000
+   24.9s   0x00000001     set while the movie object is built
+   25.2s   0x00000000     cleared again, and stays 0
+
+Ours reaches **`0x00000008`** and stays there for the rest of the run. The
+working run gates a level for 0.3s and releases it; ours gates one and never
+releases it.
+
+**What that gates.** With the mask at 8, levels 2, 3, 4 and 5 are skipped
+(gates `0x19`, `0x19`, `0x1F`, `0x1F`). Level 3 holds the movie object's own
+node `0x8107F080`/`fn_1_149D84` — so the half of the movie that would advance
+its state machine is not being called at all, while `mpeg_movie_task` on
+level 1 keeps running and keeps waiting.
+
+Note carefully: mask `1` gates those same four levels too, since each gate
+has bit 0 set. So the bit that matters is not "which levels are off" in the
+abstract — it is that the working run **clears** the mask 0.3s later and ours
+does not. The question is now: who sets bit 3, and what should have cleared
+it.
+
+**Named dumps.** The task table now resolves function addresses through
+`config/symbols/`, which is how `mpeg_movie_task` and the gated level 3 were
+read off in one dump rather than by hand.
+
+---
+
+### F228 — the gate is deliberate: a record ring that never receives tag 2
+
+F227 left "who sets bit 3, and what should have cleared it". Watching the
+mask address in our run answers both at once:
+
+    [watch] 0x7F4BD5D8: 0x00000000 -> 0x00002450  pc 0x8000519C lr 0x8000678C
+    [watch] 0x7F4BD5D8: 0x00002450 -> 0x00000000  pc 0x7F0080EC lr 0x7F008234
+    [watch] 0x7F4BD5D8: 0x00000000 -> 0x00000001  pc 0x7F0FC6D8 lr 0x7F2523EC
+    [watch] 0x7F4BD5D8: 0x00000001 -> 0x00000000  pc 0x7F0FC6EC lr 0x7F251EFC
+    [watch] 0x7F4BD5D8: 0x00000000 -> 0x00000008  pc 0x7F0FC6D8 lr 0x7F251DA0
+
+The setter is `gcn_task_mask_set` (module `0xF45EC`); the bit-3 call site is
+`0x249CB0`, inside `fn_1_249AB8`, and the code there is not a bug:
+
+    00249CA0  lwz    r0, 0x25e8(r27)
+    00249CA8  bne    .L_00249CB8
+    00249CAC  li     r3, 0x8
+    00249CB0  bl     fn_1_F45EC        gcn_task_mask_set(8), return
+    .L_00249CB8:
+    00249CBC  bl     fn_1_F4600        gcn_task_mask_clear(8), carry on
+
+**Level 3 is gated exactly while `obj->0x25E8` is null**, and released the
+moment it is not. The working run's 0.3s gate is this same mechanism doing
+its job. So the stuck mask is a symptom, not the fault, and F227's framing of
+it as "the divergence" is too strong.
+
+**What fills that field.** `fn_1_249A64`:
+
+    lwz r3, 0x25ec(r31)
+    li  r4, 0x2
+    bl  fn_1_1323C4          gcn_pool_acquire(ring, tag = 2)
+    stw r3, 0x25e8(r31)
+
+and `gcn_pool_acquire` **searches** the ring between its read cursor
+(`+0x14`) and write cursor (`+0x24`) for a record whose tag word equals 2,
+claiming it by setting bit 7. It does not allocate. So the movie stalls
+because **no record tagged 2 is ever in the ring** — which is the same
+starvation F225 saw from the other end, reached independently.
+
+The ring itself is `stream->0x0C`, bound by `fn_1_249DB8` when the stream
+becomes ready, and the owning object is node `0x8102D400` in our task table.
+
+**Two failure modes, not one, and they are distinguishable.** Either the
+producer never writes a tag-2 record, or `ring->0x34` is non-zero — in which
+case `gcn_pool_acquire` returns 0 before looking at a single record. Reading
+the code cannot separate these; a dump of the ring can, and that measurement
+is in flight.
+
+**New instrument.** `MGS_DUMP` accepts a leading `*` to dereference:
+`*0x8102F9EC` dumps whatever that word points at. The structures worth
+looking at here are reached through pointers only known at run time, and
+each one was costing two eight-minute runs — the first purely to read an
+address out so the second could use it.
+
 ---
 
 *Record further findings here as they are established — including the ones that

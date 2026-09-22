@@ -112,6 +112,13 @@ uint32_t mgs_host_vmem_hi(void);
 uint32_t mgs_module_msr(const void* cpu);
 uint32_t mgs_module_guest_read32(void* cpu, uint32_t addr);
 void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t));
+
+/* Names for guest addresses; see host/symbols.c. `mgs_symbol_for` returns
+ * NULL when nothing in config/symbols/ covers the address, which callers
+ * print as the bare number rather than a guess. */
+void mgs_symbols_load(const char* dir);
+void mgs_symbols_set_overlay(void* cpu, uint32_t module);
+const char* mgs_symbol_for(uint32_t addr);
 uint32_t* mgs_module_msr_ptr(void* cpu);
 uint32_t* mgs_module_lr_ptr(void* cpu);
 uint32_t mgs_module_current_context(void* cpu);

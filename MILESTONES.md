@@ -15,7 +15,7 @@ when the work feels done.
 
 ---
 
-## Status, 2026-09-19
+## Status, 2026-09-22
 
 **Phase 0, in progress — 1,258 symbols, 18,485 function boundaries.**
 
@@ -554,6 +554,34 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **The overlay IS linked; I searched the wrong 24 MB** (F226, wrong and
+      recorded as such). `rel_loader_LoadRel` reads the REL into a temporary
+      buffer, copies it to **`0x7F008000`**, frees the temp, then calls
+      `OSLink`. `0x7F008000` is BAT-mapped, and Dolphin backs those addresses
+      with a separate "fake VMEM" mapping — so every snapshot taken over
+      `0x80000000` was watching the temp buffer, which by design is never
+      relocated. **A same-section `bl` needs no relocation**, so its
+      correctness is not evidence of linking; only an `@ha`/`@l` pair is.
+- [x] **The key is right; the divergence is the task mask** (F227). With the
+      BAT window readable, Dolphin creates the same movie object (context
+      `0x8107F120` against our `0x8107F080`) and its `+0x38` holds the **same
+      key `0x006647BA`**. So the key is not miscomputed. What differs is the
+      task mask: the working run sets it to `1` for 0.3s while the object is
+      built and returns it to **0**; ours reaches **`0x00000008`** and stays,
+      gating levels 2–5 — including level 3, which holds the movie object's
+      own node.
+- [x] **The gate is deliberate, and it is a starved record ring** (F228).
+      `fn_1_249AB8` gates level 3 exactly when `obj->0x25E8` is null and
+      releases it the moment it is not. That field is filled by
+      `gcn_pool_acquire(obj->0x25EC, 2)` — a **search for a record tagged 2**,
+      not an allocation. So the stuck mask is a symptom: no tag-2 record ever
+      reaches the ring. `gcn_pool_acquire` also fails outright when
+      `ring->0x34` is non-zero, which is a second, distinct failure mode to
+      rule out by measurement rather than by reading.
+- [x] **Dumps name their addresses** (`host/symbols.c`). `mgs_dump_threads`
+      had always taken a `symbol` callback and nothing ever passed one; the
+      task table now resolves through `config/symbols/`, which is how
+      `mpeg_movie_task` and the gated level 3 were read off in one dump.
 - [x] **The movie waits on an event key nothing posts** (F225). Dumping
       values rather than changes: the movie context is `0x8107F080` (itself a
       **level-3 task node**, `fn 0x7F151E70`), and it polls for key

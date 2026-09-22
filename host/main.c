@@ -1144,6 +1144,11 @@ int main(int argc, char** argv)
     FILE* report = stdout;
     int i;
 
+    /* Names for every address this host prints. MGS_SYMBOLS overrides the
+     * location for a run started from somewhere other than the tree root. */
+    mgs_symbols_load(getenv("MGS_SYMBOLS") ? getenv("MGS_SYMBOLS")
+                                           : "config/symbols");
+
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--disc1") && i + 1 < argc)       disc1_arg = argv[++i];
         else if (!strcmp(argv[i], "--disc2") && i + 1 < argc)  disc2_arg = argv[++i];
@@ -2074,15 +2079,30 @@ int main(int argc, char** argv)
                             const char* env = getenv("MGS_DUMP");
                             while (env && *env) {
                                 char* end = NULL;
-                                uint32_t at = (uint32_t)strtoul(env, &end, 0);
+                                uint32_t at;
                                 unsigned long len = 0x40u;
+                                /* A leading '*' DEREFERENCES: `*0x8102F9EC`
+                                 * dumps whatever that word points at. The
+                                 * structures worth looking at here are
+                                 * reached through a pointer whose value is
+                                 * only known at run time - the stream's
+                                 * record ring is `object + 0x25EC` - and
+                                 * without this each one costs two runs of
+                                 * eight minutes, the first only to read an
+                                 * address out so the second can use it. */
+                                int deref = (*env == '*');
+                                if (deref) ++env;
+                                at = (uint32_t)strtoul(env, &end, 0);
+                                if (deref && at)
+                                    at = mgs_module_guest_read32(cpu, at);
                                 if (end && *end == ':') {
                                     len = strtoul(end + 1, &end, 0);
                                     if (len > 0x1000u) len = 0x1000u;
                                 }
                                 if (at) {
                                     unsigned long i;
-                                    printf("dump 0x%08X (%lu bytes):\n", at, len);
+                                    printf("dump 0x%08X (%lu bytes)%s:\n", at, len,
+                                           deref ? " [via pointer]" : "");
                                     for (i = 0; i < len; i += 16u) {
                                         unsigned long j;
                                         printf("  +0x%03lX ", i);
@@ -2191,6 +2211,10 @@ int main(int argc, char** argv)
                                  * where the engine actually keeps them. */
                                 if (mod_) {
                                     uint32_t bss = mod_ + 0x4B6678u - 0x24AD8u;
+                                    /* The overlay's base is only known once
+                                     * OSLink has run, so the map is bound
+                                     * here rather than at startup. */
+                                    mgs_symbols_set_overlay(cpu, mod_);
                                     s_engine_bss = bss;
                                     mgs_dump_heaps(cpu, bss);
                                     /* What the per-frame scheduler would
@@ -2199,7 +2223,7 @@ int main(int argc, char** argv)
                                 }
                             }
                         }
-                        mgs_dump_threads(cpu, NULL);
+                        mgs_dump_threads(cpu, mgs_symbol_for);
                         patch_report();
                         mgs_profile_report();
                         mgs_mmio_report_hot(mgs_host_mmio(), 6u);
