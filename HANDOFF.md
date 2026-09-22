@@ -10462,7 +10462,7 @@ not addressing and not the refill.
 
 ---
 
-### F251 — the voice's end address is tiny, and the oracle's is 7.6 million samples
+### F251 — PARTLY WRONG (see F252): "end is never extended" came from the first ten overruns
 
 F250 left "is the game not setting a volume, or is AX not propagating it".
 Neither: the game is **deliberately fading the voice out**, and the reason it
@@ -10512,6 +10512,59 @@ starves — follows from it.
 same voice as ours (the indices need not match) and, if it is, which call
 sets that end address and why ours gets a small one. Comparing the two runs'
 `AXSetVoiceAddr` arguments would settle it directly.
+
+---
+
+### F252 — correcting F251, and the movie's audio voices are deliberately muted
+
+F251 concluded that the voice's `end` address is never extended and is tiny
+against the oracle's 7.6 million samples. **Both halves were read off the
+first ten overruns**, which happen before AX has copied the address block
+into the DSP-side parameter block — so they show initial values and are not
+the steady state. The instrument was sampling the wrong end of the run, and
+the trace now fires every 20,000th mix instead of on the first few.
+
+**What the steady state actually shows:**
+
+    voice 62 fmt  0 curr 006025D2 end 0074A0F7 loop 00108002 once vol 7FFF
+    voice 62 fmt 10 curr 00003D9C end 00003FFF loop 00004000 loop vol 0000
+             fmt 10 curr 00002B18 end 00002FFF loop 00002000 loop vol 0000
+             fmt 10 curr 000081B9 end 00008FFF loop 00008000 loop vol 0000
+
+Three corrections to F251:
+
+1. `end` **is** extended — the PCM voices move through 0x1000-sample blocks
+   (`0x2FFF`, `0x3FFF`, `0x5FFF`, `0x8FFF`), so the streaming works.
+2. The DSP-side block **does** get the big region: the same
+   `end = 0x0074A0F7` the oracle has, written by `__AXServiceVPB`. F251's
+   "structural difference" was an artefact of comparing our *initial* values
+   against Dolphin's *steady* ones.
+3. A single PB index is reused by different voices over time, so "voice 62"
+   is not one thing across a run.
+
+**What is actually wrong.** The two kinds of voice behave completely
+differently:
+
+| | format | volume | window |
+|---|---|---|---|
+| the game's own sound | ADPCM (0) | **0x7FFF** | 7.6M samples |
+| the movie's audio | PCM16 (10) | **0x0000** | 0x1000-sample blocks |
+
+**Every PCM voice carries `vol 0000`.** The movie's audio is muted by the
+game, which is why there is no movie sound however well the mixer works. The
+ADPCM voice is at full volume and is what produces the peak of 10,754 — but
+it is only in `state == 1` for about 507 frames of 62,763, which is why
+almost every output frame is silent.
+
+So there are two separate questions, and they had been conflated:
+
+- **Why are the PCM voices muted?** F250 showed the sound system ramping this
+  voice down with real deltas, so it is a deliberate fade. The likeliest
+  cause remains the stream underrunning — the ping-pong at `loop = end + 1`,
+  4 overruns a frame where a 0x1000-sample block consumed at 220 samples a
+  frame should last 18.
+- **Why is the ADPCM voice active so rarely?** Unknown, and not yet
+  investigated.
 
 ---
 

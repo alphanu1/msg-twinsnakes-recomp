@@ -302,8 +302,13 @@ void mgs_ax_dsp_frame(void* cpu)
          * "Silent output" has three very different causes - no samples, no
          * volume, or a voice pinned at its end address - and the numbers
          * that separate them are these five. */
-        if (s_trace && s_traced < 12u) {
-            ++s_traced;
+        /* EVERY 20,000th MIX, NOT THE FIRST FEW. The opening mixes happen
+         * before AX has copied the address block into the DSB-side PB, so
+         * they show initial values - format 10 and a 4 KB window - and
+         * reading them as the steady state produced a whole wrong finding
+         * (F251's "end is never extended"). The real state is format 0 and
+         * a 7.6-million-sample region. */
+        if (s_trace && (++s_traced % 20000u) == 1u) {
             fprintf(stderr, "[axmix] voice %02u fmt %2u curr %08X end %08X "
                             "loop %08X %s vol %04X vl %04X vr %04X ratio %08X\n",
                     i, format, curr, end, loop,
@@ -416,8 +421,7 @@ void mgs_ax_dsp_frame(void* cpu)
                      * absurd for a streamed voice - so either the game is
                      * not extending `end`, or we are misreading it. Logging
                      * the geometry of the first few settles which. */
-                    if (s_trace && s_ovr_logged < 10u) {
-                        ++s_ovr_logged;
+                    if (s_trace && (++s_ovr_logged % 50000u) == 1u) {
                         fprintf(stderr, "[axovr] voice %02u curr %08X end %08X"
                                         " loop %08X span(loop..end) %d\n",
                                 i, curr, end, loop, (int)(end - loop));
