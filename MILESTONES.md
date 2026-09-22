@@ -17,7 +17,7 @@ when the work feels done.
 
 ## Status, 2026-09-22
 
-**Phase 0, in progress — 1,283 symbols, 18,485 function boundaries.**
+**Phase 0, in progress — 1,284 symbols, 18,485 function boundaries.**
 
 Note on terminology, since the numbers here are easy to misread: **instructions
 translated (99.87%) is not the same as decompiled.** Translation is a
@@ -570,6 +570,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **ROOT CAUSE: the AX voice's position never advances** (F234).
+      `sd_stream_pump` reads `voice+0x1B2` = `pb.addr.currentAddress` and
+      advances the stream only as that moves. The voice is at `0x80206F7C`
+      in **both** runs; Dolphin's position runs `0x2000 → 0x2977 → 0x3212 →
+      … → 0x9A33` and wraps, ours is written **5 times at setup by
+      `AXSetVoiceAddr` and never again**, sitting on exactly the value
+      Dolphin starts from. `dolsdk2004` shows why: that word is **copied back
+      from the DSP's** parameter block, and our port runs no DSP mixing.
+      Every link from here to the frozen picture (F225–F233) is verified.
+      **Not yet established:** whether advancing the position in step with
+      the audio DMA is enough, without mixing a sample — worth trying before
+      anything larger.
 - [x] **The external driver found — and it is present in our run** (F233).
       `__AXOutNewFrame` calls a user hook through a **`blrl`** (not a
       `bctrl`, which is why the first search missed it) at `0x8027DF00` =

@@ -1519,3 +1519,16 @@
 .sbss 0x8027DF00 0x4 __AXUserFrameCallback own+sdk2004
 .text 0x8004EB8C 0x44 sd_ax_frame_callback own
 .text 0x80054958 0x348 sd_stream_pump own
+
+# ---- the voice whose position clocks the whole streamed pipeline (F234) ----
+#
+# `AXSetVoiceAddr` matches `dolsdk2004`'s AXVPB.c exactly: it takes the
+# voice's `&p->pb.addr` (0x138 + 0x6E = 0x1A6, which is the constant this
+# function adds), copies four 32-bit words from its second argument under
+# `OSDisableInterrupts`, then switches on `addr->format`.
+#
+# The voice allocator at `0x8003198C` is left unnamed. Its behaviour is clear
+# — priority, callback and user context in, a voice off the free list at
+# 0x801EDF20 out — but `dolsdk2004` does not carry that function, and the
+# SDK spelling would be asserted rather than confirmed.
+.text 0x8003416C 0x110 AXSetVoiceAddr own+sdk2004

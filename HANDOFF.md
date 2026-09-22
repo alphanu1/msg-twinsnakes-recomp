@@ -27,7 +27,7 @@ Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,075 / 18,485 | 5.8% |
+| Functions named | 1,076 / 18,485 | 5.8% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
 | SDK entry points the engine calls, named | 206 / 336 | 61.3% |
 | SDK call sites covered | 6,155 / 7,078 | 87.0% |
@@ -9547,6 +9547,89 @@ did not run, and reading it as such would have sent this the wrong way.
 (origin `own+sdk2004` — the instruction sequence here and the name and
 signature in `dolsdk2004`), plus `sd_ax_frame_callback` and `sd_stream_pump`
 (origin `own`).
+
+---
+
+### F234 — ROOT CAUSE: the AX voice's playback position never advances
+
+The chain from F225 to F233 ends here, at a single word that moves in a
+working run and does not move in ours.
+
+**What the pump actually reads.** `sd_stream_pump`, for a channel in state 9
+holding a voice, does:
+
+    800549D0  lwz r26, 0x1b2(r3)        r3 = channel->0x20, the AX voice
+
+`0x1B2` is `pb.addr.currentAddress` — `AXVPB.pb` is at `0x138`,
+`AXPB.addr` at `0x6E`, `AXPBADDR.currentAddressHi` at `+0x0C`. The pump
+compares that position against each block's `[0x48, 0x4C)` range to decide
+which block has finished, and everything downstream is driven by it moving.
+
+**Measured, both sides, same address.** The voice is at `0x80206F7C` in both
+runs — the allocation matches exactly, which is itself a check that the two
+runs are in the same state.
+
+    Dolphin   0x00002000 -> 0x2977 -> 0x3212 -> 0x3AAD -> ... -> 0x9A33
+              -> wraps to 0x21F2 -> 0x2B69 ...   (continuous, ~0x900/50ms)
+
+    ours      0x00002000    and never again
+
+Watching the whole PB window `0x80207120:0x20` across a run: **5 writes, all
+at setup, all from `AXSetVoiceAddr`**, and nothing after. Ours is sitting on
+precisely the value Dolphin starts from before the DSP begins advancing it.
+
+**Why it does not advance, from the SDK.** `dolsdk2004`'s AXVPB.c:
+
+    ppbUser->addr.currentAddressHi = ppbDsp->addr.currentAddressHi;
+    ppbUser->addr.currentAddressLo = ppbDsp->addr.currentAddressLo;
+
+The position the pump reads is **copied back from the DSP's** parameter
+block. The DSP owns it: AX hands the PBs to the DSP, the DSP mixes and
+advances the address, AX copies it back. **Our port runs no DSP mixing**, so
+the DSP-side PB never advances and the user-side copy never changes.
+
+**So the whole stall reduces to one thing**, and every link between was
+verified rather than assumed:
+
+    no DSP mixing -> the voice's currentAddress never advances
+      -> sd_stream_pump never sees a block complete
+      -> it never posts to the sound threads
+      -> all four sound threads sleep on empty queues (F232)
+      -> no data request reaches the engine (only 2 ever arrived)
+      -> gcn_stream_fill_task's 64 KB buffer stays full (F231)
+      -> it refuses every tag-1 record and puts it back (F230)
+      -> ring 0's read cursor cannot advance
+      -> the refill correctly declines, so no tag-2 record (F229)
+      -> obj->0x25E8 stays null, level 3 is gated (F228)
+      -> mpeg_movie_task parks in state 1 (F227)
+      -> its 321 tag-0xE video records are never read, and the key
+         0x006647BA is never posted (F225)
+
+**Ben was right, and earlier than the evidence was.** "Audio is the blocker"
+was asserted around F218 on pacing grounds, mostly withdrawn in F222 and
+F223, and is now established by a different and much harder route.
+
+**What this does NOT yet say.** It does not say the fix is to emulate the
+DSP. Advancing `currentAddress` in step with the audio DMA may be enough to
+unblock the pipeline without mixing a single sample, and that is worth trying
+before anything larger — the port needs the *position* to move, not
+necessarily the sound to be correct. Nor is it yet separated whether AX's
+copy-back runs at all in our run or runs and copies an unchanged value; a
+change-watch cannot tell those apart, and the DSP-side PB array has not been
+located.
+
+**Also seen, and worth keeping.** One run of this measurement died on
+`[dvd] READ FAILED: 5737728 bytes at 0x3DCCE870` followed by `ERROR: module
+'shared/mgso_pal.rel' is too big`, leaving a run that looked like a
+measurement and was not. F205's read-failure mode is not gone. A repeat run
+was clean; any single run that reports no disc reads should be discarded
+rather than read.
+
+**Named:** `AXSetVoiceAddr` (`own+sdk2004` — `&p->pb.addr` is the `0x1A6` this
+function adds, four word copies under `OSDisableInterrupts`, then a switch on
+`addr->format`, matching AXVPB.c). The voice allocator at `0x8003198C` is
+left unnamed: its behaviour is plain but `dolsdk2004` does not carry it, so
+the SDK spelling would be asserted rather than confirmed.
 
 ---
 
