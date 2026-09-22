@@ -10418,5 +10418,49 @@ it is how the engine tells the time.
 
 ---
 
+### F250 — the missing sound is gain, not samples: 99% of voice-mixes have volume 0
+
+Chasing why the mixer produces 32.8% peak but only 405 of 62,763 non-silent
+frames, each measurement eliminated a layer until only one was left.
+
+| measured | result | conclusion |
+|---|---|---|
+| samples read outside ARAM | **0** | addressing is right |
+| loop points holding data on overrun | **253,816** vs 3,287 empty | the refill is neither late nor misplaced |
+| PCM samples non-zero | **16,786,653 of 16,953,280 (99%)** | the data is real |
+| **voice-mixes with envelope volume 0** | **105,498 of 106,326 (99.2%)** | **this is the silence** |
+
+So the samples are there and correct, and almost every voice is being mixed
+at a gain of zero. The ~828 mixes that *do* have gain are what produce the
+peak of 10,754 — the sound that exists is loud enough; there is simply
+almost none of it.
+
+**Two fixes made on the way, both real, neither the cause.**
+
+1. *Scaling truncated twice.* The mix was `sv * vol / 32768 * vr / 32768`,
+   and AX's volumes are `0x7FFF` — a shade **under** unity — so each divide
+   truncated toward zero and quiet samples were discarded twice over. Now
+   one multiply and one rounded shift. Correct, and worth 3 frames.
+2. *The volume is a ramp.* `AXPBVE` is `{currentVolume, currentDelta}` and
+   the DSP advances it every sample; a game that starts a voice at 0 with a
+   positive delta fades in, and reading the level without applying the delta
+   would leave it silent for ever. Implemented — and it changed nothing,
+   because the deltas are zero too. **So the voices are not mid-fade; they
+   are simply at zero.**
+
+**What that leaves.** `ve.currentVolume` lives in the DSP-side block, and AX
+copies it there from the user block only when the sync flags ask
+(`__AXServiceVPB`, F235). Either the game never sets a volume on these
+voices — plausible if most of the 64 are idle with `state` left at 1 — or our
+AX is not propagating volume from the user block to the DSP block. Those are
+distinguishable by comparing `ve.currentVolume` in the two blocks for the
+same voice, which is the next measurement and is cheap.
+
+**Not claimed:** that the mixer is finished, or that what it produces is
+correct. What is established is that the remaining gap is gain, not samples,
+not addressing and not the refill.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

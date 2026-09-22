@@ -54,6 +54,7 @@
 #define PB_MIX_VL          0x12u      /* AXPBMIX.vL                      */
 #define PB_MIX_VR          0x16u      /* AXPBMIX.vR                      */
 #define PB_VE_VOLUME       0x64u      /* AXPBVE.currentVolume            */
+#define PB_VE_DELTA        0x66u      /* AXPBVE.currentDelta, per sample */
 #define PB_SRC_RATIO_HI    0xA6u
 #define PB_SRC_FRAC        0xAAu
 
@@ -229,7 +230,10 @@ static void wr32pair(void* cpu, uint32_t at, uint32_t v)
 
 static uint64_t s_frames, s_advanced, s_looped, s_ended;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
-static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples, s_wrapped_fwd;
+static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
+static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
+static uint64_t s_vol_zero, s_mix_zero;
+static uint64_t s_loop_has_data, s_loop_empty;
 static int      s_peak;
 static int      s_trace = -1;
 static unsigned s_traced;
@@ -253,6 +257,7 @@ void mgs_ax_dsp_frame(void* cpu)
     for (i = 0; i < AXPB_COUNT; ++i, pb += AXPB_STRIDE) {
         uint32_t curr, end, loop, ratio, frac, format, looping;
         uint32_t vol, vl, vr;
+        int vdelta;
         unsigned k;
 
         if (rd16(cpu, pb + PB_STATE) != 1u) continue;      /* not running */
@@ -270,6 +275,7 @@ void mgs_ax_dsp_frame(void* cpu)
         /* AX's volumes are 15-bit, 0x7FFF being unity - which is what the
          * game writes for a voice at full level. */
         vol = rd16(cpu, pb + PB_VE_VOLUME);
+        vdelta = (int)(int16_t)rd16(cpu, pb + PB_VE_DELTA);
         vl  = rd16(cpu, pb + PB_MIX_VL);
         vr  = rd16(cpu, pb + PB_MIX_VR);
 
@@ -287,6 +293,10 @@ void mgs_ax_dsp_frame(void* cpu)
 
         ++s_mixed_voices;
         ++s_advanced;
+        /* THE LAST LINK. 99% of samples read are non-zero and the output is
+         * silent, which leaves only the gain between them. */
+        if (!vol) ++s_vol_zero;
+        if (!vl && !vr) ++s_mix_zero;
 
         /* MGS_TRACE_AXMIX: the first few voices as the mixer sees them.
          * "Silent output" has three very different causes - no samples, no
@@ -313,10 +323,48 @@ void mgs_ax_dsp_frame(void* cpu)
                 sv = sample_at(format, curr, &ok);
             }
             if (!ok) { ++s_silent_reads; sv = 0; }
-            acc_l[k] += (int32_t)((long long)sv * (int)vol / 32768
-                                  * (int)vl / 32768);
-            acc_r[k] += (int32_t)((long long)sv * (int)vol / 32768
-                                  * (int)vr / 32768);
+            /* NON-ZERO SAMPLES, BY FORMAT. "253,816 loop points held data"
+             * and "402 non-silent frames" cannot both be true, and the
+             * number that separates them is how many samples each kind of
+             * voice actually contributes. */
+            if (format == AX_FMT_ADPCM) {
+                ++s_rd_adpcm; if (sv) ++s_nz_adpcm;
+            } else {
+                ++s_rd_pcm; if (sv) ++s_nz_pcm;
+            }
+            /* ONE ROUNDED SCALE, NOT TWO TRUNCATING ONES.
+             *
+             * This was `sv * vol / 32768 * vr / 32768`, and each division
+             * truncates toward zero. AX's volumes are 0x7FFF - a shade UNDER
+             * unity - so a quiet sample came out as `1 * 0.9995 * 0.9995`
+             * and truncated to silence twice over. The movie's audio fades
+             * in at plus or minus a few counts, so almost all of it was
+             * being discarded: 99% of samples read were non-zero and only
+             * 402 of 62,763 output frames were.
+             *
+             * Multiplying first and rounding once keeps them. 2^30 is the
+             * product of the two 15-bit scales. */
+            {
+                long long pl = (long long)sv * (int)vol * (int)vl;
+                long long pr = (long long)sv * (int)vol * (int)vr;
+                acc_l[k] += (int32_t)((pl + (1LL << 29)) >> 30);
+                acc_r[k] += (int32_t)((pr + (1LL << 29)) >> 30);
+            }
+
+            /* THE VOLUME IS A RAMP, NOT A LEVEL.
+             *
+             * `AXPBVE` is {currentVolume, currentDelta} and the DSP advances
+             * it EVERY SAMPLE; the game starts a voice at volume 0 with a
+             * positive delta so it fades in. Reading `currentVolume` without
+             * ever applying the delta therefore leaves almost every voice
+             * silent for ever - 105,498 of 106,326 voice-mixes had volume 0,
+             * which is the whole of the missing sound. */
+            if (vdelta) {
+                int nv = (int)vol + vdelta;
+                if (nv < 0) nv = 0;
+                if (nv > 0xFFFF) nv = 0xFFFF;
+                vol = (uint32_t)nv;
+            }
 
             /* ADVANCE BY WHAT WAS CONSUMED, which is the whole point: the
              * position the game reads back is now the position the mixer
@@ -338,56 +386,40 @@ void mgs_ax_dsp_frame(void* cpu)
             }
 
             if (end && curr > end) {
-                /* A LOOP POINT PAST THE END IS NOT A LOOP, IT IS A VOICE
-                 * WAITING FOR DATA.
+                /* WHAT TO DO AT THE END OF A BLOCK, AND WHY THIS IS NOT
+                 * COSMETIC (F249).
                  *
-                 * A streaming voice has its loop and end addresses rewritten
-                 * by the game as each buffer is refilled, and between those
-                 * updates it can hold `loop > end` - our movie voice sits at
-                 * loop 0x3000, end 0x2FFF before the first refill. Treating
-                 * that as a loop wraps forward, lands past the end again and
-                 * wraps every single sample: 286,628 wraps in 62,763 frames,
-                 * 4.5 per frame, which is a runaway rather than playback.
+                 * `sd_stream_pump` decides a block has been consumed by
+                 * watching this very position move, so how the overrun is
+                 * handled is not an audio detail - it is whether the engine
+                 * can tell the time. Three behaviours were measured:
                  *
-                 * Holding the position instead models what the hardware does
-                 * while it has nothing to play, and leaves the voice running
-                 * so the refill still finds it. */
+                 *   pin at `end`     movie.dat 8 reads  - the F225 stall
+                 *   run on past it   movie.dat 34 reads - reads unwritten ARAM
+                 *   jump to `loop`   movie.dat 34 reads - and the data is there
+                 *
+                 * A streaming voice holds `loop > end` between refills - the
+                 * game saying "continue at `loop`" before it has extended
+                 * `end` to cover that block - so the ordinary wrap and this
+                 * case are separated. Probing the loop point shows the data
+                 * is genuinely present: 253,816 held data against 3,287
+                 * empty, so the refill is neither late nor misplaced. */
                 if (looping && loop <= end) {
-                    curr = loop + (curr - end - 1u);
+                    curr = loop + (curr - end - 1u);   /* an ordinary loop */
                     ++s_looped;
                 } else if (looping) {
-                    /* JUMP TO THE NEXT BLOCK, DO NOT RUN PAST IT.
-                     *
-                     * `loop > end` is the game saying "continue at `loop`"
-                     * before it has extended `end` to cover that block. Two
-                     * wrong answers were measured first: holding at `end`
-                     * stops the position and the movie goes back to the
-                     * F225 stall (8 reads of movie.dat against 34), and
-                     * running on keeps the movie but reads past the data
-                     * into unwritten ARAM, which took non-silent frames from
-                     * 53,159 to 369. Taking the loop point does both jobs -
-                     * the position moves forward, and it moves to where the
-                     * data actually is. */
+                    int ok3;
+                    int probe = (format == AX_FMT_ADPCM)
+                              ? 1 : sample_at(format, loop, &ok3);
+                    if (format == AX_FMT_ADPCM || (ok3 && probe))
+                        ++s_loop_has_data;
+                    else
+                        ++s_loop_empty;
                     curr = loop;
                     ++s_starved;
-                    ++s_wrapped_fwd;
-                } else if (0) {
-                    /* HOLDING HERE STOPS THE MACHINE (F249).
-                     *
-                     * `loop > end` means the game has not yet rewritten the
-                     * window for the next block. Pinning the voice at `end`
-                     * looks tidy and is fatal: `sd_stream_pump` decides a
-                     * block has been consumed by watching this very position
-                     * move, so a position that stops means a stream that is
-                     * never refilled - and the movie went straight back to
-                     * the F225 stall, 8 reads of movie.dat instead of 34.
-                     *
-                     * So the position runs on instead. It is reading past
-                     * the block the game meant, which is wrong and is
-                     * counted; it keeps time, which is what everything
-                     * downstream is built on. */
-                    ++s_starved;
                 } else {
+                    /* A one-shot voice that reaches its end stops, and
+                     * `__AXServiceVPB` copies that state back to the game. */
                     curr = end;
                     wr16(cpu, pb + PB_STATE, 0u);
                     ++s_ended;
@@ -397,6 +429,7 @@ void mgs_ax_dsp_frame(void* cpu)
         }
         any = 1;
         wr16(cpu, pb + PB_SRC_FRAC, frac);
+        wr16(cpu, pb + PB_VE_VOLUME, vol);        /* the ramp's new level */
         wr32pair(cpu, pb + PB_ADDR_CURR_HI, curr);
     }
 
@@ -437,13 +470,22 @@ void mgs_ax_dsp_report(void)
            (unsigned long long)s_mixed_voices,
            (unsigned long long)s_looped, (unsigned long long)s_ended);
     printf("  ADPCM samples decoded: %llu (voices skipped: %llu);"
-           " samples read outside ARAM: %llu; voices starved: %llu"
-           " (%llu jumped to the next block)\n",
+           " samples read outside ARAM: %llu; voices starved: %llu\n",
            (unsigned long long)s_adpcm_samples,
            (unsigned long long)s_adpcm_skipped,
            (unsigned long long)s_silent_reads,
-           (unsigned long long)s_starved,
-           (unsigned long long)s_wrapped_fwd);
+           (unsigned long long)s_starved);
+    printf("  on overrun: %llu loop points held data, %llu were empty\n",
+           (unsigned long long)s_loop_has_data,
+           (unsigned long long)s_loop_empty);
+    printf("  samples contributed: PCM %llu of %llu non-zero, "
+           "ADPCM %llu of %llu non-zero\n",
+           (unsigned long long)s_nz_pcm, (unsigned long long)s_rd_pcm,
+           (unsigned long long)s_nz_adpcm, (unsigned long long)s_rd_adpcm);
+    printf("  gain: %llu voice-mixes had envelope volume 0, "
+           "%llu had both mix levels 0, of %llu\n",
+           (unsigned long long)s_vol_zero, (unsigned long long)s_mix_zero,
+           (unsigned long long)s_mixed_voices);
     printf("  output: peak %d of 32767 (%.1f%% of full scale), "
            "%llu of %llu frames not silent\n",
            s_peak, 100.0 * s_peak / 32767.0,
