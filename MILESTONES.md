@@ -570,6 +570,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **The video is all there; the pin is one consumer** (F230). There are
+      **two** rings (`bss_55BF4` is an array of two descriptors). The movie's
+      own ring holds **321 records, all tag `0xE`** — the *same 321* Dolphin
+      has, which then drains while ours never moves. **No video data is
+      missing from disc.** The pin is `fn_1_8FE8`, node `0x8109D760`, tag
+      `0x00000001`: it exists, runs on level 1, picks each record up and puts
+      it back with `gcn_pool_clear_entry_flag` because
+      `node->0xB8 - node->0xBC < node->0x40` — **its destination buffer has no
+      room**. Also: tags can be packed `(language << 16) | id`, and the five
+      `fn_1_12FC4` tasks are *discarders* for every language but ours
+      (`0x0007/5/4/3/2 0004`), the selected one (`0x00010004`) going to
+      `fn_1_14D34`.
 - [x] **The ring head is pinned by records nobody consumes** (F229). Walking
       the ring instead of reading code kills both of F228's candidates:
       `ring->0x30` and `ring->0x34` are **0**, as Dolphin's are, and the

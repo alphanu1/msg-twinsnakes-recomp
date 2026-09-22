@@ -107,15 +107,21 @@ def main():
     # guessing which field to look at next, and each guess cost a run. A
     # struct diff shows them all at once.
     # `=addr` means DUMP that word every second rather than on change.
+    # `~addr` WALKS A RECORD RING and reports its tag histogram, the way
+    # the engine's own `gcn_pool_acquire` walks it. A backlog of one tag in
+    # our run means nothing until the working run is asked whether that is
+    # normal, and this is the cheapest way to ask.
     # `@path` writes all of MEM1 to that file at DOLPHIN_DUMP_AT seconds, or
     # when DOLPHIN_DUMP_WHEN's byte string first appears in guest memory.
     # A value that was set before the watcher attached never changes and so
     # is invisible to a change-watch - which is exactly the case for a
     # context pointer written once during boot.
-    watch, ranges, polls, dumps = [], [], [], []
+    watch, ranges, polls, dumps, rings = [], [], [], [], []
     for arg in sys.argv[2:]:
         if arg.startswith('='):
             polls.append(int(arg[1:], 0))
+        elif arg.startswith('~'):
+            rings.append(int(arg[1:], 0))
         elif arg.startswith('@'):
             dumps.append(arg[1:])
         elif ':' in arg:
@@ -123,7 +129,7 @@ def main():
             ranges.append((int(base, 0), int(length, 0)))
         else:
             watch.append(int(arg, 0))
-    if not watch and not ranges and not polls and not dumps:
+    if not watch and not ranges and not polls and not dumps and not rings:
         watch = [0x8021A078]
     seconds = float(os.environ.get('DOLPHIN_WATCH_SECONDS', '240'))
     dump_at = float(os.environ.get('DOLPHIN_DUMP_AT', '60'))
@@ -287,6 +293,51 @@ def main():
                         print('%7.1fs  0x%08X = 0x%08X'
                               % (time.time() - start, addr, value))
                         last[addr] = value
+                for addr in rings:
+                    def w(a):
+                        return int.from_bytes(read(a), 'big')
+                    base, size = w(addr + 0x08), w(addr + 0x0C)
+                    rd, wr = w(addr + 0x14), w(addr + 0x24)
+                    key = ('ring', addr)
+                    now = time.time() - start
+                    if now - last.get(('rt', addr), -9) < 5.0:
+                        continue
+                    last[('rt', addr)] = now
+                    if not base or not size or size > 0x400000 \
+                            or not (base <= rd < base + size):
+                        print('%7.1fs  ring 0x%08X not ready' % (now, addr))
+                        continue
+                    tags, p, n, wraps = {}, rd, 0, 0
+                    while p != wr and n < 100000:
+                        t = w(p)
+                        if (t & 0xFF) == 0xFF:
+                            p = base
+                            wraps += 1
+                            if wraps > 4:
+                                break
+                            continue
+                        ln = w(p + 4)
+                        # THE WHOLE WORD, not a masked low byte. Some tags
+                        # are packed as (language << 16) | id - the consumer
+                        # factory at 0x14FCC refuses to create a task unless
+                        # (arg >> 16) matches the language byte at
+                        # 0x801E7DD8 - so masking hides the one field that
+                        # would explain a tag never matching.
+                        tags[t] = tags.get(t, 0) + 1
+                        n += 1
+                        if not ln or ln > size:
+                            break
+                        p += ln
+                        if p >= base + size:
+                            p = base
+                    used = (wr - rd) % size
+                    summary = ' '.join('0x%X:%d' % kv
+                                       for kv in sorted(tags.items()))
+                    if last.get(key) == summary:
+                        continue
+                    last[key] = summary
+                    print('%7.1fs  ring 0x%08X  used 0x%X/0x%X  %d records  %s'
+                          % (now, addr, used, size, n, summary or '(none)'))
                 for addr in polls:
                     value = int.from_bytes(read(addr), 'big')
                     now = time.time() - start

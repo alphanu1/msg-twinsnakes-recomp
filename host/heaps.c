@@ -325,7 +325,13 @@ void mgs_dump_ring(void* cpu, uint32_t ring)
     uint32_t read  = mgs_module_guest_read32(cpu, ring + RING_READ);
     uint32_t write = mgs_module_guest_read32(cpu, ring + RING_WRITE);
     uint32_t stop  = mgs_module_guest_read32(cpu, ring + RING_STOP);
-    uint32_t tags[256], claimed[256];
+    /* Tags are whole words, not small enumerations: some are packed as
+     * (language << 16) | id, and the consumer factory refuses to exist
+     * unless the high half matches the console's language. A histogram
+     * keyed on a masked low byte hides exactly that. Kept as a small table
+     * of (value, count) so any word can be reported. */
+    uint32_t seen[64], count[64];
+    unsigned distinct = 0u;
     uint32_t p = read;
     unsigned n = 0u, wraps = 0u, i;
 
@@ -338,7 +344,7 @@ void mgs_dump_ring(void* cpu, uint32_t ring)
         printf("  cursors are not inside the buffer; not walked\n");
         return;
     }
-    for (i = 0; i < 256u; ++i) tags[i] = claimed[i] = 0u;
+    for (i = 0; i < 64u; ++i) seen[i] = count[i] = 0u;
 
     /* Bounded by the record count, not by trusting the cursors to meet: a
      * ring whose sizes are wrong walks forever otherwise, and this runs at
@@ -352,7 +358,13 @@ void mgs_dump_ring(void* cpu, uint32_t ring)
             continue;
         }
         len = mgs_module_guest_read32(cpu, p + 4u);
-        if (tag & 0x80u) ++claimed[tag & 0x7Fu]; else ++tags[tag & 0x7Fu];
+        {
+            unsigned k;
+            for (k = 0u; k < distinct; ++k)
+                if (seen[k] == tag) break;
+            if (k == distinct && distinct < 64u) { seen[distinct++] = tag; }
+            if (k < 64u) ++count[k];
+        }
         ++n;
         if (!len || len > size) {
             printf("  record at 0x%08X has size 0x%X; walk stopped\n", p, len);
@@ -364,11 +376,9 @@ void mgs_dump_ring(void* cpu, uint32_t ring)
 
     printf("  %u records between the cursors, %u wrap%s\n",
            n, wraps, wraps == 1u ? "" : "s");
-    for (i = 0; i < 128u; ++i)
-        if (tags[i] || claimed[i])
-            printf("    tag %3u: %6u waiting, %6u already claimed%s\n",
-                   i, tags[i], claimed[i],
-                   i == 2u ? "   <- what the movie asks for" : "");
-    if (!tags[2] && !claimed[2])
-        printf("    tag 2 does not appear at all\n");
+    for (i = 0; i < distinct; ++i)
+        printf("    tag 0x%08X: %6u record%s%s\n", seen[i], count[i],
+               count[i] == 1u ? "" : "s",
+               (seen[i] & 0x80u) ? "  (claimed)" : "");
+    if (!distinct) printf("    no records\n");
 }

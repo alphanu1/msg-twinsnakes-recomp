@@ -9275,5 +9275,69 @@ bounded so a corrupt ring reports instead of hanging at exit.
 
 ---
 
+### F230 — the video is all there; the pin is one consumer whose output buffer is full
+
+F229 said "nobody consumes tag 1" and guessed the movie task was both
+consumers. The guess was wrong and the measurement is better than it.
+
+**The movie's own ring is full, and matches the oracle exactly.** There are
+two rings, not one — `bss_55BF4` is an array of two 0x40-byte descriptors,
+and `fn_1_1322D4` hands out the first free slot. Walking ours at the stall:
+
+    ring 0x7F4EF7D4: buffer 0x81701AA0 + 0x40000, read +0x3610, write +0x3FD70
+      321 records, tag 0x0000000E: 321
+
+Dolphin's ring 1 at the same point holds **321 records, all tag 0xE**, the
+same number — and then drains: 321 -> 292 -> 248 -> 226. Ours never moves.
+**So the video data is present and correct. Nothing is missing from disc.**
+`mpeg_movie_task` asks for tag `0xE` (its node's `+0x38`, measured) and never
+takes any, because it is parked in state 1 (`+0x44`) behind ring 0.
+
+**Tags are packed, and my first histogram hid it.** The consumer factory at
+`0x14FCC` refuses to create a task unless `(arg >> 16)` equals the language
+byte at `0x801E7DD8` — which `fn_80006514` sets from `OSGetLanguage` for a
+PAL disc, and which reads **1** in Dolphin. The five `fn_1_12FC4` tasks in
+our table hold tags `0x00070004`, `0x00050004`, `0x00040004`, `0x00030004`,
+`0x00020004`: `(language << 16) | 4`, every language **except 1**. They are
+*discard* tasks — `fn_1_12FC4` acquires a record and frees it immediately, so
+unselected languages are drained rather than decoded. Language 1's stream
+gets the real consumer, `fn_1_14D34`, whose node holds `0x00010004`.
+
+Both walkers now report whole tag words. The rings that matter turned out to
+carry plain small tags, so the masking changed no conclusion here — but it
+would have hidden the language field exactly where it is load-bearing.
+
+**The pin has a name.** `fn_1_8FE8`, node `0x8109D760`, holds tag
+`0x00000001` and ring `0x7F4EF794` — it *is* the tag-1 consumer, it exists,
+it sits on level 1, and its flags (`0x8090`) do not skip it. It is running
+and refusing the work:
+
+    rec = gcn_pool_acquire(node->0x38, node->0x30)   tag 1
+    len = fn_1_1325D4(ring, rec)                     record size - 0x10
+    ...
+    avail = node->0xB8 - node->0xBC
+    if (avail < node->0x40) return                   <- taken every frame
+
+and on the other path it calls `gcn_pool_clear_entry_flag`, which puts the
+record back with its claim bit cleared. That is why the walk sees nine
+**unclaimed** tag-1 records rather than nine claimed ones: they are being
+picked up, rejected and replaced every frame.
+
+So the chain gains a link at the front: **`fn_1_8FE8`'s destination buffer
+has no room**, so it refuses tag-1 records, so ring 0's head never advances,
+so no tag-2 arrives, so level 3 stays gated, so `mpeg_movie_task` stays in
+state 1, so 321 perfectly good video records sit unread.
+
+`node->0xB8`, `0xBC` and `0x40` are the next measurement — a run dumping them
+is in flight. If they show a buffer that fills and never drains, the consumer
+of *that* buffer is the real fault, and its most likely owner is audio, which
+would finally join this investigation to F218-F223.
+
+**Correction worth keeping.** `MGS_BUDGET` is cycles per dispatch call, not a
+run length. Setting it to 2600 to "shorten" runs made every run several times
+slower; runs are bounded by `MGS_STEPS` alone.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
