@@ -2108,6 +2108,39 @@ int main(int argc, char** argv)
                                     if (r) mgs_dump_ring(cpu, r);
                                 }
                             }
+                            {   /* MGS_DUMP_ARAM=<addr>[:<len>]: the DSP's
+                                 * store, which MGS_DUMP cannot reach because
+                                 * the CPU cannot address it. The mixer reads
+                                 * its samples from here, so "the voice reads
+                                 * silence" is only answerable by looking. */
+                                const char* av = getenv("MGS_DUMP_ARAM");
+                                if (av && *av) {
+                                    char* e2 = NULL;
+                                    uint32_t at = (uint32_t)strtoul(av, &e2, 0);
+                                    unsigned long n = 0x40u;
+                                    const uint8_t* ad = mgs_host_mmio()->aram.data;
+                                    if (e2 && *e2 == ':') n = strtoul(e2 + 1, NULL, 0);
+                                    if (n > 0x400u) n = 0x400u;
+                                    printf("ARAM dump 0x%08X (%lu bytes):\n", at, n);
+                                    if (ad) {
+                                        unsigned long k;
+                                        uint32_t nz = 0;
+                                        for (k = 0; k < n; k += 16u) {
+                                            unsigned long q;
+                                            printf("  +0x%03lX ", k);
+                                            for (q = 0; q < 16u && k + q < n; ++q) {
+                                                uint8_t b = ad[(at + k + q) &
+                                                               (16u*1024u*1024u - 1u)];
+                                                if (b) ++nz;
+                                                printf("%02X", b);
+                                                if ((q & 1u)) printf(" ");
+                                            }
+                                            printf("\n");
+                                        }
+                                        printf("  %u of %lu bytes non-zero\n", nz, n);
+                                    }
+                                }
+                            }
                             const char* env = getenv("MGS_DUMP");
                             while (env && *env) {
                                 char* end = NULL;

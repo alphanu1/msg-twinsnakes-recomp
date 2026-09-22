@@ -156,6 +156,8 @@ static uint64_t s_frames, s_advanced, s_looped, s_ended;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames;
 static int      s_peak;
+static int      s_trace = -1;
+static unsigned s_traced;
 
 /* One AX frame: 5 ms of 32 kHz stereo. */
 #define AX_FRAME_SAMPLES AX_SAMPLES_PER_FRAME
@@ -170,6 +172,7 @@ void mgs_ax_dsp_frame(void* cpu)
     int any = 0;
 
     ++s_frames;
+    if (s_trace < 0) s_trace = getenv("MGS_TRACE_AXMIX") != NULL;
     for (i = 0; i < AX_FRAME_SAMPLES; ++i) { acc_l[i] = 0; acc_r[i] = 0; }
 
     for (i = 0; i < AXPB_COUNT; ++i, pb += AXPB_STRIDE) {
@@ -202,6 +205,18 @@ void mgs_ax_dsp_frame(void* cpu)
 
         ++s_mixed_voices;
         ++s_advanced;
+
+        /* MGS_TRACE_AXMIX: the first few voices as the mixer sees them.
+         * "Silent output" has three very different causes - no samples, no
+         * volume, or a voice pinned at its end address - and the numbers
+         * that separate them are these five. */
+        if (s_trace && s_traced < 12u) {
+            ++s_traced;
+            fprintf(stderr, "[axmix] voice %02u fmt %2u curr %08X end %08X "
+                            "loop %08X %s vol %04X vl %04X vr %04X ratio %08X\n",
+                    i, format, curr, end, loop,
+                    looping ? "loop" : "once", vol, vl, vr, ratio);
+        }
 
         for (k = 0; k < AX_FRAME_SAMPLES; ++k) {
             int ok, sv = sample_at(format, curr, &ok);

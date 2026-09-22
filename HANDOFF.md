@@ -10287,5 +10287,52 @@ distinguishable by dumping ARAM at the read address, which is the next step.
 
 ---
 
+### F247 — THERE IS SOUND. The console had two ARAMs and the mixer read the empty one
+
+F246's mixer was correct and produced silence. The cause was not in the
+mixer at all.
+
+**Two buffers for one piece of hardware.** `mgs_aram_init` did this:
+
+    a->data = (uint8_t*)calloc(1, MGS_ARAM_SIZE);   /* its own 16 MB */
+    a->mem  = mem;                                  /* and the guest's, unused */
+
+So the DMA filled one 16 MB store and everything reading `GuestMemory.aram`
+saw a different one, permanently zero. **Nothing noticed for as long as only
+the DMA used it** — `__ARChecksize` probes through the same path and passes
+either way — and it surfaced the instant something *read* a voice's samples.
+
+**How it was cornered.** Each step ruled out the mixer rather than the data:
+
+- `MGS_DUMP_ARAM` (new) showed real PCM16 at the read address: `FFFD FFFC
+  FFFC 0003 FFFD FFFA`, **103 of 128 bytes non-zero**. The data existed.
+- `MGS_TRACE_AXMIX` (new) showed the voices behaving correctly — **two of
+  them, 62 and 63, a stereo pair**, format 10, volumes `0x7FFF`, advancing
+  by exactly **`0xDC` = 220 samples a frame**, which is `160 x 1.3769`, the
+  SRC ratio. Addresses, volumes and rate were all right.
+- Correct reader, correct address, real data, zero result. The only
+  remaining possibility was that the two were not the same memory. They were
+  not.
+
+**Fixed** by having the ARAM model borrow `GuestMemory`'s allocation instead
+of making its own, and not freeing what it does not own.
+
+    before   peak 0 of 32767,     0 of 62,763 frames not silent
+    after    peak 23 of 32767, 52,979 of 62,763 frames not silent
+
+**Peak 23 is quiet and that may be correct** — the samples at the read
+address are `+/-5`, which is a fade-in — but it is not yet confirmed that the
+level is right, only that it is no longer zero.
+
+**One number is NOT judged.** `movie.dat` read 8 times in this run against 34
+before. The machine was at **load average 36** with `quartus_fit` running,
+which is the F237 trap exactly, and a streaming count is precisely the kind
+of timing-dependent measurement that load destroys. The sound result
+survives it (zero versus non-zero is presence, not timing); the movie number
+does not, and is to be re-measured on a quiet machine before anyone concludes
+the ARAM change regressed it.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

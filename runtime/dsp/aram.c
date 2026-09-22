@@ -18,18 +18,30 @@ static uint16_t rd16(const uint8_t* regs, uint32_t off)
     return (uint16_t)(((uint32_t)regs[off] << 8) | regs[off + 1u]);
 }
 
+/* ONE PIECE OF HARDWARE, ONE BUFFER.
+ *
+ * This used to `calloc` its own 16 MB and leave `GuestMemory.aram`
+ * untouched, so the console had two audio RAMs: the DMA filled one and
+ * anything reading guest memory saw the other, permanently zero. Nothing
+ * noticed while only the DMA used it - `__ARChecksize` probes through this
+ * same path and passed either way - and it surfaced the moment the AX mixer
+ * read a voice's samples and got silence from an address the DMA had
+ * demonstrably written (HANDOFF F247).
+ *
+ * `GuestMemory` owns the allocation; this only borrows it, and must not
+ * free it. */
 int mgs_aram_init(MgsAram* a, GuestMemory* mem)
 {
     memset(a, 0, sizeof *a);
-    a->data = (uint8_t*)calloc(1, MGS_ARAM_SIZE);
+    if (!mem || !mem->aram) return 0;
+    a->data = mem->aram;
     a->mem = mem;
-    return a->data != NULL;
+    return 1;
 }
 
 void mgs_aram_free(MgsAram* a)
 {
-    free(a->data);
-    a->data = NULL;
+    a->data = NULL;                 /* borrowed from GuestMemory, not ours */
 }
 
 void mgs_aram_run_dma(MgsAram* a, const uint8_t* regs)
