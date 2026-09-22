@@ -44,6 +44,12 @@ typedef struct MgsAram {
 
     uint64_t writes, reads;      /* DMA transfers, not register accesses */
     uint64_t bytes_in, bytes_out;
+
+    /* WHERE the transfers land. A count of transfers says the game is using
+     * ARAM; it does not say whether what a voice reads is what the game
+     * wrote, which is the question when a mixer reads silence from an
+     * address that is inside the store. */
+    uint32_t lo_in, hi_in;
 } MgsAram;
 
 int  mgs_aram_init(MgsAram* a, GuestMemory* mem);

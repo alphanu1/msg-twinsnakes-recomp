@@ -128,6 +128,8 @@ void mgs_dump_ring(void* cpu, uint32_t ring);
  * mail; MGS_AX_MODEL=0 turns it off. */
 void mgs_ax_dsp_frame(void* cpu);
 void mgs_ax_dsp_report(void);
+struct GuestMemory;
+void mgs_ax_dsp_set_memory(struct GuestMemory* mem);
 uint32_t* mgs_module_msr_ptr(void* cpu);
 uint32_t* mgs_module_lr_ptr(void* cpu);
 uint32_t mgs_module_current_context(void* cpu);

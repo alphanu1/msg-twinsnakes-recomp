@@ -15,6 +15,7 @@
 #include "os/patch_table.h"
 #include "platform/jobs.h"
 #include "module.h"
+#include "../runtime/platform/sdl_audio.h"
 #include "platform/sdl_video.h"
 #include "platform/mmio.h"
 #include "gx/efb.h"
@@ -1260,6 +1261,16 @@ int main(int argc, char** argv)
     printf("renderer: software rasteriser on %u cores, %s\n",
            mgs_jobs_worker_count(jobs) + 1u,
            headless ? "no presentation (headless)" : "presenting through SDL3");
+    /* THE AUDIO DEVICE, and why it opens even headless-adjacent.
+     *
+     * The mixer runs regardless, because the guest's timing depends on voice
+     * positions advancing whether or not anyone is listening (HANDOFF F245).
+     * The device is what makes that audible, which is the point of doing
+     * audio now rather than in phase 4: a pacing bug you can hear is found
+     * in seconds where a counter at exit takes a run. A headless batch run
+     * opens nothing and the mixer still keeps time. */
+    if (!headless) mgs_audio_open(32000u);
+
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
     overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));
 
@@ -1391,6 +1402,9 @@ int main(int argc, char** argv)
                                                  cp && *cp ? cp : "saves/slot_a.raw");
                         }
                     s_display_mem = &rt.mem;
+                    /* The mixer reads its samples out of ARAM, so it needs
+                     * the same guest memory everything else uses. */
+                    mgs_ax_dsp_set_memory(&rt.mem);
                     s_display_windowed = !headless;
                     /* Armed before the run, because the frame worth keeping
                      * is one of the early ones and the decision has to be
@@ -2066,6 +2080,11 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
+                        printf("  ARAM written 0x%08X-0x%08X (%llu bytes); "
+                               "a voice reading outside that range reads "
+                               "silence\n",
+                               mgs_host_mmio()->aram.lo_in, mgs_host_mmio()->aram.hi_in,
+                               (unsigned long long)mgs_host_mmio()->aram.bytes_in);
                         /* MGS_DUMP=<addr>[:<len>][,<addr>[:<len>]...]
                          *
                          * Reads VALUES, which is the one thing MGS_WATCH

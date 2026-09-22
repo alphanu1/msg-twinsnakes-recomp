@@ -10234,5 +10234,58 @@ was already right.
 
 ---
 
+### F246 — phase 2c begun: a real mixer and an audio device, and it is silent
+
+Audio moved from phase 4 to 2c (see MILESTONES and the design document). The
+first half is built; it does not make a sound yet, and the instrument that
+says so is part of the work.
+
+**What exists now.** `runtime/platform/sdl_audio.c` opens a 32 kHz stereo
+SDL3 device and queues finished frames; it degrades to a no-op headless and
+under `MGS_NO_AUDIO`, so a batch run keeps identical guest timing without a
+device. `host/ax_dsp.c` is no longer a position model: it walks `__AXPB`,
+reads each running voice's samples out of ARAM, applies the voice envelope
+(`ve.currentVolume`) and the per-voice mix levels (`mix.vL`/`vR`), sums into
+a 160-sample stereo frame and pushes it. **The position now advances because
+samples were consumed**, rather than by a formula.
+
+Formats are from `dolsdk2004`'s `AXSetVoiceAddr`: 0 ADPCM (nibble-addressed),
+10 PCM16 (sample-addressed), 25 PCM8. PCM16 and PCM8 are decoded; ADPCM is
+counted and skipped rather than mixed as zero, because "no sound" and "sound
+we cannot decode" are different faults.
+
+**It is silent, and the report says so rather than leaving it to be
+discovered:**
+
+    AX mixer: 62763 frames (313.8s of sound), 105958 voice-mixes
+      ADPCM skipped: 368; samples outside ARAM: 0; voices starved: 105922
+      output: peak 0 of 32767 (0.0%), 0 of 62763 frames not silent
+
+**A wrong fix, caught by the peak meter.** The first version wrapped a voice
+whenever `curr > end`, which produced **286,628 loops in 62,763 frames** —
+4.5 per frame. A streaming voice holds `loop > end` between refills (ours
+sits at loop `0x3000`, end `0x2FFF` before the first one), so wrapping lands
+past the end again and re-wraps every sample. That is now treated as a voice
+**waiting for data**: hold the position, leave it running, count it. Loops
+fell to 0 and starves rose to 105,922, which is the honest picture.
+
+**Where the silence comes from is NOT yet established.** What is known:
+
+- The addressing is right. ARAM is written over `0x00004000`-`0x02000020`,
+  and our movie voice reads sample `0x2000`, which is byte `0x4000` — the
+  exact start of the written region.
+- No read falls outside ARAM (`samples outside ARAM: 0`).
+- The field decoding is checked against a raw dump: PB `+0x70..0x7D` reads
+  `000A 0000 6000 0000 6FFF 0000 650E`, giving format 10, loop `0x6000`, end
+  `0x6FFF`, current `0x650E` — consistent, and `curr < end`.
+
+So the voice reads inside a region the game has written, with sane addresses,
+and gets zeros. The candidates are that the region was written with silence,
+that the samples live somewhere other than where this assumes, or that the
+voice is reading a buffer the game has not filled yet — and those are
+distinguishable by dumping ARAM at the read address, which is the next step.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

@@ -264,6 +264,7 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | ~~4. Audio~~ **moved to 2c** | — | — | — |
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
+| **7. Enhancements** *(added 2026-09-22)* | FSR/DLSS upscaling, TXAA or similar temporal AA, other optional image improvements | Each is **off by default** and none is a prerequisite for 6 | Ongoing |
 
 **The player-facing tools are native binaries, not scripts.** `verify-hash`,
 `extract-disc` and the launcher ship to people who have a game and a
@@ -315,6 +316,7 @@ flowchart LR
     D2 --> D[3 GX renderer]
     D --> F[5 Complete]
     F --> G[6 Port features]
+    G --> H[7 Enhancements]
 ```
 
 ### Why audio moved out of phase 4, and what it cost to learn

@@ -37,7 +37,7 @@ add_library(mgs_runtime STATIC
   pad/pad.c)
 
 if(SDL3_FOUND)
-  target_sources(mgs_runtime PRIVATE platform/sdl_input.c platform/sdl_video.c)
+  target_sources(mgs_runtime PRIVATE platform/sdl_input.c platform/sdl_video.c platform/sdl_audio.c)
   target_link_libraries(mgs_runtime PUBLIC SDL3::SDL3)
   target_compile_definitions(mgs_runtime PUBLIC MGS_HAVE_SDL3=1)
 endif()

@@ -71,6 +71,8 @@ void mgs_aram_run_dma(MgsAram* a, const uint8_t* regs)
         for (i = 0; i < len; ++i)
             a->data[(ar + i) & (MGS_ARAM_SIZE - 1u)] =
                 guest_read8(a->mem, mm + i);
+        if (!a->writes || ar < a->lo_in) a->lo_in = ar;
+        if (ar + len > a->hi_in) a->hi_in = ar + len;
         ++a->writes;
         a->bytes_in += len;
     }
