@@ -10126,5 +10126,60 @@ than an assumption.
 
 ---
 
+### F244 — the 8% CPU is the frame cap, and MGS_TICK_RATE=338 makes it WORSE
+
+Ben reported the port using only 8% of a 32-core machine while running
+slowly, with the menu slow and the movie showing one frame per chunk, and
+sent a per-core graph: **all 32 cores active, none saturated, 21.3% total**.
+
+**The CPU figure is the frame cap, doing its job.** Same 40M steps, headless:
+
+    uncapped          wall  6.17 s   cpu 502%
+    MGS_FPS_CAP=60    wall 16.70 s   cpu 177%
+
+502% x 6.17s is 31 core-seconds; 177% x 16.70s is 29.6. **Identical work,
+spread over 2.7x the wall clock** — the cap `nanosleep`s to hold 60 XFB
+copies a second and the idle time is the sleep. Low CPU here is not a
+symptom of anything.
+
+**The emulator is not slow.** Headless it runs **7.1M steps/sec**, producing
+3,559 retraces/sec — **59x real time**. Nothing about throughput explains a
+slow menu.
+
+**What IS wrong is the ratio.** In the capped run the guest takes **20,000
+retraces to draw 893 frames** — one drawn frame per 22 retraces, where
+hardware draws one per retrace. The guest is burning steps without
+progressing, and the hot-call table says where: `OSDisableInterrupts` and
+`OSRestoreInterrupts` at **1,478,914 calls each** in 40M steps — a critical
+section entered every 27 steps — with `OSGetTime` at 426,827. That is a
+spin, in a timed wait.
+
+**And the obvious fix is measured WRONG.** `host/module.c` documents the
+clock as miscalibrated and gives the figure: "the calibrated figure for
+60 Hz is 675000/2000 = 337 or 338", noting that with it wrong "anything that
+compares elapsed time to a frame number - a movie player, most obviously -
+sees almost no time passing". That is our exact symptom, so
+`MGS_TICK_RATE=338` looked certain. It regresses:
+
+| | tick 32 (default) | tick 338 |
+|---|---|---|
+| luma frames decoded | 5 | **1** |
+| `movie.dat` reached | `+0xBE800` | **`+0x38000`** |
+| task mask at exit | running | **parked at `0x8`** |
+| ring 1 | draining | **321 records, untouched** |
+
+With 338 the movie returns to exactly the stall F225 described. So the
+documented calibration is either wrong or is not independent of something
+else that was tuned around the current value — and the note in `module.c`
+should not be trusted as an instruction until that is understood. **Measured
+on a quiet machine (load ~2), not the F237 trap.**
+
+**Also from Ben's report, and worth separating:** the intro plays at the
+correct speed and the subtitles are correctly timed, while the menu is slow
+and the movie shows one frame per chunk. Whatever this is, it is selective —
+which argues against a global clock scale and for something per-subsystem.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
