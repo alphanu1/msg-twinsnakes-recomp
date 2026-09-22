@@ -583,6 +583,23 @@ This is the project. ~200 functions and the widest error bars in the plan.
       the good configuration reproduces to the exact step. **F220's rule
       again: check `uptime` before believing a run.** Tree reverted to
       F236's state; the diagnostic kept.
+- [x] **movie.dat STREAMS, and real video frames decode** (F240). The
+      `pc = 0x800` crash is fixed: `mgs_fp_unavailable` now accepts a context
+      outside MEM1 when **the OS vouches for it** — `OSContext` is
+      `OSThread`'s first member, so a genuine current context *equals*
+      `OSCurrentThread`. `context_is_sane` and `mgs_module_take_exception`
+      are untouched. At 400M steps the run reaches the **step limit with no
+      fault** (was a crash at 113M); AX frames 17,568 → **62,927**;
+      **`movie.dat` 8 reads/262 KB/`+0x38000` → 27 reads/792 KB/`+0xBE800`**,
+      unpinned for the first time since F187; `demo.dat` 17 → 110 reads;
+      textures 29 → 150. And a new texture shape appears —
+      **`fmt 0x1 512x320` at roughness 1–2**, exactly the dimensions the movie
+      context reported, on the runtime's own scale for *artwork, not noise*.
+      **Still wrong:** `fmt 0x6 512x448` decodes 121× at roughness 25, and
+      there are **3,198 `palette` texture refusals** — both in the movie's
+      output path, not its stream.
+      **This was F237's "unjudged" fix**: it looked catastrophic at load 32
+      and is correct at load 2.
 - [x] **The event IS posted now; the movie reaches PLAYING** (F239).
       `MGS_FIND_WORD=0x006647BA` finds the key in the **event table**
       (`bss_253F0 + 0`), where F225 watched 822 writes and never saw it. It is

@@ -353,6 +353,30 @@ static int context_is_sane(uint32_t addr)
            off + 768u <= 24u * 1024u * 1024u;
 }
 
+/* THE OS VOUCHING FOR A CONTEXT, which a range test cannot do.
+ *
+ * `OSContext` is the first member of `OSThread` (dolsdk2004 OSThread.h), so a
+ * genuine current context IS the current thread's address. That makes
+ * `OSCurrentContext == OSCurrentThread` a structural check that a stretch of
+ * uninitialised memory cannot pass by accident - unlike "is it in a window",
+ * which is what `context_is_sane` tests and why it refuses the engine's own
+ * worker threads, whose contexts live in the overlay's BAT-mapped region.
+ *
+ * Used ONLY by the lazy-FP path. `mgs_module_take_exception` keeps the strict
+ * MEM1 test: widening THAT changes interrupt dispatch for the whole boot,
+ * which is a much larger blast radius than one exception vector.
+ */
+#define OS_CURRENTTHREAD 0x800000E4u
+
+static int context_vouched_for(void* cpu, uint32_t addr)
+{
+    if (context_is_sane(addr)) return 1;
+    if ((addr & 7u) != 0u) return 0;
+    if (addr - MGS_VMEM_BASE >= MGS_VMEM_SIZE) return 0;
+    if (addr - MGS_VMEM_BASE + 768u > MGS_VMEM_SIZE) return 0;
+    return addr == gread32(cpu, OS_CURRENTTHREAD);
+}
+
 static void fpu_save(void* cpu, uint32_t ctx)
 {
     uint8_t* st = (uint8_t*)cpu;
@@ -434,7 +458,7 @@ static int mgs_fp_unavailable(void* cpu)
     uint32_t owner = gread32(cpu, OS_FPUCONTEXT);
     uint32_t srr0, srr1;
 
-    if (!context_is_sane(ctx)) {
+    if (!context_vouched_for(cpu, ctx)) {
         /* Say WHICH address was refused, once. "Unhandled exception at
          * 0x800" with no context value is what made F236's crash look like
          * an audio bug for as long as it did. */

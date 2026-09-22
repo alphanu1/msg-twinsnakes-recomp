@@ -9927,5 +9927,61 @@ record, and what is drawn is therefore still noise.
 
 ---
 
+### F240 — the FP fix works, movie.dat streams, and real video frames decode
+
+F237 recorded two attempted fixes for the `pc = 0x800` crash as *unjudged*,
+because the runs that condemned them were taken at load average 32. The
+machine went quiet (load 2.06) and the structural fix was re-tested. **It is
+correct**, and the runs that rejected it were noise.
+
+**The fix.** `mgs_fp_unavailable` now accepts a context outside MEM1 when the
+OS itself vouches for it: `OSContext` is the first member of `OSThread`
+(dolsdk2004 OSThread.h), so a genuine current context **equals**
+`OSCurrentThread`, which uninitialised memory cannot satisfy by accident.
+`context_is_sane`'s range test is untouched, and
+`mgs_module_take_exception` still uses it — widening *that* changes interrupt
+dispatch for the whole boot, which is a far larger blast radius than one
+exception vector.
+
+**The result, at 400M steps with `MGS_DSP_RESUME=1`:**
+
+| | before | after |
+|---|---|---|
+| outcome | crash, `pc = 0x800` at 113M | **ran to the step limit, no fault** |
+| `[fp] refused` | once, `0x7F4A5630` | never |
+| AX frames | 17,568 | **62,927** |
+| voice advances | 19,168 | **109,886** |
+| `shared/movie.dat` | 8 reads, 262 KB, `+0x38000` | **27 reads, 792 KB, `+0xBE800`** |
+| `demo.dat` | 17 reads, 522 KB | **110 reads, 3,045 KB** |
+| textures decoded | 29 | **150** |
+
+**`movie.dat` is streaming.** That file has been pinned at `+0x38000` —
+0.28% of it — since F187, through every finding from F225 to F239. It now
+advances.
+
+**And real video frames decode.** The texture table gains a shape that was
+never there before:
+
+    fmt 0x1  512x320   x5    roughness mean 1  max 2
+
+`512x320` is exactly what the movie context reported in `+0x44`/`+0x48`
+(F239), and roughness 1-2 is the runtime's own scale for **artwork, not
+noise**. Five genuine movie frames were decoded.
+
+**What is still wrong, and not overstated this time.** The `fmt 0x6 512x448`
+shape is still decoded 121 times at roughness 25 - that is still noise, and
+it is what dominates the screen. And there are **3,198 texture refusals, all
+`palette`** — the cache is refusing paletted (CI-format) textures, which is a
+GX-side problem and was invisible while the movie never got this far. Neither
+of those is the movie stream any more; they are what the movie's output path
+does with it.
+
+**The process lesson, earned twice today.** F237's caution was right to
+refuse to judge, and refusing was worth more than the wrong answer would have
+been: the fix that looked catastrophic under load is the fix. Re-test on a
+quiet machine before discarding a change.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
