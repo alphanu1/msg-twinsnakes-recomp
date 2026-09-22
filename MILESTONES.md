@@ -583,7 +583,19 @@ This is the project. ~200 functions and the widest error bars in the plan.
       the good configuration reproduces to the exact step. **F220's rule
       again: check `uptime` before believing a run.** Tree reverted to
       F236's state; the diagnostic kept.
-- [x] **THE STALL IS FIXED — the movie decodes and draws** (F236).
+- [x] **The AUDIO path unblocks — and the picture is NOISE** (F236, corrected
+      by F238). `host/ax_dsp.c` plus `MGS_DSP_RESUME=1` genuinely unblocks the
+      audio half: ring-0 tag-2 records **0 → 204**, the read cursor moves, the
+      task mask goes `0x1 → 0x0` instead of parking at `0x8`, the four sleeping
+      sound threads carry traffic again (queue cursors 49/68/26), and
+      `_vorbis_synthesis1` is running in the thread dump. **But the screen is
+      garbage**, and the runtime said so in the same line I read as success —
+      `roughness 36 NOISE`, texture `fmt 0x6 512x448 mean 31 max 39`. The
+      reason is one unchanged line of the disc tally: **`movie.dat` is still
+      read only to `+0x38000`**, 0.28% of the file, exactly as before. The
+      *video* stream never advanced; only `demo.dat` (the Ogg audio) did. The
+      two halves are separate rings — ring 0 (tag 2, audio) moved, ring 1
+      (tag `0xE`, the 321 video records) did not.
       `host/ax_dsp.c` models the DSP's one observable effect: each AX voice's
       `currentAddress` advances by `160 * srcRatio` per frame, looping at
       `endAddress`. **It mixes nothing** — it is the design document's line

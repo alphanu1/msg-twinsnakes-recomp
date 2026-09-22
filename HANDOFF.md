@@ -9694,7 +9694,7 @@ loads the overlay, is the one to throw away.
 
 ---
 
-### F236 — THE STALL IS FIXED. The movie plays, and a new fault is exposed
+### F236 — the AUDIO path unblocks. (Its "the movie plays" claim is WRONG; see F238)
 
 Two changes together, neither sufficient alone, and the pipeline runs.
 
@@ -9810,6 +9810,52 @@ not after.
 **What the default path does, checked at the same time:** unchanged and
 clean. 40M steps, no fault, `pc = 0x7F0F8450` at the step limit. The audio
 work is behind `MGS_DSP_RESUME` and cannot affect it.
+
+---
+
+### F238 — correction: the picture is NOISE, and movie.dat never advanced
+
+Ben ran it and said the screen was garbage. It is, and the evidence was in
+the log I had already quoted.
+
+**What F236 got right.** The audio path genuinely unblocked, and that part
+stands: ring-0 tag-2 records 0 -> 204, the read cursor moving, the task mask
+going `0x1 -> 0x0` instead of parking at `0x8`, four sound threads that had
+been asleep now carrying traffic (queue read cursors 49, 68 and 26), and a
+thread dump showing **`_vorbis_synthesis1`** actually running and
+`gcn_stream_fill_task -> gcn_stream_serve_requests -> OSSendMessage` serving
+data requests. None of that was happening before.
+
+**What F236 got wrong.** "The movie decodes and draws." It does not. The
+same log line I used as proof says `roughness 36 NOISE`, and the texture
+summary says `fmt 0x6 512x448 mean 31 max 39` — the runtime's own measure of
+"a few = artwork, tens = noise", which exists precisely to catch this. I
+quoted the resolution and the lit percentage out of that line and stepped
+over the word NOISE in the middle of it.
+
+**And the reason is one line of the disc tally, unchanged across the fix:**
+
+    demo.dat            17 reads   522240 bytes  last +0x3E48800   (was 14)
+    shared/movie.dat     8 reads   262144 bytes  last +0x38000     (unchanged)
+
+`movie.dat` is still read exactly as far as it was before any of this work —
+262,144 bytes of a 94,935,040-byte file, 0.28%. **The video stream never
+advanced at all.** What unblocked is `demo.dat`, which is the Ogg audio. So
+the decoder is being driven over data it has already consumed and is emitting
+noise, which is exactly what a full-screen texture at 99% lit with a
+roughness of 36 is.
+
+**So the state is:** the audio half of the streamed-media pipeline runs; the
+video half is still stalled where F225 found it, and the visible result is
+worse-looking than the freeze, not better. The two halves are separate
+streams through separate rings — ring 0 (tag 2, from `demo.dat`) and ring 1
+(tag `0xE`, the 321 video records) — and only ring 0 moved.
+
+**The lesson, and it is the same one twice in one session.** F237 was about
+believing a measurement taken under load; this is about believing a
+measurement I had read selectively. The instrument was not missing and was
+not wrong — `roughness/NOISE` exists for this exact purpose, was printed, and
+I quoted around it.
 
 ---
 
