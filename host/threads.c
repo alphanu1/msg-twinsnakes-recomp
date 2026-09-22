@@ -78,9 +78,17 @@ static int describe_queue(void* cpu, uint32_t queue, uint32_t off)
     if (count == 0u || count > 4096u) return 0;
     if (used > count || first >= count) return 0;
 
-    printf("        %s queue 0x%08X: %u of %u slots used%s\n",
-           off ? "receive on" : "send to", mq, used, count,
-           used ? "" : "  <- EMPTY: nothing was ever sent");
+    /* "EMPTY" IS NOT "NEVER USED", and saying so cost a wrong root cause
+     * once already: `usedCount` is the occupancy right now, so a queue that
+     * carried thirty messages and was drained reads exactly the same zero as
+     * one nothing was ever sent to. The reader cursor is printed alongside
+     * it because THAT does distinguish them - a `first` that has moved is
+     * proof the queue has been read from, whatever it holds at this
+     * instant. */
+    printf("        %s queue 0x%08X: %u of %u slots used, read cursor %u%s\n",
+           off ? "receive on" : "send to", mq, used, count, first,
+           used ? "" : (first ? "  <- drained (it has carried messages)"
+                              : "  <- empty, and never read from"));
     return 1;
 }
 

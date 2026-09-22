@@ -310,12 +310,12 @@ is the one that governs the work:
 
 | Measure | | |
 |---|---|---|
-| **1. Functions named** | 1,052 / 18,485 | **5.7%** |
-| — `main.dol` | 1,025 / 1,818 | 56.4% |
-| — `mgso_pal.rel` | 27 / 16,667 | 0.2% |
+| **1. Functions named** | 1,072 / 18,485 | **5.8%** |
+| — `main.dol` | 1,028 / 1,818 | 56.5% |
+| — `mgso_pal.rel` | 44 / 16,667 | 0.3% |
 | **2. Function boundaries recovered** | 18,485 / 18,485 | **100%** |
-| **3. SDK entry points the engine calls, named** | 205 / 336 | **61.0%** |
-| — weighted by call sites | 6,154 / 7,078 | **86.9%** |
+| **3. SDK entry points the engine calls, named** | 206 / 336 | **61.3%** |
+| — weighted by call sites | 6,155 / 7,078 | **87.0%** |
 | **4. GX surface the game uses, named** | 81 / 81 | **100.0%** |
 
 <sub>Regenerate with `tools/progress.py`; `--check` verifies these against
@@ -2648,6 +2648,82 @@ second, independent signal agreeing with the ordering.
 | functions named | 987 | **996** |
 | SDK entry points named | 193 / 336 | **197 / 336** |
 | SDK call sites covered | 6,137 / 7,078 | **6,142 / 7,078** |
+
+## Stage 5q — Name a pipeline by tracing a stall through it · **DONE**
+
+The engine overlay has no reference binary, so every stage that aligns
+against one is unavailable to it. What **is** available is a failure: when a
+specific thing does not happen, the functions on the path to it can each be
+read in full and named for what they do, and the run then says whether the
+reading was right.
+
+This stage named 17 overlay functions and 3 in `main.dol` while tracing the
+movie stall (HANDOFF F228–F232). None of them is a claim about Konami's own
+identifier; all are `lower_snake_case` descriptions, origin `own`, per the
+convention at the head of `mgso_pal.rel.symbols.txt`.
+
+### The commands
+
+Locate every consumer of the record pool and the tag each asks for:
+
+```sh
+S=build/phase0/out/mgso_pal/asm/auto_00_00000000_text.s
+grep -n "bl fn_1_1323C4$" $S | sed 's|.*/\* \([0-9A-F]*\).*|\1|'
+```
+
+**Out:** 11 call sites. Two pass a literal (`2` at `0x249A94`, `0x10` at
+`0x13259C`); the other nine read the tag from a field of the asking object,
+which is why the tag had to be read at **run time** rather than assumed.
+
+Read those fields out of a run:
+
+```sh
+MGS_TASK_DUMP=0x7F01B0B0 MGS_RING=*0x8109EE9C \
+  ./build/runtime/host/twin-snakes --module … --headless
+```
+
+**Out:** five `fn_1_12FC4` tasks holding `0x00070004`, `0x00050004`,
+`0x00040004`, `0x00030004`, `0x00020004`; one `fn_1_14D34` holding
+`0x00010004`; one `fn_1_8FE8` holding `0x00000001`.
+
+### How it was checked
+
+**By construction, against the language byte.** The factory at `0x14FCC`
+refuses to create a task unless `(tag >> 16)` equals the byte at
+`0x801E7DD8`, which `0x80006514` sets from the disc's country code and
+`OSGetLanguage`. The five discard tasks hold languages 7, 5, 4, 3 and 2 — and
+the **one missing value is 1**, which is exactly the language the oracle
+reads at that address, and exactly the one handed to the non-discarding
+consumer `fn_1_14D34`. Six tags, one omission, and the omission is predicted
+by an unrelated byte. That is what names `gcn_stream_discard_task` rather
+than leaving it a guess.
+
+**By a second, independent instrument.** `fn_1_8FE8`'s buffer accounting was
+measured two ways that must agree and were derived separately: watching
+`node->0xBC` across a run gave **two** decreases that were not the
+allocator's `memset`, and dumping the request queue at `node+0x48` gave a
+read cursor of **2**. Two requests served, counted once by a memory watch and
+once by a queue cursor.
+
+**Against the oracle, for the ring contents.** Our movie ring holds 321
+records all tagged `0xE`; Dolphin's holds **321 records all tagged `0xE`** at
+the same point, then drains. A name for the ring machinery that produced a
+different population in a working run would have been wrong.
+
+### What was deliberately NOT named
+
+- `fn_1_1325D4` (already noted in the map): it returns `*(entry-0xC) - 0x10`
+  and callers use it as a predicate, but what the field means is unsettled.
+- `fn_1_9C8` at `0x9C8`: it returns the field `gcn_worker_set_status` writes,
+  yet a run shows that field taking `0x80000`, `0x40000` and `0`, which reads
+  as a byte count rather than a status. The established name and the observed
+  values disagree, and naming it either way would settle that by assertion.
+- The sound threads at `0x80052764` and `0x8005440C`: identified as the loops
+  blocking on `0x802133A4` and `0x80213384`, but what each is *for* is not
+  established.
+
+**Out:** 20 symbols. `main.dol` 1,025 → 1,028; `mgso_pal.rel` 27 → 44; total
+1,052 → **1,072**.
 
 ## Stage 9 — Verify against the original · **PLANNED**
 

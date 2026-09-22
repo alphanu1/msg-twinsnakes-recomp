@@ -1476,3 +1476,26 @@
 .text 0x800247A8 0x50 PSMTXTranspose closed-region
 .text 0x80029F6C 0x70 DVDSetAutoFatalMessaging closed-region
 .text 0x80011CE0 0xE0 fprintf callees+varargs
+
+# ---- Konami's streaming sound layer, and the language index (F231, F232) ---
+#
+# `sd_stream_thread` is the loop the engine's `gcn_stream_serve_requests`
+# wakes: it blocks in `OSReceiveMessage` on its own queue and dispatches
+# seventeen commands through `jumptable_801E7C00`. `sd_stream_request_done`
+# is the other half of that handshake — the engine calls it when it has
+# finished serving a data request, and it posts message 1 back. Both are in
+# `sd_stream2.c` by the file attribution in main.dol.files.txt.
+#
+# `gGameLanguage` is set from the disc's country code and, for a PAL disc,
+# from `OSGetLanguage`; the engine's consumer factory refuses to create a
+# stream task unless the high half of its tag equals this byte, which is how
+# one language's audio is decoded and the rest discarded.
+#
+# Two further threads in this subsystem are identified but deliberately NOT
+# named: the loops at 0x80052764 and 0x8005440C, blocking on 0x802133A4 and
+# 0x80213384. What each is FOR is not established, and a name would be a
+# guess dressed as a finding.
+.text 0x80053178 0x40 sd_stream_request_done own
+.text 0x80055264 0x4C4 sd_stream_thread own
+.text 0x80006814 0x140 rel_loader_LoadEngine own
+.bss 0x801E7DD8 0x1 gGameLanguage own

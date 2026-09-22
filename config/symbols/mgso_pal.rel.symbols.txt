@@ -267,3 +267,38 @@
 .text 0x0F1470 0x17C inflate_trees_dynamic message
 .text 0x0F15EC 0x038 inflate_trees_fixed closed-region
 .text 0x28D9E4 0x26C NewFallingFloor message
+
+# ---- the streamed-media pipeline (F228-F232) -------------------------------
+#
+# Named by reading each function's whole instruction stream while tracing the
+# movie stall, and each one is load-bearing in that chain. The record pool is
+# a ring of {tag, size, ...} records with a payload at +0x10: `gcn_pool_pump`
+# advances the read cursor past consumed (tag 0) records and stops at the
+# first live one, and refills only when more than a third of the buffer is
+# free, which is why a pinned head starves the ring rather than growing it.
+# Tag 0xFF is the wrap marker and tag 0xF0 the end-of-stream marker.
+#
+# `fn_1_9C8` at 0x9C8 is deliberately NOT named here. It returns the field at
+# +0x8020 of the global at bss_3020 - the same field `gcn_worker_set_status`
+# (0x2B0) writes - and `gcn_pool_pump` refuses to refill while it is
+# non-zero. Watching it through a run shows it taking 0x80000, 0x40000 and 0,
+# which reads as a byte count rather than a status, so the established name
+# and the observed values do not sit comfortably together. Naming it either
+# way would resolve that disagreement by assertion instead of by evidence.
+.text 0x008D98 0x250 gcn_stream_serve_requests own
+.text 0x008FE8 0x144 gcn_stream_fill_task own
+.text 0x012FC4 0x084 gcn_stream_discard_task own
+.text 0x131D98 0x19C gcn_pool_read_done own
+.text 0x13200C 0x018 gcn_pool_used_bytes own
+.text 0x132030 0x0D8 gcn_pool_refill own
+.text 0x1321A8 0x12C gcn_pool_pump own
+.text 0x1322D4 0x034 gcn_pool_find_free own
+.text 0x132308 0x054 gcn_pool_create own
+.text 0x132368 0x05C gcn_pool_pump_locked own
+.text 0x149A10 0x07C mpeg_movie_spawn own
+.text 0x149AE8 0x048 mpeg_movie_register own
+.text 0x14A07C 0x160 mpeg_movie_init own
+.text 0x14A4C8 0x0B8 mpeg_movie_create own
+.text 0x249A64 0x054 gcn_demo_next_frame own
+.text 0x249AB8 0x2F0 gcn_demo_player_task own
+.text 0x249DB8 0x0A4 gcn_demo_stream_ready own

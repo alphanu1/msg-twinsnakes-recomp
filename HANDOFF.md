@@ -21,18 +21,18 @@ backend, **33/33 tests passing including `paired_single`**.
 **The port is GPL-3.0** — decided 2026-09-18, and it is the biggest thing to
 happen to the plan so far. See "Decisions" below.
 
-## PHASE 0 PROGRESS — 70.7%
+## PHASE 0 PROGRESS — 70.8%
 
 Regenerate with `tools/progress.py`; do not hand-maintain these numbers.
 
 | Measure | | |
 |---|---|---|
-| Functions named | 1,052 / 18,485 | 5.7% |
+| Functions named | 1,072 / 18,485 | 5.8% |
 | Function boundaries recovered | 18,485 / 18,485 | 100.0% |
-| SDK entry points the engine calls, named | 205 / 336 | 61.0% |
-| SDK call sites covered | 6,154 / 7,078 | 86.9% |
+| SDK entry points the engine calls, named | 206 / 336 | 61.3% |
+| SDK call sites covered | 6,155 / 7,078 | 87.0% |
 | GX surface the game uses, named | 81 / 81 | **100.0%** |
-| **Average of the five** | | **70.7%** |
+| **Average of the five** | | **70.8%** |
 
 The average is an unweighted mean of five dissimilar measures — a headline, not
 a statistic. Read the rows. In particular the 3.9% and the 100% are both true
@@ -9419,6 +9419,65 @@ stubbed, blocked behind `EXIGetID+0x2D0` recursing without bound when
 callback, by the audio DMA interrupt, or by a thread waiting on a queue of
 its own is **not yet established**, and guessing between them is exactly what
 cost F218-F221.
+
+---
+
+### F232 — all four sound threads are asleep, and the wake-up loop is mutual
+
+F231 ended with "why does `sd_stream2.c` stop sending requests". The thread
+dump answers it, once it is read with names.
+
+**Four threads, all blocked, all on empty queues.**
+
+    0x80217D58  prio 10  blocked on 0x8021336C
+        receive on queue 0x80213364: 0 of 72 slots used
+           2  0x80020C94  OSReceiveMessage+0x58
+           3  0x80055708                       <- fn_80055264's receive
+    0x802134E8  prio  9  receive on 0x802133A4: 0 of 72   from 0x800527E4
+    0x80215920  prio 11  receive on 0x80213384: 0 of 72   from 0x8005469C
+    0x8027B640  prio 11  receive on 0x8027B4D8: 0 of 72   from 0x800565E4
+
+Each return address lands on the blocking `OSReceiveMessage(queue, &msg, 1)`
+at the bottom of that thread's own loop — `fn_80055264`, `fn_80052764`,
+`fn_8005440C` and the one at `0x800565E4`. The whole sound subsystem is
+parked.
+
+**The loop that should keep them awake is mutual, and has no external
+driver.** Tracing every sender to `0x80213364`:
+
+    fn_80053178   <- the ENGINE's fn_1_8D98, when a request completes
+    fn_80052FAC   <- fn_80054FB0, inside fn_80055264 itself
+    fn_800530F8   <- 0x80055478, inside fn_80055264 itself
+    fn_80053200   <- 0x80055378, inside fn_80055264 itself
+    fn_8005236C / fn_80052534 / fn_80052604 / fn_800526B0
+                  <- all four from fn_80052764, which IS the thread on
+                     0x802133A4
+
+So thread A wakes thread B, thread B wakes thread A, and the only entry from
+outside the sound subsystem is `fn_80053178`, reached from the engine's
+`fn_1_8D98` **when it finishes serving a request**. That is a closed cycle:
+
+    the consumer cannot accept records, because its buffer is full
+    the buffer only empties when the sound thread asks for data
+    the sound thread only wakes when the consumer finishes a request
+    the consumer only finishes a request when one arrives
+
+On hardware the cycle is broken from outside — audio is consumed as it plays,
+and something posts periodically. **What that something is has not been
+established**, and it is the one thing left to find. `AIRegisterDMACallback`
+is called from exactly one place, `__AXOutInit`, registering
+`__AXOutAiCallback`, and the `__AXOutNewFrame` path contains no indirect call
+to a user hook — so the periodic wake is *not* obviously an AX frame
+callback, and I am not going to assert a mechanism I have not traced.
+
+**A diagnostic of ours was lying, and had already cost a wrong answer.**
+`describe_queue` printed `<- EMPTY: nothing was ever sent` whenever
+`usedCount` was zero. But `usedCount` is the occupancy *now*: a queue that
+carried thirty messages and was drained reads exactly the same zero. An
+earlier session nearly recorded "zero sends" as the root cause on the
+strength of that line. It now prints the read cursor too, which does
+distinguish the two, and says "drained (it has carried messages)" when the
+cursor has moved.
 
 ---
 
