@@ -652,6 +652,16 @@ volatile sig_atomic_t mgs_module_interrupted;
  * run, the overlay's .bss base was never captured, and the boot stopped
  * after loading the module - one file read, one frame drawn. */
 static uint32_t s_memwatch_addr, s_memwatch_last;
+/* MGS_WATCH=<addr>[:<length>] - a range reports WHICH WORD moved.
+ *
+ * A single address answers "did this change"; a range answers "which field
+ * changed", which is the question that keeps coming up and that a single
+ * address cannot. Walking the movie stall meant guessing the next field to
+ * look at and paying a run for each guess. Capped, because this is compared
+ * every step. */
+#define MGS_WATCH_MAX 0x400u
+static uint32_t s_memwatch_len;
+static uint8_t  s_memwatch_prev[MGS_WATCH_MAX];
 
 /* MGS_TRACE_FN=<addr>[,<addr>...]: guest functions to report calls to, with
  * their arguments and results. MGS_TRACE_FN_MAX caps the output. */
@@ -1073,7 +1083,24 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     memset(&r, 0, sizeof r);
     {
         const char* env = getenv("MGS_WATCH");
-        s_memwatch_addr = env ? (uint32_t)strtoul(env, NULL, 0) : 0u;
+        char* end = NULL;
+        s_memwatch_addr = env ? (uint32_t)strtoul(env, &end, 0) : 0u;
+        s_memwatch_len = 0u;
+        if (env && end && *end == ':') {
+            unsigned long n = strtoul(end + 1, NULL, 0);
+            if (n > MGS_WATCH_MAX) n = MGS_WATCH_MAX;
+            s_memwatch_len = (uint32_t)(n & ~3u);
+        }
+        if (s_memwatch_addr && s_memwatch_len) {
+            uint32_t i;
+            for (i = 0u; i < s_memwatch_len; i += 4u) {
+                uint32_t v = gread32(cpu, s_memwatch_addr + i);
+                s_memwatch_prev[i] = (uint8_t)(v >> 24);
+                s_memwatch_prev[i + 1u] = (uint8_t)(v >> 16);
+                s_memwatch_prev[i + 2u] = (uint8_t)(v >> 8);
+                s_memwatch_prev[i + 3u] = (uint8_t)v;
+            }
+        }
         s_memwatch_last = s_memwatch_addr ? gread32(cpu, s_memwatch_addr) : 0u;
         env = getenv("MGS_TRACE_FN");
         s_fntrace_n = 0u;
@@ -1198,7 +1225,25 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * than "somewhere in the last five hundred". Only when asked for:
          * the cost is a guest read per step and this is a diagnostic run,
          * not a normal one. */
-        if (s_memwatch_addr) {
+        if (s_memwatch_addr && s_memwatch_len) {
+            uint32_t i;
+            for (i = 0u; i < s_memwatch_len; i += 4u) {
+                uint32_t now = gread32(cpu, s_memwatch_addr + i);
+                uint32_t was = ((uint32_t)s_memwatch_prev[i] << 24)
+                             | ((uint32_t)s_memwatch_prev[i + 1u] << 16)
+                             | ((uint32_t)s_memwatch_prev[i + 2u] << 8)
+                             |  (uint32_t)s_memwatch_prev[i + 3u];
+                if (now == was) continue;
+                fprintf(stderr, "[watch] 0x%08X +0x%03X: 0x%08X -> 0x%08X  "
+                                "at pc 0x%08X lr 0x%08X\n",
+                        s_memwatch_addr, i, was, now,
+                        mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
+                s_memwatch_prev[i] = (uint8_t)(now >> 24);
+                s_memwatch_prev[i + 1u] = (uint8_t)(now >> 16);
+                s_memwatch_prev[i + 2u] = (uint8_t)(now >> 8);
+                s_memwatch_prev[i + 3u] = (uint8_t)now;
+            }
+        } else if (s_memwatch_addr) {
             uint32_t now = gread32(cpu, s_memwatch_addr);
             if (now != s_memwatch_last) {
                 fprintf(stderr, "[watch] 0x%08X: 0x%08X -> 0x%08X  "

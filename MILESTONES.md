@@ -554,6 +554,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **movie.dat is not Ogg; the event system works** (F224). `movie.dat`
+      has **zero** `OggS` pages; `demo.dat` has 100 in 2 MB - so the Vorbis
+      decoder reads `demo.dat`, and the audio-pacing chain conflated two
+      streams that merely stall alike. And the engine's event table is alive:
+      double-buffered, swapped each frame, counts climbing, several keys
+      active. **The movie's poll fails to match a key, rather than finding an
+      empty table.** New: `MGS_WATCH=<addr>:<len>` reports which word in a
+      range changed.
 - [x] **AX mixes 16,506 frames either way** (F223). `__AXOutDspReady` has two
       exits and I counted one: including `__AXDSPResumeCallback`'s path, both
       configurations mix ~16,500 frames. **AX was never stopped**, and

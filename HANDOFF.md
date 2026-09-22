@@ -8968,6 +8968,47 @@ read callback runs **13 times, 1 KB each**, and stops — while 64 KB has
 already been delivered into the buffer it reads from. What asks it for data,
 and why it stops asking, is the question. It is not AX.
 
+### F224 — movie.dat is not Ogg, demo.dat is, and the engine's event system works
+
+Three measurements, each closing off a line of inquiry.
+
+**`movie.dat` contains no Ogg at all.** Scanning it: **zero** `OggS` pages in
+the first megabyte, and it opens `00 00 00 10 | 00 00 00 10 | ...`, an index
+rather than a container. `demo.dat` has **100** `OggS` pages in 2 MB. So the
+Vorbis decoder is not decoding the movie — it is decoding `demo.dat`, and
+F218's chain conflated two streams.
+
+They behave the same, which is why it went unnoticed: both are read through
+the REL's stream layer from the same call chain, both deliver and then stall
+(`movie.dat` 8 reads / 256 KB from offset 0; `demo.dat` 14 reads / 440 KB
+from `+0x3E35000`). So the conflation cost less than it might have, but "the
+Vorbis reader stopping is why the movie stops" was never established — they
+are two streams stalling alike, which points at a common driver rather than
+at one feeding the other.
+
+**The engine's event system is alive.** `mpeg_movie_task` waits on event code
+1 from `gcn_event_poll`, so whether anything is posted at all is decisive.
+The table at `bss_253F0` is double-buffered — `fn_1_F50B8` swaps the index
+each frame and clears the retired buffer — and watching buffer 0's count at
+`+0x800` shows it climbing `0 -> 1 -> 2 -> 3 ...`, posted by `fn_1_F5118`.
+Watching the entry area shows several distinct keys active, their count
+halfwords at `entry+4` being set to 1 and 2 by five different engine writers.
+**Events are posted and the table is maintained.** So the movie's poll is
+not finding a *match*, rather than finding an empty table — a much narrower
+fault.
+
+**New instrument: `MGS_WATCH=<addr>:<length>`** reports *which word* in a
+range changed, with the pc and link register that changed it. Walking this
+stall has meant guessing which field to look at next and paying a run per
+guess; a struct diff answers it in one. It is what showed the event entries
+above, and it mirrors the range mode already added to the Dolphin oracle.
+Capped at 0x400 bytes, since it is compared every step.
+
+**Still open, and now precisely:** the movie task polls for its key and the
+table holds keys — which key does it want, and which are present. That needs
+reading values rather than changes, which is the one thing the watch cannot
+do.
+
 ---
 
 *Record further findings here as they are established — including the ones that
