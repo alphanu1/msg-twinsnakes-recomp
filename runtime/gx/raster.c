@@ -392,6 +392,13 @@ typedef struct RasterSpan {
     unsigned            tex_coord, wrap_s, wrap_t;
     int                 bilinear;
     int                 alpha_always;
+    /* PER-STAGE TEXTURES. `stage_count` is 0 for the single-texture case,
+     * which is all but 64 triangles in a boot, and then none of this is
+     * touched. See the note where these are filled in. */
+    const MgsTexture*   stage_tex[8];
+    unsigned            stage_coord[8], stage_ws[8], stage_wt[8];
+    unsigned char       stage_bilinear[8];
+    unsigned            stage_count;
     MgsTevCompiled      tev;
     float               sx[3], sy[3], sz[3], iw[3];
     float               area, inv_area, dw0dx, dw1dx;
@@ -473,6 +480,8 @@ static void raster_span(const RasterSpan* sp, int y0, int y1,
                 MgsTevInput in;
                 uint32_t pixel;
                 float k0, k1, k2;
+                uint32_t stex[8];
+                uint8_t  shas[8];
 
                 if (pw > 0.0f) {
                     /* One reciprocal, two multiplies. A divide is an order
@@ -499,6 +508,35 @@ static void raster_span(const RasterSpan* sp, int y0, int y1,
                               k2 * vin[2]->v[tex_coord];
                     in.texture = mgs_tex_sample(tex, u, v, wrap_s, wrap_t, bilinear);
                     in.has_texture = 1;
+                }
+
+                /* AND ONE TEXEL PER STAGE where the stages bind different
+                 * maps. Each has its own coordinate set and its own wrap and
+                 * filter state, so each is a separate interpolation and a
+                 * separate sample - there is no shortcut that reuses stage
+                 * zero's. */
+                in.stage_tex = NULL;
+                in.stage_has = NULL;
+                if (sp->stage_count) {
+                    unsigned st;
+                    for (st = 0; st < sp->stage_count; ++st) {
+                        const MgsTexture* t2 = sp->stage_tex[st];
+                        unsigned cs = sp->stage_coord[st];
+                        if (!t2) { stex[st] = 0xFFFFFFFFu; shas[st] = 0; continue; }
+                        {
+                            float u2 = k0 * vin[0]->u[cs] + k1 * vin[1]->u[cs] +
+                                       k2 * vin[2]->u[cs];
+                            float v2 = k0 * vin[0]->v[cs] + k1 * vin[1]->v[cs] +
+                                       k2 * vin[2]->v[cs];
+                            stex[st] = mgs_tex_sample(t2, u2, v2,
+                                                      sp->stage_ws[st],
+                                                      sp->stage_wt[st],
+                                                      sp->stage_bilinear[st]);
+                            shas[st] = 1;
+                        }
+                    }
+                    in.stage_tex = stex;
+                    in.stage_has = shas;
                 }
 
                 pixel = mgs_tev_run_compiled(tev, &in);
@@ -723,6 +761,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     const MgsGxVertex* vin[3];
     const MgsTexture* tex = NULL;
     unsigned tex_coord = 0, wrap_s = 0, wrap_t = 0;
+    const MgsTexture* stage_tex[8];
+    unsigned stage_coord[8], stage_ws[8], stage_wt[8], stage_n = 0u;
+    unsigned char stage_bil[8];
     int alpha_always;
     MgsTevCompiled tev;
 
@@ -1043,6 +1084,42 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                     if (on) { ++r->tex_on_later_stage; break; }
                 }
             }
+
+            /* RESOLVE EVERY STAGE, not just stage zero.
+             *
+             * This game's movie composites its video frame from three maps
+             * in three TEV stages - a luminance plane and two chroma planes.
+             * With one texel shared by all three, two stages sampled luma
+             * and the picture came out green-and-magenta striped over a
+             * correct-looking luminance structure, which is exactly what it
+             * looked like on screen.
+             *
+             * Only done when more than one stage is enabled, and the arrays
+             * stay empty otherwise: 2,491,121 of 2,491,185 triangles in a
+             * boot are single-stage and must not pay for this. */
+            stage_n = 0u;
+            if (n > 1u) {
+                unsigned k, lim = n > 8u ? 8u : n;
+                int any_extra = 0;
+                for (k = 0; k < lim; ++k) {
+                    unsigned mk, ck; int onk;
+                    stage_texture(&gx->bp, k, &mk, &ck, &onk);
+                    stage_tex[k] = NULL;
+                    stage_coord[k] = ck;
+                    stage_ws[k] = 0u; stage_wt[k] = 0u; stage_bil[k] = 0u;
+                    if (!onk) continue;
+                    stage_tex[k] = bind_texture(r, gx, mk);
+                    if (stage_tex[k]) {
+                        unsigned ws2, wt2; int bi2;
+                        texture_wrap(&gx->bp, mk, &ws2, &wt2, &bi2);
+                        stage_ws[k] = ws2; stage_wt[k] = wt2;
+                        stage_bil[k] = (unsigned char)bi2;
+                        if (k) any_extra = 1;
+                    }
+                }
+                /* Nothing gained if only stage zero ever binds one. */
+                if (any_extra) stage_n = lim;
+            }
         }
 
         /* Sampled here, once per triangle, while the registers still hold
@@ -1202,6 +1279,17 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         sp.tex = tex; sp.tex_coord = tex_coord;
         sp.wrap_s = wrap_s; sp.wrap_t = wrap_t; sp.bilinear = bilinear;
         sp.alpha_always = alpha_always; sp.tev = tev;
+        sp.stage_count = stage_n;
+        if (stage_n) {
+            unsigned k;
+            for (k = 0; k < stage_n; ++k) {
+                sp.stage_tex[k] = stage_tex[k];
+                sp.stage_coord[k] = stage_coord[k];
+                sp.stage_ws[k] = stage_ws[k];
+                sp.stage_wt[k] = stage_wt[k];
+                sp.stage_bilinear[k] = stage_bil[k];
+            }
+        }
         memcpy(sp.sx, sx, sizeof sx); memcpy(sp.sy, sy, sizeof sy);
         memcpy(sp.sz, sz, sizeof sz); memcpy(sp.iw, iw, sizeof iw);
         sp.area = area;

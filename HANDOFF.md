@@ -10033,5 +10033,51 @@ not the movie's video frame.
 
 ---
 
+### F242 — the TEV sampled one texture for every stage, and the movie needs three
+
+The screenshot Ben sent is the diagnosis: readable subtitles over a video
+frame of green-and-magenta **vertical stripes**, with a luminance structure
+visibly correct underneath. That is a colour-plane problem, not a decode one.
+
+**The renderer said so itself.** In the GX report:
+
+    TEV stages per triangle:  1:2491121  3:64
+
+Sixty-four triangles use **three** TEV stages; everything else in the game
+uses one. And `raster.c` documented the limitation exactly where it bit:
+
+> The combiner runs every stage the general-mode register asks for, but
+> exactly one texture is sampled and it is stage zero's. A stage that binds
+> its own texture therefore sees stage zero's texel, or none at all.
+
+The movie composites its frame from a luminance plane and two chroma planes
+in three stages. Stages 1 and 2 were sampling **luma**, so the chroma came
+out as whatever the luminance happened to be — green and magenta over a
+correct-looking picture, which is what the screenshot shows.
+
+**The fix.** `MgsTevInput` gains `stage_tex`/`stage_has`, NULL meaning "every
+stage shares one texture"; `mgs_tev_run_compiled` takes each stage's own
+texel when they are present. The rasteriser resolves every stage's map,
+coordinate set, wrap mode and filter once per triangle, and samples each per
+pixel — each stage has its own coordinate set, so there is no shortcut that
+reuses stage zero's interpolation. All of it is skipped unless more than one
+stage actually binds a texture, which is 64 triangles out of 2,491,185.
+
+**Evidence it works:** a texture shape appears that never existed before —
+
+    fmt 0x1  256x160   mean 0  max 0
+
+`256x160` is exactly half `512x320`, the luma plane's size. That is a **chroma
+plane at 4:2:0**, and it can only be decoded if a later stage is now binding
+its own map. Textures decoded: 151 -> 161.
+
+**Not yet confirmed on screen.** The `fmt 0x6 512x448` surface still reports
+roughness 25, but that is the composited EFB copy read back as a texture, and
+its roughness is measured at decode rather than after the combiner runs. What
+the picture actually looks like now needs a person to look at it. Given how
+today has gone, that is stated as pending rather than claimed.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

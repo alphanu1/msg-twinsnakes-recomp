@@ -583,6 +583,18 @@ This is the project. ~200 functions and the widest error bars in the plan.
       the good configuration reproduces to the exact step. **F220's rule
       again: check `uptime` before believing a run.** Tree reverted to
       F236's state; the diagnostic kept.
+- [x] **The TEV sampled ONE texture for every stage** (F242). The renderer's
+      own report said it: `TEV stages per triangle: 1:2491121 **3:64**`, and
+      `raster.c` documented that only stage zero's texture is ever sampled.
+      The movie composites luma + two chroma planes across three stages, so
+      stages 1 and 2 were reading **luma** — green-and-magenta stripes over a
+      correct-looking luminance structure, exactly as seen on screen.
+      `MgsTevInput` now carries a texel per stage (NULL = all stages share
+      one, the path 2,491,121 of 2,491,185 triangles take), and the raster
+      resolves and samples each stage's own map, coord set, wrap and filter.
+      **Evidence:** a new shape decodes — `fmt 0x1 256x160`, exactly half the
+      `512x320` luma, i.e. a **4:2:0 chroma plane**; 151 → 161 textures.
+      *On-screen result not yet confirmed by eye.*
 - [x] **Palette refusals: 3,198 → 0** (F241). `BP_LOAD_TLUT0` took 24 bits of
       the TLUT address; the GameCube decodes **25 bits of the shifted value**
       and ignores the rest, which this game sets. Unmasked they folded to

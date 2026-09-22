@@ -159,11 +159,23 @@ uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
         int out[4];
         unsigned dst_c = (ce >> 22) & 3u, dst_a = (ae >> 22) & 3u;
         int konst_c = 255, konst_a = 255;
+        /* This stage's own texel, where the stages differ. The copy is made
+         * only when they do; with one shared texture `cur` is `in` and this
+         * costs a predictable branch. */
+        MgsTevInput sv;
+        const MgsTevInput* cur = in;
 
-        color_input((ce >> 12) & 0xFu, reg, in, konst_c, a);
-        color_input((ce >> 8)  & 0xFu, reg, in, konst_c, b);
-        color_input((ce >> 4)  & 0xFu, reg, in, konst_c, c);
-        color_input((ce >> 0)  & 0xFu, reg, in, konst_c, d);
+        if (in->stage_tex) {
+            sv = *in;
+            sv.texture     = in->stage_tex[s];
+            sv.has_texture = in->stage_has[s];
+            cur = &sv;
+        }
+
+        color_input((ce >> 12) & 0xFu, reg, cur, konst_c, a);
+        color_input((ce >> 8)  & 0xFu, reg, cur, konst_c, b);
+        color_input((ce >> 4)  & 0xFu, reg, cur, konst_c, c);
+        color_input((ce >> 0)  & 0xFu, reg, cur, konst_c, d);
 
         for (i = 0; i < 3u; ++i)
             out[i] = combine(a[i], b[i], c[i], d[i],
@@ -171,10 +183,10 @@ uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
                              (ce >> 20) & 3u, (ce >> 19) & 1u);
 
         {
-            int aa = alpha_input((ae >> 13) & 7u, reg, in, konst_a);
-            int ab = alpha_input((ae >> 10) & 7u, reg, in, konst_a);
-            int ac = alpha_input((ae >> 7)  & 7u, reg, in, konst_a);
-            int ad = alpha_input((ae >> 4)  & 7u, reg, in, konst_a);
+            int aa = alpha_input((ae >> 13) & 7u, reg, cur, konst_a);
+            int ab = alpha_input((ae >> 10) & 7u, reg, cur, konst_a);
+            int ac = alpha_input((ae >> 7)  & 7u, reg, cur, konst_a);
+            int ad = alpha_input((ae >> 4)  & 7u, reg, cur, konst_a);
             out[3] = combine(aa, ab, ac, ad,
                              (ae >> 18) & 1u, (ae >> 16) & 3u,
                              (ae >> 20) & 3u, (ae >> 19) & 1u);

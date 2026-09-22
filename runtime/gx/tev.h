@@ -30,9 +30,23 @@
 unsigned mgs_tev_stage_count(const MgsGxBp* bp);
 
 typedef struct MgsTevInput {
-    uint32_t texture;        /* ARGB, the sampled texel */
+    uint32_t texture;        /* ARGB, the sampled texel - stage zero's */
     uint32_t raster;         /* ARGB, the interpolated vertex colour */
     int      has_texture;
+
+    /* ONE TEXEL PER STAGE, when the stages do not all share one texture.
+     *
+     * The combiner runs several stages and each may bind its OWN texture
+     * map. Feeding all of them stage zero's texel is what made this game's
+     * movie green-and-magenta stripes: its video frame is composited from
+     * three maps in three stages - luminance and two chroma planes - and
+     * with one texel for all three, two of them were reading luma.
+     *
+     * NULL means "every stage uses `texture`", which is the overwhelmingly
+     * common case (2,491,121 single-stage triangles against 64 three-stage
+     * ones in a boot) and costs nothing here. */
+    const uint32_t* stage_tex;
+    const uint8_t*  stage_has;
 } MgsTevInput;
 
 /* Run every enabled stage and return the final pixel, ARGB. */
