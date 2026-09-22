@@ -2061,6 +2061,42 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_host_mmio()->aram.reads,
                                (unsigned long long)mgs_interrupt_aram_raised(),
                                (unsigned long long)mgs_interrupt_aram_refused());
+                        /* MGS_DUMP=<addr>[:<len>][,<addr>[:<len>]...]
+                         *
+                         * Reads VALUES, which is the one thing MGS_WATCH
+                         * cannot: a watch reports changes, so a field that
+                         * was set before the watch started, or never
+                         * changes, is invisible to it. Chasing the movie
+                         * stall reached exactly that - the engine's event
+                         * table holds keys and the movie polls for one, and
+                         * no amount of change-watching says which. */
+                        {
+                            const char* env = getenv("MGS_DUMP");
+                            while (env && *env) {
+                                char* end = NULL;
+                                uint32_t at = (uint32_t)strtoul(env, &end, 0);
+                                unsigned long len = 0x40u;
+                                if (end && *end == ':') {
+                                    len = strtoul(end + 1, &end, 0);
+                                    if (len > 0x1000u) len = 0x1000u;
+                                }
+                                if (at) {
+                                    unsigned long i;
+                                    printf("dump 0x%08X (%lu bytes):\n", at, len);
+                                    for (i = 0; i < len; i += 16u) {
+                                        unsigned long j;
+                                        printf("  +0x%03lX ", i);
+                                        for (j = 0; j < 16u && i + j < len; j += 4u)
+                                            printf("%08X ",
+                                                   mgs_module_guest_read32(
+                                                       cpu, at + (uint32_t)(i + j)));
+                                        printf("\n");
+                                    }
+                                }
+                                if (!end || !*end) break;
+                                env = (*end == ',') ? end + 1 : end;
+                            }
+                        }
                         mgs_disc_report(stdout);
                         printf("audio DMA: %llu transfers, %llu blocks "
                                "(%.2fs of sound), %s; interrupts %llu "

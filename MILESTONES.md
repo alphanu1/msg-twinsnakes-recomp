@@ -554,6 +554,14 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [x] **The movie waits on an event key nothing posts** (F225). Dumping
+      values rather than changes: the movie context is `0x8107F080` (itself a
+      **level-3 task node**, `fn 0x7F151E70`), and it polls for key
+      **`0x006647BA`**. The event table holds eight keys - `0039D437`,
+      `002D5221`, `00C52070`, `007CD989`, `00541E36` x2, `00541E37` x2 - and
+      **`0x006647BA` is not one of them**, nor is it among the 822 writes to
+      the entry area across a run. **The fault is one absent key.** New:
+      `MGS_DUMP=<addr>:<len>`.
 - [x] **movie.dat is not Ogg; the event system works** (F224). `movie.dat`
       has **zero** `OggS` pages; `demo.dat` has 100 in 2 MB - so the Vorbis
       decoder reads `demo.dat`, and the audio-pacing chain conflated two

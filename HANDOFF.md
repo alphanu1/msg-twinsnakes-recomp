@@ -9009,6 +9009,48 @@ table holds keys — which key does it want, and which are present. That needs
 reading values rather than changes, which is the one thing the watch cannot
 do.
 
+### F225 — the movie waits on an event key that is never posted
+
+With a dump of guest *values* rather than changes, the stall reduces to a
+single mismatch.
+
+**New instrument: `MGS_DUMP=<addr>[:<len>][,...]`** prints guest memory at
+exit. `MGS_WATCH` reports changes, so a field set before the watch began, or
+one that never changes, is invisible to it — which is exactly where this
+investigation had arrived.
+
+**The movie's context.** `*bss_55EA4` is **`0x8107F080`**, and the word beside
+it, `bss_55EA8`, is `0x811CDDE0` — the movie task's own node from the task
+table. Dumping the context:
+
+    +0x00  81062D60  7F151E70  00002080  00000000
+    +0x30  00000000  00000000  006647BA  00000000
+
+So it is itself a **task node** — `fn 0x7F151E70`, which the task table lists
+at **level 3**, the level gated by mask bit 3.
+
+**The key it polls for is `0x006647BA`.** `mpeg_poll_stream_events` calls
+`gcn_event_poll(g->0x38, ...)`, and `g->0x38` reads `0x006647BA`. The event
+table, dumped at the same moment, holds eight entries:
+
+    0039D437  002D5221  00C52070  007CD989  00541E36 x2  00541E37 x2
+
+**`0x006647BA` is not among them.** And watching the whole entry area across
+a run — **822 writes** to it — that value is never written at all.
+
+So the fault is exact: **the movie task waits for an event under a key that
+nothing in the run ever posts.** Not a lost event, not a race, not a gate —
+the key is simply absent. Everything downstream (the task never leaving state
+1, the stream never refilling, the picture frozen at 71% lit) follows from
+that one mismatch.
+
+**Two readings, and I am not choosing between them yet.** Either something
+that should register or post under `0x006647BA` never runs — in which case
+the question is what, and why — or the key itself is wrong, computed from
+state our runtime has left in a different condition. The neighbouring keys
+`00541E36` and `00541E37` differ by one, so these look like identifiers with
+sub-indices rather than arbitrary hashes, which is worth following.
+
 ---
 
 *Record further findings here as they are established — including the ones that
