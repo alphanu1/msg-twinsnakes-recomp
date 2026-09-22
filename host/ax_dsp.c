@@ -65,6 +65,13 @@
 #define AX_FMT_PCM16       10u
 #define AX_FMT_PCM8        25u
 
+/* AXPBADPCM, at pb+0x7E: eight coefficient pairs, then gain, the frame's
+ * predictor/scale byte, and the two previous output samples the filter needs. */
+#define PB_ADPCM_COEF      0x7Eu      /* s16 a[8][2]                      */
+#define PB_ADPCM_PRED      0xA0u      /* pred_scale                       */
+#define PB_ADPCM_YN1       0xA2u
+#define PB_ADPCM_YN2       0xA4u
+
 /* AX mixes at 32 kHz in 5 ms frames. */
 #define AX_MIX_RATE        32000u
 
@@ -106,7 +113,75 @@ static int sample_at(unsigned format, uint32_t at, int* ok)
         *ok = 1;
         return (int)(int8_t)a[at] * 256;
     }
-    return 0;              /* ADPCM: not decoded yet, see the note below */
+    return 0;              /* ADPCM has state; decoded by adpcm_step below */
+}
+
+/* Defined below, next to the other guest accessors. */
+static uint32_t rd16(void* cpu, uint32_t at);
+static void wr16(void* cpu, uint32_t at, uint32_t v);
+
+static int clamp16(int v)
+{
+    if (v > 32767) return 32767;
+    if (v < -32768) return -32768;
+    return v;
+}
+
+/* ONE ADPCM SAMPLE, AND WHY IT CANNOT BE POINT-SAMPLED.
+ *
+ * DSP-ADPCM is a second-order predictor: each output depends on the two
+ * before it, so the decoder has to walk every nibble in order. PCM can be
+ * read at whatever position the resampler asks for; this cannot, and
+ * skipping to the target nibble would decode against the wrong history and
+ * produce noise that still looks like audio.
+ *
+ * So this steps ONE nibble and returns its sample, and the caller steps it
+ * as many times as the resampler advanced. At the game's ratio of about
+ * 1.38 that is one or two decodes per output sample.
+ *
+ * Layout: sixteen nibbles per 8-byte frame, the first two being the
+ * predictor/scale header - which is what the SDK's assert in
+ * `AXSetVoiceAddr` is checking when it refuses an address whose low nibble
+ * is 0 or 1.
+ */
+static int adpcm_step(void* cpu, uint32_t pb, uint32_t at, int* ok)
+{
+    const uint8_t* a;
+    uint32_t frame, idx, byte;
+    int ps, scale, ci, nib, pred, out, yn1, yn2;
+
+    *ok = 0;
+    if (!s_mem || !s_mem->aram) return 0;
+    a = s_mem->aram;
+
+    frame = at >> 4;
+    idx   = at & 0xFu;
+    if (idx < 2u) idx = 2u;                  /* never decode the header */
+    byte = frame * 8u + (idx >> 1);
+    if (byte >= GUEST_ARAM_SIZE) return 0;
+
+    /* The frame's header is re-read at every sample rather than cached: the
+     * position can be moved by the game between frames, and a cached scale
+     * from a frame we are no longer in decodes to noise. */
+    ps = a[frame * 8u];
+    scale = 1 << (ps & 0xFu);
+    ci = (ps >> 4) & 0x7u;
+
+    nib = (idx & 1u) ? (a[byte] & 0xFu) : (a[byte] >> 4);
+    if (nib > 7) nib -= 16;                   /* sign-extend the 4 bits */
+
+    yn1 = (int)(int16_t)rd16(cpu, pb + PB_ADPCM_YN1);
+    yn2 = (int)(int16_t)rd16(cpu, pb + PB_ADPCM_YN2);
+    pred = (int)(int16_t)rd16(cpu, pb + PB_ADPCM_COEF + (uint32_t)ci * 4u) * yn1
+         + (int)(int16_t)rd16(cpu, pb + PB_ADPCM_COEF + (uint32_t)ci * 4u + 2u) * yn2;
+
+    out = clamp16((((nib * scale) << 11) + 1024 + pred) >> 11);
+
+    wr16(cpu, pb + PB_ADPCM_YN2, (uint32_t)(uint16_t)(int16_t)yn1);
+    wr16(cpu, pb + PB_ADPCM_YN1, (uint32_t)(uint16_t)(int16_t)out);
+    wr16(cpu, pb + PB_ADPCM_PRED, (uint32_t)ps);
+    *ok = 1;
+    return out;
 }
 
 static uint32_t base(void)
@@ -154,7 +229,7 @@ static void wr32pair(void* cpu, uint32_t at, uint32_t v)
 
 static uint64_t s_frames, s_advanced, s_looped, s_ended;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
-static uint64_t s_starved, s_nonzero_frames;
+static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
 static int      s_peak;
 static int      s_trace = -1;
 static unsigned s_traced;
@@ -198,10 +273,6 @@ void mgs_ax_dsp_frame(void* cpu)
         vl  = rd16(cpu, pb + PB_MIX_VL);
         vr  = rd16(cpu, pb + PB_MIX_VR);
 
-        /* ADPCM is not decoded yet. Counted rather than silently mixed as
-         * zero, because "no sound" and "sound we cannot decode" are
-         * different faults and a single silence cannot tell them apart. */
-        if (format == AX_FMT_ADPCM) { ++s_adpcm_skipped; continue; }
 
         ++s_mixed_voices;
         ++s_advanced;
@@ -219,7 +290,17 @@ void mgs_ax_dsp_frame(void* cpu)
         }
 
         for (k = 0; k < AX_FRAME_SAMPLES; ++k) {
-            int ok, sv = sample_at(format, curr, &ok);
+            uint32_t prev = curr;
+            int ok, sv;
+
+            if (format == AX_FMT_ADPCM) {
+                /* Walk every nibble the resampler passed over, so the
+                 * predictor's history is the one the encoder assumed. */
+                sv = adpcm_step(cpu, pb, curr, &ok);
+                ++s_adpcm_samples;
+            } else {
+                sv = sample_at(format, curr, &ok);
+            }
             if (!ok) { ++s_silent_reads; sv = 0; }
             acc_l[k] += (int32_t)((long long)sv * (int)vol / 32768
                                   * (int)vl / 32768);
@@ -232,6 +313,18 @@ void mgs_ax_dsp_frame(void* cpu)
             frac += ratio;
             curr += frac >> 16;
             frac &= 0xFFFFu;
+
+            /* For ADPCM the samples between `prev` and `curr` still have to
+             * be decoded, or the filter state is wrong from here on. */
+            if (format == AX_FMT_ADPCM) {
+                uint32_t step_at = prev + 1u;
+                while (step_at < curr) {
+                    int ok2;
+                    adpcm_step(cpu, pb, step_at, &ok2);
+                    ++s_adpcm_samples;
+                    ++step_at;
+                }
+            }
 
             if (end && curr > end) {
                 /* A LOOP POINT PAST THE END IS NOT A LOOP, IT IS A VOICE
@@ -304,8 +397,9 @@ void mgs_ax_dsp_report(void)
            (double)s_frames * AX_FRAME_SAMPLES / (double)AX_MIX_RATE,
            (unsigned long long)s_mixed_voices,
            (unsigned long long)s_looped, (unsigned long long)s_ended);
-    printf("  ADPCM voices skipped (not decoded yet): %llu;"
+    printf("  ADPCM samples decoded: %llu (voices skipped: %llu);"
            " samples read outside ARAM: %llu; voices starved: %llu\n",
+           (unsigned long long)s_adpcm_samples,
            (unsigned long long)s_adpcm_skipped,
            (unsigned long long)s_silent_reads,
            (unsigned long long)s_starved);

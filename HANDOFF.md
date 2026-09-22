@@ -10334,5 +10334,44 @@ the ARAM change regressed it.
 
 ---
 
+### F248 — ADPCM decoded, and the level goes from 0.1% to 32.8% of full scale
+
+F247 got sound out of the mixer but only at peak 23 of 32767, because the
+only formats decoded were PCM16 and PCM8 and **364 voices a run were ADPCM**,
+counted and skipped. Those are the game's own sounds; the PCM voices are the
+streamed movie audio, and they are quiet where the stream fades in.
+
+**The decoder.** DSP-ADPCM with the coefficients the parameter block already
+carries: `AXPBADPCM` at `pb+0x7E` — eight coefficient pairs, then the
+frame's predictor/scale byte at `+0xA0` and the two previous outputs at
+`+0xA2`/`+0xA4`. Sixteen nibbles to an 8-byte frame, the first two being the
+header, which is exactly what `AXSetVoiceAddr`'s assert is guarding when it
+refuses an address whose low nibble is 0 or 1.
+
+**Why it could not be written like the PCM path.** ADPCM is a second-order
+predictor: each output depends on the two before it. PCM can be read at
+whatever position the resampler asks for; this cannot. Jumping straight to
+the target nibble would decode against the wrong history and produce
+something that still looks like audio and is noise. So `adpcm_step` decodes
+exactly one nibble, and the mixer steps it over **every** nibble the
+resampler passed — one or two per output sample at this game's 1.38 ratio.
+
+**Result:**
+
+| | before | after |
+|---|---|---|
+| peak | 23 (0.1% FS) | **10,750 (32.8% FS)** |
+| non-silent frames | 52,979 | 53,159 |
+| ADPCM voices | 364 skipped | **0 skipped, 81,072 samples decoded** |
+
+32.8% of full scale is an ordinary game mix, which is the first evidence
+that the levels are in the right region rather than merely non-zero.
+
+**Still unverified by ear.** Level, pitch and channel assignment are all
+plausible-looking numbers; none of them is a listen. `MGS_NO_AUDIO` keeps
+the mixer running without a device, so a batch run's timing is unchanged.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
