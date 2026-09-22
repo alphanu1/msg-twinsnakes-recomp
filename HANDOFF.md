@@ -8829,6 +8829,54 @@ section after the load appeared. Runs to compare need an idle machine, and
 "I ran it twice and got the same answer" is evidence about those two runs
 only.
 
+### F221 — AX frames can be made to run, and the pacing has to be the audio DMA
+
+Working forward from F219 rather than through EXI, three measurements settle
+what AX needs — and one shows the fix is not yet a fix.
+
+**AX is initialised and its callback is registered.** Watching
+`__AID_Callback` at `0x8027DE0C` — the global `AIRegisterDMACallback` writes
+— it is set **once** to `0x80032868`, which is `__AXOutAiCallback`. So AX
+came up, found the audio interface, and registered. The AX banner in a
+windowed run says the same. Nothing about AX's own initialisation is broken,
+which rules out the theory that `__OSInitAudioSystem` being stubbed had
+prevented it.
+
+**With the resume mail, AX frames genuinely run.** `__AXOutDspReady` at
+`0x8027DEF0` is written on every `__AXOutAiCallback`, so it counts frames
+exactly. Under `MGS_DSP_RESUME=1` it moves through the real cycle —
+`__AXDSPResumeCallback` sets 1, the AI callback takes the mix path and
+clears it, asserts, resumes — which is the machinery F219 predicted.
+
+**But the pacing matters more than the mail.** Three configurations, same
+run length:
+
+    resume posted every 4,099 steps (a timer) ....... 90 transitions
+    resume gated on guest->DSP mails ................. 3 transitions
+    resume gated on the audio-DMA interrupt ..... 32,989 transitions
+
+The timer floods PI's DSP line — roughly 29,000 resumes in a run — and that
+line is shared by the mailbox, ARAM and the audio DMA, with the dispatcher
+servicing one source per entry. AX then got **45 frames against 18,686
+audio-DMA interrupts: 0.2% of them.** Gating on guest→DSP mails was worse and
+for an instructive reason: a whole run sends **two** mails to the DSP, so
+`DSPAssertTask` is not producing what I assumed. The audio DMA is the right
+clock — one resume per AID is one AX frame, and our engine already raises AID
+every 5 ms of guest time (F187), which is the period AX is written around.
+
+**And it still does not play the movie.** Worse: with `MGS_DSP_RESUME=1` the
+stream's slot bytes at `0x8027ADD4` change **0 times**, where the default
+manages 5. So making AX run has broken the stream's *setup* — the slots are
+never armed at all. The default path is unaffected (5 transitions, 9 files,
+8 movie reads, verified), and the correct mail stays behind the environment
+variable.
+
+**What this is worth.** It converts "audio is the blocker" from a diagnosis
+into something exercisable: AX frames can be driven at the right rate, on
+demand, with one variable. What remains is that the audio path and the stream
+setup now interfere, which is genuine phase-4 work rather than a constant to
+flip — and the design document always said audio was phase 4.
+
 ---
 
 *Record further findings here as they are established — including the ones that

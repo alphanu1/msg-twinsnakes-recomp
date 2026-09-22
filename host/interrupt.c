@@ -383,10 +383,44 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
          * work can be done against it without a rebuild.
          */
         static int resume_mail = -1;
+        static uint32_t seen_sends;
         uint32_t mail;
         if (resume_mail < 0) resume_mail = getenv("MGS_DSP_RESUME") != NULL;
         mail = phase == 0 ? 0xDCD10000u
              : (resume_mail ? 0xDCD10001u : 0xDCD10003u);
+
+        /* A RESUME ANSWERS AN ASSERT. IT IS NOT A TIMER.
+         *
+         * The run loop offers this every 4,099 steps, which for a resume is
+         * wrong twice over: the DSP resumes because the guest ASSERTED the
+         * task, and a resume posted when nothing asked for one is a message
+         * the line has to carry for nothing. PI's DSP bit is shared by the
+         * mailbox, ARAM and the audio DMA, and the dispatcher services one
+         * source per entry - so a flood here starves the others.
+         *
+         * It measurably did. Posting on the step interval put roughly
+         * 29,000 resumes on that line in a run, and AX's frame callback then
+         * ran 45 times against 18,686 audio-DMA interrupts: 0.2% of them.
+         * The AI callback is what asserts the task, so answering only a
+         * genuine assert paces this at exactly the rate AX asks for.
+         *
+         * PACED TO THE AUDIO DMA, which is the rate AX actually works at.
+         *
+         * The first attempt gated on guest->DSP mails, reasoning that
+         * DSPAssertTask sends one. It does not, here: a whole run sends TWO
+         * mails to the DSP, and gating on them cut AX's frames from 45 to 3.
+         *
+         * The audio DMA is the right clock. On hardware `__AXOutAiCallback`
+         * runs on each AID interrupt, asserts the task, and the DSP answers
+         * with a resume - so one resume per AID is exactly one AX frame, and
+         * our engine already raises AID every 20 blocks, which is 5 ms of
+         * guest time (F187). That is the period AX is written around.
+         */
+        if (resume_mail && phase != 0) {
+            uint64_t aid = mgs_interrupt_aid_raised();
+            if (aid == seen_sends) return 0;        /* no frame is due yet */
+            seen_sends = (uint32_t)aid;
+        }
 
         mgs_mmio_dsp_post_mail(m, mail);
         if (!mgs_interrupt_raise(mod, cpu, PI_CAUSE_DSP)) {

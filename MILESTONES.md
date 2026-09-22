@@ -554,6 +554,15 @@ This is the project. ~200 functions and the widest error bars in the plan.
       refill site at `0x80053AF8` is still never reached. Also:
       `MGS_TRACE_FN` **cannot see functions entered by fall-through** - a
       zero means "never entered at this address", not "never executed".
+- [~] **AX frames can be driven, paced by the audio DMA** (F221). AX is
+      initialised and its callback registered (`__AID_Callback` = 
+      `__AXOutAiCallback`, watched). Under `MGS_DSP_RESUME=1` the real frame
+      cycle runs, and the pacing dominates: a timer gives **90** frames, 
+      gating on guest->DSP mails **3**, gating on the audio-DMA interrupt
+      **32,989**. One resume per AID is one AX frame. **But the movie still
+      does not play** - with AX running the stream's slots are never armed
+      (0 transitions against the default's 5), so the two now interfere.
+      Default path verified unregressed.
 - [ ] **Two faults between us and AX** (F219). We post DSP task mail
       `0xDCD10003` (**done**, which *unlinks the task*) where a persistent AX
       task needs `0xDCD10001` (**resume**) - and resume is the only thing
