@@ -122,6 +122,12 @@ const char* mgs_symbol_for(uint32_t addr);
 
 /* Walks a stream record ring and reports which tags are in it. */
 void mgs_dump_ring(void* cpu, uint32_t ring);
+
+/* The DSP's one observable effect: AX voices advance. See host/ax_dsp.c.
+ * Called once per frame the DSP would have mixed, which is once per resume
+ * mail; MGS_AX_MODEL=0 turns it off. */
+void mgs_ax_dsp_frame(void* cpu);
+void mgs_ax_dsp_report(void);
 uint32_t* mgs_module_msr_ptr(void* cpu);
 uint32_t* mgs_module_lr_ptr(void* cpu);
 uint32_t mgs_module_current_context(void* cpu);

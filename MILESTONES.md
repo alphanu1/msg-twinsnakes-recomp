@@ -570,6 +570,24 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **THE STALL IS FIXED — the movie decodes and draws** (F236).
+      `host/ax_dsp.c` models the DSP's one observable effect: each AX voice's
+      `currentAddress` advances by `160 * srcRatio` per frame, looping at
+      `endAddress`. **It mixes nothing** — it is the design document's line
+      193 ("the DSP paces the machine") one level deeper, not phase 4's
+      mixer. It needs `MGS_DSP_RESUME=1` too: without the resume mail AX
+      never services a voice, so there is no block to advance (F235).
+      Together: ring-0 tag-2 records **0 → 204**, the read cursor moves, the
+      task mask goes `0x1 → 0x0` instead of parking at `0x8`, and the last
+      texture drawn is **512x448 at 99% lit** instead of a 159x17 overlay at
+      71%. **The picture is no longer frozen.**
+      **New fault, deterministic to the step** (two identical runs):
+      `unhandled exception, pc = 0x800` at 112,962,303 steps. It is *ours* —
+      `lfd` with `MSR[FP]` clear is a Floating-Point Unavailable exception,
+      which we service 62,467 times in the same run and refuse here because
+      `OS_CURRENTCONTEXT` is not sane. Same class as
+      `[interrupt] no current OSContext yet`. Both flags stay non-default
+      until that is fixed.
 - [x] **ROOT CAUSE: the AX voice's position never advances** (F234).
       `sd_stream_pump` reads `voice+0x1B2` = `pb.addr.currentAddress` and
       advances the stream only as that moves. The voice is at `0x80206F7C`

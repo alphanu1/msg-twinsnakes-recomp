@@ -9633,5 +9633,139 @@ the SDK spelling would be asserted rather than confirmed.
 
 ---
 
+### F235 — F234 was one link short: AX never services the voice at all
+
+F234 called the frozen `currentAddress` the root cause and said the DSP's
+copy of the parameter block never advances. The first half is right; the
+second was a reasonable reading of the SDK and is **not what our run does**.
+
+**`__AXServiceVPB` is `fn_80033330`, and `__AXPB` is at `0x801F5E00`.** It
+matches `dolsdk2004`'s AXVPB.c exactly: increment a counter, index
+`base + index*0xF4`, and on `sync == 0` copy back four fields — `state`
+(`0x0E`), `ve.currentVolume` (`0x64`) and `addr.currentAddress`
+(`0x7A`/`0x7C`). So `__AXNumVoices` is `0x8027DF50` and `__AXGetNumVoices`
+is `fn_80033328`.
+
+**The movie's voice has index 61, and its DSP block is untouched.** Watching
+`__AXPB[61]` (`0x801F9824`) across a run: **7 writes, all free-list pointers
+at init**, `currentAddress` never written at all, every real field zero. And
+`__AXNumVoices` reads **0**.
+
+That last number settles it. `__AXServiceVPB` increments it on every call,
+so zero means **it never ran**. The user-side `currentAddress` is not frozen
+because the DSP failed to advance it — it is frozen because **AX never
+services the voice in the first place**, so nothing is ever copied in either
+direction. F234's chain and its measurements stand; its attribution of the
+first cause does not.
+
+**Why AX does not run a frame, read out of the two callbacks.**
+`lbl_8027DEF0` is `__AXOutDspReady`, and it is a three-state handshake:
+
+    __AXOutAiCallback      state == 1 -> state = 0, mix a frame
+                           otherwise  -> state = 2, re-add the DSP task
+    __AXDSPResumeCallback  state == 2 -> state = 0, mix a frame
+                           otherwise  -> state = 1
+
+A frame is mixed only when the **resume** callback is in the loop. Without
+one, the AI callback finds the state at 2 every time, sets it to 2 again and
+re-adds the task for ever. That is precisely F219's argument, now with the
+state machine read out rather than inferred.
+
+**And the resume mail does change something measurable — F222's
+"changes nothing" was measuring the wrong thing.** With
+`MGS_DSP_RESUME=1`:
+
+    __AXNumVoices    0  ->  2
+
+AX starts servicing voices. That is the first observable effect this flag has
+ever been shown to have, and it was invisible before because nobody had
+located `__AXNumVoices`.
+
+**It does not fix the movie.** The record ring at the stall is *byte for
+byte* what it is by default — read `+0x36F50`, write `+0x2B880`, 276 records,
+9 tagged 1, 267 tagged 0, no tag 2. So the resume mail is necessary and not
+sufficient, and whatever else is missing is still missing.
+
+**Corrections to my own procedure.** "Discard any run that reports READ
+FAILED" (F234) is too coarse: one such run retried a single `stage.dat` read
+and completed normally with 9 files and 281 reads. The discriminator is
+whether the run **progressed** — a run that reports no disc reads, or never
+loads the overlay, is the one to throw away.
+
+---
+
+### F236 — THE STALL IS FIXED. The movie plays, and a new fault is exposed
+
+Two changes together, neither sufficient alone, and the pipeline runs.
+
+**What was added.** `host/ax_dsp.c` models the one thing the DSP does that
+the game can observe: each AX voice's `pb.addr.currentAddress` advances.
+Once per resume mail — which is one AX frame — it walks `__AXPB`
+(`0x801F5E00`, 64 entries of `0xF4`), and for every voice whose `state` is 1
+advances the position by `160 * srcRatio`, carrying the remainder in the
+block's own `currentAddressFrac`, looping at `endAddress` when `loopFlag` is
+set and stopping the voice when it is not. **It mixes nothing.** It is not
+the phase-4 mixer; it is the same principle the design document already
+records at line 193 — the DSP *paces* the machine — one level deeper.
+
+**It needs `MGS_DSP_RESUME=1` as well.** F235 showed why: without the resume
+mail AX never services a voice at all, so there is no populated parameter
+block to advance. With the resume mail and no model, the block is populated
+and frozen. Both, and it moves.
+
+**The result, and it is the thing this has been chasing since F187.**
+
+| | before | with both |
+|---|---|---|
+| ring 0, tag 2 records | **0** | **204** (Dolphin: ~381) |
+| ring 0 read cursor | pinned at `+0x36F50` | `+0x96D0`, moving |
+| voice `currentAddress` | `0x2000` forever | `0x650E`, looping |
+| the voice's loop window | `0x3000`/`0x2FFF` | `0x6000`/`0x6FFF`, advanced by the game |
+| task mask | parks at `0x00000008` | `0x1 -> 0x0`, **running** |
+| `demo.dat` | 14 reads | 17 reads |
+| last texture drawn | 159x17 (a UI element) | **512x448**, `lit 99%` |
+
+**The movie decodes and draws.** A full-screen 512x448 texture at 99% lit is
+the video frame; the picture was frozen at a 159x17 overlay at 71% for every
+run before this one.
+
+**And it then crashes, deterministically.** Two runs are identical to the
+step: `stopped after 112962303 steps: unhandled exception, pc = 0x00000800`.
+That is not a mystery and not the game's fault:
+
+    faulting instruction srr0 = 0x7F13A080   -> REL 0x131F94
+    msr = 0x00009032                          -> MSR[FP] (0x2000) is CLEAR
+    the instruction there is `lfd f1, 0x0(r3)`
+
+A float load with FP disabled raises **Floating-Point Unavailable**, whose
+vector is `0x800`. That is the SDK's lazy-FP mechanism working exactly as
+designed, and our runtime services it 62,467 times in the same run. This one
+is refused because `mgs_fp_unavailable` requires `OS_CURRENTCONTEXT` to be
+sane and returns 0 otherwise — "no current context: report, do not guess" —
+after which `pc == 0x800` is reported as a real fault.
+
+So the new bug is **ours, in the exception path, not in the audio work**:
+an FP-unavailable exception taken while no valid `OSContext` is current. The
+faulting code is `fn_1_131F34`, the pool's wrap-copy, reached from
+`gcn_pool_refill` — and `r31` is ring 0 itself, so this is the newly flowing
+ring hitting a path that had never been reached before. It is the same class
+as the `[interrupt] no current OSContext yet` line seen in earlier logs.
+
+**Kept deliberately behind flags.** `MGS_DSP_RESUME` is still not the
+default and the model is on by default but disableable with
+`MGS_AX_MODEL=0`, because a run that now crashes at 113M steps is not yet
+better than one that limps to 400M. Flipping the default belongs with the
+fix to the exception path, not before it.
+
+**Honest about what is not shown.** The audio is not correct — nothing here
+produces a sample. The rate is derived (`160 * ratio` per 5 ms frame at
+32 kHz) and has not been checked against Dolphin's observed
+~`0x900` per 50 ms; if it is wrong the movie plays fast or slow, visibly, and
+that is a cheap thing to correct later. `movie.dat` is still read only to
+`+0x38000`, so the video stream itself has not yet advanced past where it
+always stopped — what moved is `demo.dat` and the record ring.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

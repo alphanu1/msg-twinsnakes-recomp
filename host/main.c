@@ -2143,6 +2143,7 @@ int main(int argc, char** argv)
                                (unsigned long long)mgs_interrupt_aid_refused());
                         {
                             uint64_t o,nb,mp,nt,nf,ud,done;
+                            mgs_ax_dsp_report();
                             done = mgs_dsp_task_stats(&o,&nb,&mp,&nt,&nf,&ud);
                             printf("DSP task mails: %llu posted; withheld: "
                                    "%llu not booted, %llu mail unread, "

@@ -463,6 +463,20 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
             }
             if (aid == seen_sends) { ++s_dsp_no_frame; return 0; }
             seen_sends = (uint32_t)aid;
+
+            /* ONE RESUME IS ONE AX FRAME, so this is the point at which the
+             * DSP would have mixed one - and the only thing the game can
+             * observe it doing is moving each voice's playback position.
+             * Modelling that here rather than in a mixer is deliberate; see
+             * the header of host/ax_dsp.c. */
+            {
+                static int on = -1;
+                if (on < 0) {
+                    const char* e = getenv("MGS_AX_MODEL");
+                    on = !(e && e[0] == '0');
+                }
+                if (on) mgs_ax_dsp_frame(cpu);
+            }
         }
 
         mgs_mmio_dsp_post_mail(m, mail);
