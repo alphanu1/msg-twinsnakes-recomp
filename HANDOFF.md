@@ -10568,5 +10568,46 @@ So there are two separate questions, and they had been conflated:
 
 ---
 
+### F253 — the missing movie audio is a CONSEQUENCE of the movie stalling
+
+Watching the user-side `ve.currentVolume` for the movie's voice gives the
+whole answer in one sequence:
+
+    7FFF -> 7E88 -> 7FFF -> 2A62 -> 0E08 -> 04A5 -> 0189 -> 0082
+         -> 002B -> 000E -> 0004 -> 0
+
+A clean exponential decay — a **fade-out**, not a failure. Written by
+`fn_8003667C`, called from `lr 0x8004EBA8`, which is **inside
+`sd_ax_frame_callback`** at its call to `fn_80036648`: the game's own
+per-AX-frame volume service, ramping the voice down on purpose.
+
+**So the mixer is not the problem.** It decodes PCM16, PCM8 and ADPCM, reads
+the right addresses, applies the right gains and reaches 32.8% of full scale
+on the voice that *is* audible. The movie's audio is silent because **the
+game silenced it**, and the game silenced it because the movie is not
+playing — the state machine that reaches `state 2` twice and parks (F239).
+
+**This inverts the order of work.** The audio was moved to phase 2c on the
+grounds that it is the clock (F245, and it is), and the remaining silence was
+being chased as an audio defect. It is not: it is the movie stall seen from
+the audio side. Fixing the movie fixes the sound; polishing the mixer
+further cannot.
+
+**What is genuinely finished in the sound path**, and worth stating so it is
+not re-litigated:
+
+- an SDL3 device, 32 kHz stereo, no-op headless and under `MGS_NO_AUDIO`
+- a voice mixer reading ARAM, with per-voice SRC, envelope and mix levels
+- PCM16, PCM8 and DSP-ADPCM decoding, the last stepping nibble by nibble
+  because the predictor is stateful
+- positions advanced by actual consumption, which is what the engine's
+  stream pump reads to tell the time
+
+**What is not:** the movie's audio will stay silent until the movie plays,
+and the ADPCM voice that does play is only in `state == 1` for about 507
+frames of 62,763, which is a separate and un-investigated question.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
