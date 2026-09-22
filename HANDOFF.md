@@ -10181,5 +10181,58 @@ which argues against a global clock scale and for something per-subsystem.
 
 ---
 
+### F245 — video time ran 10.6x ahead of audio time, and the movie clock is audio
+
+Ben's correction — "it plays the first frame or two of each chunk", not
+"slow" — pointed at a ratio rather than a rate, and the ratio is exact.
+
+**The movie's clock is the AUDIO position.** In `mpeg_movie_task`'s playing
+state:
+
+    001494E0  bl    fn_80056800      gate
+    001494F4  bl    fn_8005190C      the sound system's playback position
+    001494F8  mulli r5, r3, 0x12c    x 300
+    00149508  divw  r4, r5, 0x3e8    / 1000
+    00149510  stw   r0, 0x8(r3)      -> stream->0x08, the movie clock
+
+`fn_8005190C` is in `sd_sound.c`. The `+0xC` per call seen in F239 is only
+the fallback when the gate returns zero. **F218's original claim — "the
+movie is paced by audio consumption" — is right, and here is the
+instruction that does it.** It was withdrawn in F222/F223 on pacing
+evidence; the code says otherwise.
+
+**The two clocks disagreed by 10.6x.** From one run:
+
+    audio DMA:      62,932 interrupts, 314.66 s of sound
+    AX voice model: 62,927 frames            <- one per AID, as designed
+    retrace ticks: 200,000                   <- 3,333 s at 60 Hz
+
+That is arithmetic, not mystery. Retrace fired every **2,000 steps**, and at
+32 ticks a step that is 64,000 ticks a field where a real 60 Hz field is
+**675,000**. So the screen ran 10.5x ahead of the clock the movie is slaved
+to, and every decoded frame was held for about ten screen frames — exactly
+"the first frame or two of each chunk".
+
+**Fixed by deriving the period from the clock** rather than leaving two
+constants that must agree and did not: `675000 / tick_rate` steps, which is
+21,094 at the current rate, overridable with `MGS_RETRACE_STEPS`.
+
+| | before | after |
+|---|---|---|
+| retrace ticks | 200,000 (3,333 s) | **18,964 (316 s)** |
+| audio | 314.66 s | 313.82 s |
+| video vs audio | **10.6x apart** | **0.7% apart** |
+| luma frames | 5 | **7** |
+| chroma planes | 10 | **14** |
+| `movie.dat` | 27 reads, 792 KB | **34 reads, 1,015 KB** |
+
+**Why `MGS_TICK_RATE=338` was the wrong end of it** (F244). Raising the tick
+rate fixes the same ratio by making guest time — and therefore the audio —
+run 10x faster, which is why the movie got worse rather than better. Slowing
+the screen to match the clock leaves the audio alone, which is the half that
+was already right.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

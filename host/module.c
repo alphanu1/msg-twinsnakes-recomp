@@ -813,6 +813,38 @@ static void (*s_display)(void);
 
 static void (*s_frame)(void);
 
+/* STEPS BETWEEN RETRACES, DERIVED FROM THE CLOCK RATHER THAN GUESSED.
+ *
+ * A 60 Hz field is 675,000 ticks of the Gekko's 40.5 MHz time base. This was
+ * a flat 2,000 steps, which at 32 ticks a step is 64,000 ticks a field -
+ * so the screen advanced 10.5 times faster than guest time, and the two are
+ * not independent: a run showed 200,000 retraces (3,333 s of video at 60 Hz)
+ * against the audio DMA's own 314.66 s of sound, a ratio of 10.6.
+ *
+ * That matters here because this game's movie clock is SLAVED TO THE AUDIO:
+ * `mpeg_movie_task` sets `stream->0x08` from the sound system's playback
+ * position scaled by 300/1000, so with the screen running ten times ahead of
+ * the audio, every decoded movie frame is held for about ten screen frames -
+ * which is exactly "it plays the first frame or two of each chunk".
+ *
+ * Deriving it from the tick rate keeps the two in step whatever the rate is,
+ * instead of leaving two constants that have to be changed together and
+ * were not. MGS_RETRACE_STEPS overrides it for measurement.
+ */
+static unsigned mgs_tick_rate(void);
+
+static unsigned long long mgs_retrace_period(void)
+{
+    static unsigned long long period;
+    if (!period) {
+        const char* e = getenv("MGS_RETRACE_STEPS");
+        period = (e && *e) ? strtoull(e, NULL, 10)
+                           : 675000ull / mgs_tick_rate();
+        if (!period) period = 1ull;
+    }
+    return period;
+}
+
 /* Ticks of guest time per interpreted step. See the note at its use. */
 static unsigned mgs_tick_rate(void)
 {
@@ -1197,7 +1229,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * with the exception's MSR still in force - so interrupts are
          * permanently disabled from then on and exactly one is ever
          * delivered. That is precisely how this presented. */
-        if ((r.steps % 2000ull) == 0ull) {
+        if ((r.steps % mgs_retrace_period()) == 0ull) {
             mgs_mmio_set_pad(mgs_host_mmio(), mgs_video_pad());
             mgs_mmio_tick_frame(mgs_host_mmio());
             mgs_interrupt_vi(mod, cpu);
