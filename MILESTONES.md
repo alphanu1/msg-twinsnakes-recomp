@@ -570,6 +570,17 @@ This is the project. ~200 functions and the widest error bars in the plan.
       built and returns it to **0**; ours reaches **`0x00000008`** and stays,
       gating levels 2–5 — including level 3, which holds the movie object's
       own node.
+- [x] **The ring head is pinned by records nobody consumes** (F229). Walking
+      the ring instead of reading code kills both of F228's candidates:
+      `ring->0x30` and `ring->0x34` are **0**, as Dolphin's are, and the
+      refill gate `bss+0xB040` cycles 455 times in 112 frames against
+      Dolphin's identical toggling. What is left is arithmetic the engine
+      gets right — the pump advances the read cursor only past **tag-0**
+      records and stops at the first non-zero, the head sits on one of nine
+      unclaimed **tag-1** records, so the ring stays 80% full
+      (`0x34930` of `0x40000`) and the refill correctly declines because
+      `free <= size/3`. **Nobody consumes tag 1**, and every link after that
+      is the engine working as designed.
 - [x] **The gate is deliberate, and it is a starved record ring** (F228).
       `fn_1_249AB8` gates level 3 exactly when `obj->0x25E8` is null and
       releases it the moment it is not. That field is filled by

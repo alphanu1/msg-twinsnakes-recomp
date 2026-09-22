@@ -9208,5 +9208,72 @@ address out so the second could use it.
 
 ---
 
+### F229 — the ring head is pinned by records nobody consumes
+
+Walking the ring rather than reading code turns F228's two candidates into
+one measured answer, and eliminates both of the things I expected.
+
+**The ring is healthy and the refill is not blocked.** Dumped at the stall:
+
+    ring 0x7F4EF794: buffer 0x81741AA0 + 0x40000,
+      read 0x817789F0 (+0x36F50), write 0x8176D320 (+0x2B880)
+      276 records between the cursors, 1 wrap
+        tag 0:  267 waiting
+        tag 1:    9 waiting
+        tag 2 does not appear at all
+
+`ring->0x30` and `ring->0x34` are both **0**, exactly as Dolphin's are, so
+the "stop flag" hypothesis of F228 is dead. And the refill gate `bss+0xB040`
+— which `fn_1_9C8` returns and which blocks both the pump and the refill
+while non-zero — **cycles normally in our run**:
+
+    0x00000000 -> 0x00080000  pc 0x7F008974
+    0x00080000 -> 0x00040000  pc 0x7F00839C
+    0x00040000 -> 0x00000000  pc 0x7F00839C
+
+455 times in 112 frames, against Dolphin's identical `0x40000` / `0`
+toggling. Reads are being issued constantly. Neither suspect survives.
+
+**What is actually wrong is arithmetic the engine gets right.** In
+`fn_1_1321A8`:
+
+    subf r3, r3, r30      free = size - used
+    divw r0, r30, 3
+    cmpw r3, r0
+    ble  skip             no refill unless free > size/3
+
+Our ring holds `0x34930` used of `0x40000`, so free is `0xB6D0` against a
+threshold of `0x15555`. The refill **correctly declines** — the ring is 80%
+full. It is full because the pump advances the read cursor only past records
+tagged **0**, stopping at the first non-zero tag, and the head is sitting on
+one of nine **tag-1** records that nothing ever claims.
+
+So the chain is: nobody consumes tag 1 -> the read cursor cannot advance ->
+free space stays below a third -> no refill -> no new tag-2 record ->
+`obj->0x25E8` stays null -> level 3 stays gated -> the movie waits forever.
+Every link after the first is the engine working correctly.
+
+**Who should consume tag 1.** `gcn_pool_acquire` has eleven call sites; only
+two pass a literal (the movie's `2`, and `0x10` inside the pool code), and the
+rest read the tag from a field of the asking object. The one beside the movie
+code is `fn_1_1482FC`, called from three places inside `mpeg_movie_task`
+itself with the task node as its argument, asking for `node->0x38` out of
+`node->0x3C`'s ring. So the movie task is *both* consumers, and which records
+it claims depends on a field of its own node.
+
+That field is the next measurement, and it also bears on F225. `mpeg_movie_task`
+dispatches on `node->0x44`, which F196 measured as 1, and the tag-1 consumer
+at `0x149194` is on the **state-0** path — so in state 1 the task may simply
+never reach the call that would drain them. If so, "waiting for an event that
+never comes" and "not consuming the records that would let it advance" are
+the same stall seen from two ends.
+
+**New instrument.** `MGS_RING=<addr>` (with `*` to dereference) walks a
+record ring the way `gcn_pool_acquire` does and reports the tag histogram.
+The layout is read out of that function rather than assumed, and the walk is
+bounded so a corrupt ring reports instead of hanging at exit.
+
+---
+
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*

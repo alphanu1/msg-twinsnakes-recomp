@@ -2076,6 +2076,19 @@ int main(int argc, char** argv)
                          * table holds keys and the movie polls for one, and
                          * no amount of change-watching says which. */
                         {
+                            {   /* MGS_RING=<address>: walk the stream's
+                                 * record ring. A leading '*' dereferences,
+                                 * as MGS_DUMP does. */
+                                const char* rv = getenv("MGS_RING");
+                                if (rv && *rv) {
+                                    int d = (*rv == '*');
+                                    uint32_t r = (uint32_t)strtoul(
+                                        d ? rv + 1 : rv, NULL, 0);
+                                    if (d && r)
+                                        r = mgs_module_guest_read32(cpu, r);
+                                    if (r) mgs_dump_ring(cpu, r);
+                                }
+                            }
                             const char* env = getenv("MGS_DUMP");
                             while (env && *env) {
                                 char* end = NULL;

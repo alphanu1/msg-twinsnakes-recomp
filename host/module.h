@@ -119,6 +119,9 @@ void mgs_dump_threads(void* cpu, const char* (*symbol)(uint32_t));
 void mgs_symbols_load(const char* dir);
 void mgs_symbols_set_overlay(void* cpu, uint32_t module);
 const char* mgs_symbol_for(uint32_t addr);
+
+/* Walks a stream record ring and reports which tags are in it. */
+void mgs_dump_ring(void* cpu, uint32_t ring);
 uint32_t* mgs_module_msr_ptr(void* cpu);
 uint32_t* mgs_module_lr_ptr(void* cpu);
 uint32_t mgs_module_current_context(void* cpu);

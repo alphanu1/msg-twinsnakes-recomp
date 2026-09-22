@@ -294,3 +294,81 @@ void mgs_dump_tasks(void* cpu, uint32_t rel_bss)
            total, total == 1u ? "" : "s", gated, gated == 1u ? "" : "s",
            skipped, skipped == 1u ? "" : "s");
 }
+
+/* ---- the stream's record ring ------------------------------------------
+ *
+ * WHY WALK IT RATHER THAN DUMP IT. The movie stalls because
+ * `gcn_pool_acquire(ring, 2)` never finds a record tagged 2, and the ring
+ * holds a quarter of a megabyte between its cursors. Dumping that 4 KB at a
+ * time and reading tags out by eye is several runs of eight minutes; the
+ * question - "which tags are actually in here" - is one pass over a linked
+ * walk, and the walk is the same one `gcn_pool_acquire` does.
+ *
+ * LAYOUT, read out of `fn_1_1323C4` rather than assumed: +0x08 buffer base,
+ * +0x0C buffer size, +0x14 the read cursor, +0x24 the write cursor. A record
+ * is a tag word at +0x00, its total size at +0x04, and its payload at +0x10;
+ * tag 0xFF is the wrap marker and sends the walk back to the buffer base.
+ * Bit 7 of a tag means "already claimed", so it is reported separately
+ * rather than as a different tag.
+ */
+#define RING_BUF_BASE   0x08u
+#define RING_BUF_SIZE   0x0Cu
+#define RING_READ       0x14u
+#define RING_WRITE      0x24u
+#define RING_STOP       0x34u
+
+void mgs_dump_ring(void* cpu, uint32_t ring);
+void mgs_dump_ring(void* cpu, uint32_t ring)
+{
+    uint32_t base  = mgs_module_guest_read32(cpu, ring + RING_BUF_BASE);
+    uint32_t size  = mgs_module_guest_read32(cpu, ring + RING_BUF_SIZE);
+    uint32_t read  = mgs_module_guest_read32(cpu, ring + RING_READ);
+    uint32_t write = mgs_module_guest_read32(cpu, ring + RING_WRITE);
+    uint32_t stop  = mgs_module_guest_read32(cpu, ring + RING_STOP);
+    uint32_t tags[256], claimed[256];
+    uint32_t p = read;
+    unsigned n = 0u, wraps = 0u, i;
+
+    printf("ring 0x%08X: buffer 0x%08X + 0x%X, read 0x%08X (+0x%X), "
+           "write 0x%08X (+0x%X)%s\n",
+           ring, base, size, read, read - base, write, write - base,
+           stop ? "  STOPPED (+0x34 set)" : "");
+    if (!base || !size || size > 0x400000u || read < base
+        || read >= base + size) {
+        printf("  cursors are not inside the buffer; not walked\n");
+        return;
+    }
+    for (i = 0; i < 256u; ++i) tags[i] = claimed[i] = 0u;
+
+    /* Bounded by the record count, not by trusting the cursors to meet: a
+     * ring whose sizes are wrong walks forever otherwise, and this runs at
+     * exit where a hang looks exactly like the stall being investigated. */
+    while (p != write && n < 100000u) {
+        uint32_t tag = mgs_module_guest_read32(cpu, p);
+        uint32_t len;
+        if ((tag & 0xFFu) == 0xFFu) {
+            p = base;
+            if (++wraps > 4u) break;
+            continue;
+        }
+        len = mgs_module_guest_read32(cpu, p + 4u);
+        if (tag & 0x80u) ++claimed[tag & 0x7Fu]; else ++tags[tag & 0x7Fu];
+        ++n;
+        if (!len || len > size) {
+            printf("  record at 0x%08X has size 0x%X; walk stopped\n", p, len);
+            break;
+        }
+        p += len;
+        if (p >= base + size) p = base;
+    }
+
+    printf("  %u records between the cursors, %u wrap%s\n",
+           n, wraps, wraps == 1u ? "" : "s");
+    for (i = 0; i < 128u; ++i)
+        if (tags[i] || claimed[i])
+            printf("    tag %3u: %6u waiting, %6u already claimed%s\n",
+                   i, tags[i], claimed[i],
+                   i == 2u ? "   <- what the movie asks for" : "");
+    if (!tags[2] && !claimed[2])
+        printf("    tag 2 does not appear at all\n");
+}
