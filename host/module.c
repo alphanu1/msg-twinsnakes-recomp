@@ -1161,6 +1161,20 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 {
     MgsRunResult r;
     uint64_t gt = 0;   /* guest ticks, for the periodic hooks */
+    /* NEXT-DEADLINE scheduling, not modulo.
+     *
+     * `gt` advances by MGS_TICK_RATE every step, so it only ever takes
+     * multiples of that rate - and `gt % N == 0` can therefore only fire
+     * when the rate DIVIDES N. Every period here is a multiple of 8, so at
+     * rate 8 or 4 they divide and fire correctly, and at 7 they fire once
+     * every lcm(7, N) ticks instead: seven times too rarely. Measured, the
+     * DSP task offer went from 219,565 offers to 31,366, which starved
+     * __AXOutDspReady, which stopped __AXServiceVPB (58,015 calls to 254),
+     * which stopped every voice.
+     *
+     * A deadline fires at the right rate whatever the increment. */
+    uint64_t due_pe = 0, due_dsp = 0, due_pend = 0, due_aram = 0,
+             due_aid = 0, due_pump = 0, due_disp = 0;
     uint32_t last_pc = 0u;
     uint64_t same_pc = 0u;
     uint64_t trace_steps = 0u;
@@ -1312,7 +1326,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * than retrace: the game blocks on it inside a frame, so answering it
          * only at the next retrace would halve the frame rate for no reason.
          * Raising it moves the pc, so it belongs here with the others. */
-        else if ((gt % 512ull) == 0ull)
+        else if ((gt >= due_pe ? (due_pe = gt + 512ull, 1) : 0))
             mgs_interrupt_pe_finish(mod, cpu);
 
         /* Submitted DSP tasks report themselves finished.
@@ -1326,7 +1340,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * The interval is prime for the same reason the profiler's is: the
          * run loop is full of periodic work, and anything sharing a factor
          * with it samples a fraction of the program. */
-        if ((gt % 32792ull) == 0ull)
+        if ((gt >= due_dsp ? (due_dsp = gt + 32792ull, 1) : 0))
             mgs_interrupt_dsp_task(mod, cpu);
 
         /* Anything left asserted is offered again.
@@ -1342,19 +1356,19 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * and anything sharing a factor with them samples a fraction of the
          * program. This must not be one of them, because the case it exists
          * to catch is precisely the one where two of those coincide. */
-        if ((gt % 1688ull) == 0ull)
+        if ((gt >= due_pend ? (due_pend = gt + 1688ull, 1) : 0))
             mgs_interrupt_pending(mod, cpu);
 
         /* Far more often than a task: a transfer finishes as soon as it is
          * started here, and the audio manager waits on each one. */
-        if ((gt % 1016ull) == 0ull)
+        if ((gt >= due_aram ? (due_aram = gt + 1016ull, 1) : 0))
             mgs_interrupt_aram(mod, cpu);
 
         /* And the audio DMA's, which is what asks for the next buffer of
          * sound. Offered often, on a period sharing no factor with the
          * others in this loop: the engine queues a completion every 10,125
          * guest ticks, and one that waits is one the stream waits on. */
-        if ((gt % 712ull) == 0ull)
+        if ((gt >= due_aid ? (due_aid = gt + 712ull, 1) : 0))
             mgs_interrupt_aid(mod, cpu);
 
         /* MGS_WATCH=<guest address>: who writes that word?
@@ -1403,13 +1417,13 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */
-        if ((gt % 4096ull) == 0ull && s_pump)
+        if ((gt >= due_pump ? (due_pump = gt + 4096ull, 1) : 0) && s_pump)
             s_pump(mod, cpu, s_pump_user);
 
         /* Execute any framebuffer copy the game has put in the command
          * stream. Checked often: the copy is what makes a frame exist, and
          * deferring it to the next retrace would show every frame late. */
-        if ((gt % 2048ull) == 0ull && s_display)
+        if ((gt >= due_disp ? (due_disp = gt + 2048ull, 1) : 0) && s_display)
             s_display();
 
         pc = mgs_module_pc(cpu);

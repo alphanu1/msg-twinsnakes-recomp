@@ -11895,3 +11895,40 @@ behind in `main.c`. It now follows `VI_DCR`'s format like the rest.
 speed control at all: the guest should run as fast as the host allows and
 be paced by the field rate. What stands in the way is the race above, and
 finding it is the next job - not choosing a number.
+
+
+### F280 — modulo scheduling only fires when the increment divides the period, and it broke every hook at odd tick rates
+
+F277 moved the run loop's periodic hooks onto a guest-tick clock and wrote
+them as `gt % N == 0`. That is wrong, and subtly: `gt` advances by
+`MGS_TICK_RATE` every step, so it only ever takes multiples of that rate,
+and `gt % N == 0` can only fire when the rate DIVIDES N.
+
+Every period is a multiple of 8. At rate 8 and 4 they divide and fire
+correctly. **At rate 7 they fire once every lcm(7, N) ticks - seven times
+too rarely** - and it showed all the way down the chain:
+
+    DSP task offers      219,565  ->   31,366
+    __AXServiceVPB        58,015  ->      254
+    voice-mixes           60,408  ->      186
+    demo.dat reads           282  ->       11
+
+The AI callback was fine (41,217 calls, more than rate 8's 36,134); it
+serviced no voices because `__AXOutDspReady` is set only by a DSP resume,
+and the resumes had been throttled sevenfold by the modulo.
+
+Replaced with next-deadline scheduling (`if (gt >= due) { due = gt + N; }`),
+which fires at the right rate whatever the increment. Rate 7 recovers
+completely:
+
+    rate 7 before   16 fps claimed, voice-mixes 186, demo 11, movie 8
+    rate 7 after    16.0 fps,       voice-mixes 60,742, demo 293, movie 62
+
+**This is the second time this session a scheduling change has been wrong in
+a way that only shows at some values.** The rule worth keeping: a periodic
+hook driven by a counter that advances in steps of `k` must use a deadline,
+never a modulus, because the modulus silently becomes `lcm(k, N)`.
+
+**It does not fix rates 4 and 2**, which still collapse to 952 and 636
+voice-mixes with correct offer counts (219,566). So there is a second,
+independent cause there, and it is not the hook scheduling.
