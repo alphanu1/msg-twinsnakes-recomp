@@ -180,11 +180,17 @@ void mgs_display_init(GuestMemory* mem);
 void mgs_display_init(GuestMemory* mem)
 {
     s_mem = mem;
-    /* Copies run inside the parse, in stream order. */
-    s_gx.copy_exec = copy_exec_cb;
-    s_gx.copy_user = NULL;
     mgs_efb_init(&s_efb);
     mgs_gx_init(&s_gx, mem);
+    /* AFTER mgs_gx_init, which memsets the whole structure.
+     *
+     * This was set two lines before that call and was therefore wiped every
+     * time, so copies went on being deferred and the drop counter went on
+     * counting - 4,258 of them in a run that was reported as having none.
+     * The commit that added this claimed 2,464 -> 0 and the fix was never
+     * running. */
+    s_gx.copy_exec = copy_exec_cb;
+    s_gx.copy_user = NULL;
     mgs_raster_init(&s_raster, &s_efb);
     mgs_raster_set_jobs(&s_raster, s_jobs);
     /* So a run that is mid-draw can still be stopped and still report what it

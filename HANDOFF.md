@@ -12226,6 +12226,7 @@ bytes smooth - they ARE noise, not misread structure); the texture cache
 (it hashes contents); and the tile geometry.
 
 ### F287 — copies ran late and one in five never ran at all
+### F287b — ...and the fix was wiped by an init that ran after it, for four commits
 
 Found while chasing F286 and fixed on the way, but it is a separate fault
 and did NOT cause the striping.
@@ -12244,6 +12245,27 @@ sits in the stream. The drop counter stays in the exit report.
 **What not to re-propose:** deferring copies to a periodic hook to batch
 them. The single slot is not the only problem - the ordering against draws
 is, and that cannot be recovered by making the queue deeper.
+
+**F287b. The fix above did not run, and said so the whole time.** The
+callback was installed two lines BEFORE `mgs_gx_init`, which memsets the
+whole structure - so it was wiped on every init and copies went on being
+deferred. The commit claimed "2,464 -> 0" and the counter in that same
+commit's own exit report was still printing **4,258 DROPPED** four commits
+later. I read the line and did not read the number.
+
+Installed after the init instead:
+
+    texture copies   13,928 -> 18,184        dropped   4,258 -> 0
+
+and the video stays clean with them running (0 noisy frames, 0 purple),
+which also settles that the ordering was never what caused the striping -
+F286 was.
+
+**What this cost, and the lesson:** every measurement between those commits
+was taken with deferred copies, so anything concluded about ordering in that
+window is worth nothing. The exit report prints the counter that would have
+caught it immediately. **Read the numbers in the report, not just the ones
+in the experiment.**
 
 ### F288 — the TEV swap tables: libogc is right, Dolphin's comment is not
 
