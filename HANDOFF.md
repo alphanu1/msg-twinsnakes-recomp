@@ -12351,3 +12351,76 @@ between frames 1200 and 1320.
 **Eliminated so far:** the combiner arithmetic (F289); the blend factors
 (src/dst ONE is additive and is not treated as the no-op, which is only
 ONE/ZERO); the planes bound to the stages; and the composite's own output.
+
+### F291 — the texture cache went blind because its sampling stride shared a factor with the tile size
+
+The video had stopped updating and nobody noticed, because a frozen picture
+in a dark scene looks like a dark scene.
+
+The cache compares a hash of the texture's CONTENT, sampled on a stride
+rather than read whole - a 512x448 RGBA8 surface is 917 KB and hashing all
+of it per lookup is not free. Sparse sampling is fine. **The stride is the
+risk**, and it was `bytes / 4096`, which for that size is **224**.
+
+Textures are stored in TILES whose size is a power of two. 224 is a multiple
+of the 64-byte RGBA8 tile, so the walk only ever visited offsets 0 and 32
+inside a tile - the alpha and the green of texel 0 - and the alpha was
+constant across the image. Measured directly:
+
+    hash        0xBCD7FB68DE2FB799   for HUNDREDS of consecutive lookups
+    byte sum    2,293,760 -> 3,367,518 -> 2,394,389   over the same lookups
+
+The memory was moving and the hash was not. One decode was served for the
+whole scene:
+
+    decodes of that buffer   1  ->  946     (hits 400+ -> 400, capped)
+
+An odd stride is coprime with every power of two, so the walk covers all
+byte positions within a tile. `(bytes / 4096u) | 1u`.
+
+**This is the same failure the hash was ADDED to fix** (F156, and the
+comment above `content_hash`), reintroduced not by the key but by the
+sampling. A cache that cannot see a change is a cache with no key at all.
+
+`tests/test_texture.c` now covers it: one byte per tile, at each of the 64
+offsets in turn, right across the image - which is what the broken stride
+could not see. It fails on 62 of the 64 offsets with the old stride and
+passes with the fix. It deliberately does NOT assert that a single isolated
+byte is noticed: sparse sampling is entitled to miss one byte in 917 KB, and
+asserting that would be asserting the sampling away.
+
+**What not to re-propose:** hashing the whole texture to be safe. The
+sampling is not the fault and it is load-bearing - this runs per lookup, per
+draw.
+
+### F292 — the purple IS the framebuffer copy landing on the texture, and my first test of that was the wrong measurement
+
+F286 recorded this as eliminated. It was not eliminated; it was measured
+with a metric that cannot see it.
+
+The framebuffer copy writes YUV 4:2:2 over memory a texture copy has written
+and the game still samples - `[overlap]` reports 458,752 bytes of it. The
+test then was `MGS_NO_FB_OVER_TEX=1` with the NOISE count as the outcome,
+and the noise did not change, so it was dropped. But YUV read as RGBA8 in a
+smooth picture is SMOOTH - it has the wrong colour, not a rough one. The
+metric was blind to the fault by construction.
+
+Measured again on colour, the same experiment is decisive:
+
+    normal                      frame reads  R 50  G 23  B 62   (purple)
+    framebuffer write suppressed             R  2  G 11  B 13   (correct)
+
+R < G < B and green present is what BT.601 says for this frame.
+
+**What not to re-propose:** re-testing this with roughness, or with any
+whole-frame average that mixes the movie with the letterbox and the subtitle
+band. Both have produced confident wrong answers here.
+
+**Still open: WHY they collide.** Both copies' destinations are freshly
+written by the game before each copy - "dest set 1 since last copy" on every
+one - so neither is stale, and the sizes are right: the format decode
+(bits 3-6, rotated) and the stride both match libogc's `GX_SetTexCopyDst`
+exactly, giving 917,504 bytes for a 512x448 RGBA8 copy and 458,752 for the
+display copy. On that reading the game aims both at 0x80066480, and the
+second destroys the first. Hardware would do the same, so something in this
+reading is still wrong.

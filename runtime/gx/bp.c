@@ -21,6 +21,12 @@ void mgs_bp_write(MgsGxBp* bp, uint8_t reg, uint32_t value)
     bp->reg[reg] = value & 0x00FFFFFFu;
     bp->written[reg] = 1u;
 
+    /* How many times the copy DESTINATION has been set since the last copy.
+     * A copy that runs with zero writes since the previous one is reusing
+     * that copy's address, which is how a display copy can land on the
+     * texture a moment earlier wrote. */
+    if (reg == 0x4Bu) ++bp->efb_addr_writes;
+
     /* Route 0xE0-0xE7 to the colour register or the konst register, by bit
      * 23. Doing it here rather than at read time is what makes both
      * survivable: a game that sets a konst and then a colour through the

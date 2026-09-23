@@ -305,7 +305,30 @@ static uint64_t content_hash(const uint8_t* p, unsigned bytes)
     uint64_t h = 1469598103934665603ull;
     unsigned step = 1u, i;
 
-    if (bytes > 4096u) step = bytes / 4096u;   /* ~4 KB sampled, at most */
+    /* THE STRIDE MUST BE ODD, and that is the whole of this function.
+     *
+     * Textures are stored in TILES whose size is a power of two - 64 bytes
+     * for RGBA8, 32 for most others - so a stride that shares a factor with
+     * the tile size never leaves the same few byte positions inside it.
+     *
+     * A 512x448 RGBA8 surface is 917,504 bytes, and 917504/4096 is 224.
+     * 224 is a multiple of 32, so the walk visits offsets 0 and 32 within
+     * every tile it touches and nothing else: for RGBA8 that is the alpha
+     * and the green of texel 0. The alpha was constant across the image, so
+     * half the samples never moved, and the hash came out the SAME on every
+     * frame of a playing movie. Measured: the hash sat at
+     * 0xBCD7FB68DE2FB799 for hundreds of consecutive lookups while a plain
+     * sum of the same memory went 2,293,760 -> 3,367,518 -> 2,394,389.
+     *
+     * The cache then served one decode for the life of the scene - so the
+     * video stopped updating, and whatever happened to be in that buffer at
+     * the moment of the first decode stayed on screen. That is the same
+     * failure this hash was added to fix (the comment above), reintroduced
+     * by the sampling rather than by the key.
+     *
+     * An odd stride is coprime with every power of two, so the walk covers
+     * all byte positions within a tile. */
+    if (bytes > 4096u) step = (bytes / 4096u) | 1u;   /* ~4 KB, odd stride */
 
     for (i = 0; i < bytes; i += step) {
         h ^= p[i];
@@ -384,6 +407,30 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
             if (e->hash == hash) {
                 e->generation = ++c->clock;
                 ++c->hits;
+                {   /* A hit on a watched buffer is as interesting as a miss:
+                     * a video frame that stops re-decoding has stopped
+                     * moving, and only the hits say so. */
+                    static long watch = -1; static unsigned n2;
+                    if (watch == -1) { const char* ev = getenv("MGS_TRACE_BUF");
+                                       watch = ev ? (long)strtoul(ev, NULL, 0)
+                                                  : 0; }
+                    if (watch && (uint32_t)watch == addr && n2++ < 400u)
+                    {
+                        /* The hash against a plain sum of the same memory:
+                         * if the bytes move and the hash does not, the
+                         * SAMPLING is at fault, not the cache. */
+                        unsigned nb = texture_bytes(format, width, height);
+                        const uint8_t* sp = guest_ptr(mem, addr, nb);
+                        unsigned long long sum = 0; unsigned q;
+                        if (sp) for (q = 0; q < nb; q += 7u) sum += sp[q];
+                        fprintf(stderr, "[buf] %6llu  HIT    0x%08X "
+                                "%ux%u fmt 0x%X  hash 0x%016llX  "
+                                "byte sum %llu\n",
+                                (unsigned long long)++mgs_gx_seq, addr,
+                                width, height, format,
+                                (unsigned long long)hash, sum);
+                    }
+                }
                 return e;
             }
             /* Same texture, new contents: take this slot back. */
@@ -477,6 +524,19 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
             if (e) fprintf(stderr, "[tex] dump armed: %dx%d fmt %d\n",
                            want_w, want_h, want_fmt);
         }
+        /* MGS_DUMP_TEXSKIP=<n>: skip the first n matching decodes. The
+         * first four of a shape are from before the movie starts, and the
+         * question is what the texture looks like DURING it. */
+        {
+            static long skip = -1;
+            if (skip < 0) { const char* e = getenv("MGS_DUMP_TEXSKIP");
+                            skip = e ? strtol(e, NULL, 0) : 0; }
+            if (want_w && (int)width == want_w && (int)height == want_h &&
+                (want_fmt < 0 || (int)format == want_fmt) && skip > 0) {
+                --skip;
+                goto no_dump;
+            }
+        }
         if (want_w && (int)width == want_w && (int)height == want_h &&
             (want_fmt < 0 || (int)format == want_fmt) && dumped < 4) {
             char path[256];
@@ -523,6 +583,8 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
             }
         }
     }
+no_dump:
+    (void)0;
 
     /* IS THIS TEXTURE A PICTURE OR IS IT NOISE?
      *

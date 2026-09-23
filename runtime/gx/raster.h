@@ -84,6 +84,8 @@ typedef struct MgsGxRaster {
     unsigned  composite_dump;
     unsigned  col_before[3], col_armed;
     unsigned  col_tex[3], col_tex_a;
+    int       col_watch;
+    int       scissor_box[4], scissor_seen;
     unsigned* noise_said;
     uint32_t  noise_tex_addr;
     uint8_t   noise_tex_fmt;

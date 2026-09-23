@@ -1043,6 +1043,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             int sr = (int)((br >> 12) & 0xFFFu) - (int)(ox * 2u) + 1;
             int sb = (int)( br        & 0xFFFu) - (int)(oy * 2u) + 1;
 
+            r->scissor_box[0] = sl; r->scissor_box[1] = st;
+            r->scissor_box[2] = sr; r->scissor_box[3] = sb;
+            r->scissor_seen = 1;
             if (sl > x0) x0 = sl;
             if (st > y0) y0 = st;
             if (sr < x1) x1 = sr;
@@ -1340,7 +1343,27 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * something after it moves the channels apart. Same method as
              * the noise trace - score the buffer either side of one
              * full-screen draw - with the channels kept separate. */
-            if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWCOLOUR")) {
+            /* MGS_TRACE_DRAWH=<height> narrows this to one kind of draw.
+             * The composite binds a 512x320 luma plane; the quad that
+             * presents the finished frame binds a 512x448 surface. Watching
+             * both at once buries whichever is being asked about. */
+            {
+                const char* wh = getenv("MGS_TRACE_DRAWH");
+                unsigned want_h = (wh && *wh) ? (unsigned)strtoul(wh, NULL, 0)
+                                              : 0u;
+                /* MGS_TRACE_DRAWALL widens this to EVERY draw, textured
+                 * or not. The big-texture filter was hiding the answer: a
+                 * room's background can be untextured geometry, and a
+                 * full-screen tint can come from a draw that binds nothing
+                 * at all. Sampling is coarser here because this runs around
+                 * thousands of draws a frame rather than a handful. */
+                r->col_watch = getenv("MGS_TRACE_DRAWALL")
+                    ? 1
+                    : (tex && tex->width >= 256u &&
+                       (want_h ? tex->height == want_h
+                               : tex->height >= 256u));
+            }
+            if (r->col_watch && getenv("MGS_TRACE_DRAWCOLOUR")) {
                 unsigned yy, xx3, cnt = 0u;
                 unsigned long sr = 0, sg = 0, sb = 0;
                 for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
@@ -1380,9 +1403,12 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                 r->noise_tex_fmt = (uint8_t)tex->format;
                 r->noise_tex_w = (uint16_t)tex->width;
                 r->noise_tex_h = (uint16_t)tex->height;
-            } else {
-                r->col_armed = 0;
             }
+            /* Deliberately NOT disarmed here. A multi-stage draw binds
+             * several textures, and the composite's last bind is a 256x160
+             * chroma plane - clearing on a bind that does not match threw
+             * away the arm the luma bind had just made, and the composite
+             * draws never reported at all. The end of the draw disarms. */
 
             if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWNOISE")) {
                 static unsigned said;
@@ -1532,12 +1558,55 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             int was = (int)r->col_before[0] + (int)r->col_before[2]
                     - 2 * (int)r->col_before[1];
             int now = (int)a2v + (int)c2 - 2 * (int)b2;
-            if (now - was > 12 && said < 10u) {
+            /* MGS_TRACE_DRAWCOLOUR=<frame>: from that frame on, report
+             * EVERY full-screen draw rather than only the ones that shift
+             * the balance. Which draw first introduces the cast cannot be
+             * seen from the ones that worsen it - by then it is circulating
+             * through the copy that feeds the next frame. */
+            const char* from = getenv("MGS_TRACE_DRAWCOLOUR");
+            unsigned f0 = (from && *from) ? (unsigned)strtoul(from, NULL, 0)
+                                          : 0u;
+            unsigned fr = (unsigned)r->efb->copies;
+            /* With MGS_TRACE_DRAWH naming one kind of draw, report every
+             * one of them: the question is then what that draw does, not
+             * which draw to look at. */
+            if ((getenv("MGS_TRACE_DRAWH")
+                 || (f0 && fr >= f0 && fr < f0 + 400u)
+                 || (!f0 && now - was > 12))
+                && said < 400u) {
                 ++said;
+                /* ...and the buffer itself, so the SHAPE can be seen. The
+                 * colour means said the picture was purple; they cannot say
+                 * that it is purple in a band with a hard edge, which is a
+                 * geometry fault and not an arithmetic one. */
+                if (getenv("MGS_DUMP_DRAWSEQ")) {
+                    char path[512];
+                    FILE* f;
+                    snprintf(path, sizeof path, "%s/draw_%02u.ppm",
+                             getenv("MGS_DUMP_DRAWSEQ"), said);
+                    f = fopen(path, "wb");
+                    if (f) {
+                        unsigned yy2, xx4;
+                        fprintf(f, "P6\n%u %u\n255\n", 512u, 448u);
+                        for (yy2 = 0; yy2 < 448u; ++yy2)
+                            for (xx4 = 0; xx4 < 512u; ++xx4) {
+                                uint32_t v = r->efb->pixels[yy2 * MGS_EFB_WIDTH
+                                                            + xx4];
+                                fputc((int)((v >> 16) & 0xFFu), f);
+                                fputc((int)((v >> 8) & 0xFFu), f);
+                                fputc((int)(v & 0xFFu), f);
+                            }
+                        fclose(f);
+                    }
+                }
+                fprintf(stderr, "[drawcolour] frame %u  ", fr);
                 fprintf(stderr, "[drawcolour] (%u,%u,%u) -> (%u,%u,%u)  "
                         "r+b-2g %d -> %d   texture %ux%u fmt 0x%X at "
                         "0x%08X  %u stages, blend %s (src %u dst %u)"
-                        "   texture (%u,%u,%u) alpha %u\n",
+                        "   texture (%u,%u,%u) alpha %u"
+                        "   depth %s func %u write %s   alpha test %s"
+                        "   box x %d-%d y %d-%d   scissor %d-%d, %d-%d "
+                        "(%s)\n",
                         r->col_before[0], r->col_before[1], r->col_before[2],
                         a2v, b2, c2, was, now,
                         r->noise_tex_w, r->noise_tex_h, r->noise_tex_fmt,
@@ -1545,7 +1614,15 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                         (r->blend_enable && !r->blend_noop) ? "ON" : "off",
                         r->blend_src, r->blend_dst,
                         r->col_tex[0], r->col_tex[1], r->col_tex[2],
-                        r->col_tex_a);
+                        r->col_tex_a,
+                        r->depth_test ? "on" : "off", r->depth_func,
+                        r->depth_update ? "yes" : "no",
+                        mgs_tev_alpha_test_always(&gx->bp) ? "always passes"
+                                                           : "ACTIVE",
+                        x0, x1, y0, y1,
+                        r->scissor_box[0], r->scissor_box[2],
+                        r->scissor_box[1], r->scissor_box[3],
+                        r->scissor_seen ? "set" : "none");
             }
         }
         r->col_armed = 0;

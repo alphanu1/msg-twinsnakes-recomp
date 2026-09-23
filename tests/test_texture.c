@@ -146,6 +146,67 @@ int main(void)
         CHECK(mgs_tex_sample(&t, 1.25f, 0.0f, 1, 1, 0) == 0xFF010000u);
     }
 
+    /* --- THE CACHE MUST NOTICE A CHANGED TEXTURE ----------------------
+     *
+     * The cache keys on the address and compares a hash of the CONTENT, and
+     * the content is SAMPLED on a stride rather than read whole - a 512x448
+     * RGBA8 surface is 917 KB and hashing all of it per lookup is not free.
+     * Sparse sampling is fine; the stride is the risk.
+     *
+     * Textures are stored in tiles whose size is a power of two, so a stride
+     * sharing a factor with the tile size only ever reads the same few byte
+     * positions inside it. At 512x448 RGBA8 the stride was 917504/4096 =
+     * 224, a multiple of the 64-byte tile: the walk saw offsets 0 and 32 and
+     * nothing else - the alpha and the green of texel 0 - and the alpha was
+     * constant across the image. The hash never moved while a movie played.
+     * One decode was served for the whole scene and the video froze on
+     * whatever was in the buffer when it was first bound.
+     *
+     * What that missed is a change spread across the image at a tile offset
+     * the walk never visits, which is what this builds: one byte per tile,
+     * at each offset in turn. A single isolated byte is NOT tested, because
+     * sparse sampling is entitled to miss one byte in 917 KB - asserting
+     * that would be asserting the sampling away. */
+    {
+        MgsTexCache cache;
+        const unsigned w = 512u, h = 448u;      /* the size that failed */
+        const unsigned tile = 64u;              /* RGBA8: 4x4 texels */
+        const unsigned bytes = 512u * 448u * 4u;
+        unsigned off, k;
+
+        mgs_tex_cache_init(&cache);
+        for (k = 0; k < bytes; k += 4u)
+            guest_write32(&mem, ADDR + k, 0x11223344u);
+
+        for (off = 0; off < tile; ++off) {
+            const MgsTexture* before;
+            const MgsTexture* after;
+            uint32_t sum_before = 0, sum_after = 0;
+            unsigned q;
+
+            before = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
+            if (!before) { printf("FAIL: no texture\n"); ++failures; break; }
+            for (q = 0; q < w * h; q += 97u) sum_before += before->texels[q];
+
+            /* One byte per tile, at this offset, right across the image. */
+            for (k = off; k < bytes; k += tile)
+                guest_write8(&mem, ADDR + k,
+                             (uint8_t)(guest_read8(&mem, ADDR + k) ^ 0xFFu));
+
+            after = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
+            if (!after) { printf("FAIL: no texture\n"); ++failures; break; }
+            for (q = 0; q < w * h; q += 97u) sum_after += after->texels[q];
+
+            if (sum_before == sum_after) {
+                printf("FAIL: every tile changed at offset %u of 64 and the "
+                       "%ux%u RGBA8 texture did not re-decode\n",
+                       off, w, h);
+                ++failures;
+            }
+        }
+        mgs_tex_cache_free(&cache);
+    }
+
     guest_memory_free(&mem);
     printf(failures ? "texture: FAILED\n" : "texture: ok\n");
     return failures ? 1 : 0;

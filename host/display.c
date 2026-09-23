@@ -318,11 +318,14 @@ static void run_copy(uint32_t cmd)
             }
             if (armed && n >= armed && n < armed + 40u) {
                 fprintf(stderr, "[copyseq] %2u  %-3s dest 0x%08X  %ux%u  "
-                        "fmt 0x%X  stride %u\n", n,
+                        "fmt 0x%X  stride %u  dest set %u since last copy\n",
+                        n,
                         (cmd & COPY_TO_XFB) ? "XFB" : "tex",
                         dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
-                        copy_w, copy_h, copy_tex_format(cmd), stride << 5);
+                        copy_w, copy_h, copy_tex_format(cmd),
+                        stride << 5, s_gx.bp.efb_addr_writes);
             }
+            s_gx.bp.efb_addr_writes = 0;
         }
         if (getenv("MGS_TRACE_GX"))
             fprintf(stderr, "[gx] copy cmd=0x%06X dest=0x%08X stride=%u "

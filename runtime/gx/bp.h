@@ -98,6 +98,7 @@ typedef struct MgsGxBp {
      *
      * Order is r, g, b, a. Colour registers are signed 11-bit; konst is used
      * as an unsigned 0-255 colour. */
+    uint32_t efb_addr_writes;   /* writes to 0x4B, for the copy trace */
     int32_t tevreg[4][4];
     int32_t konst[4][4];
 
