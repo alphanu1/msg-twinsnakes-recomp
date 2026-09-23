@@ -11253,3 +11253,56 @@ one, not a frame-by-frame proof.
 `peak 54629 of 32767 (166.7% of full scale)`. The peak is tracked before the
 clamp, so that is real clipping in the mix, not a reporting artefact. Worth
 chasing separately.
+
+
+### F267 — the movie's code-1 event does NOT come from the broadcast subsystem, and the tooling leaked emulators
+
+**The dead end, recorded because it is an expensive one to walk twice.**
+Chasing what posts the movie's missing code-1 event (F265) led up a clean
+chain:
+
+    post_event(key, code)            0x7F152B9C
+      <- broadcast_event(obj, code)  0x7F14E2E8   posts to every key in obj+0xB8
+        <- 0x7F14EDD8                code = 1     the one that would wake the movie
+          inside the handler         0x7F14E8E4
+            registered by            0x7F1500AC
+              which is entry 122 of a 599-entry hash->constructor table at
+              0x7F470220, under the id 0x0042D7C8
+
+`0x7F1500AC` is called **0 times** in our run, which looked like the answer.
+It is not. Searching the CONSOLE's MEM1 for those addresses:
+
+    0x7F14E8E4  director handler   0 hits
+    0x7F1500AC  director creator   0 hits
+    0x7F151214  mpeg_movie_task    1 hit  (its task node, 0x811CDE60)
+    0x7F151E70  movie poller       1 hit  (0x8107F120)
+
+**The console never creates that object either.** So the subsystem is not
+the source, the chain is dead, and the code-1 event comes from somewhere
+else still. What IS now eliminated:
+
+- the script's own poster - all 65 events in a run carry code 0 (F265);
+- the whole `broadcast_event` path - never instantiated, on either side.
+
+The generic poster `0x7F0FD204` has 44 `bl` sites and only one executes.
+The remaining 42 are where to look next, and the cheap way to narrow them is
+`tools/rel-xref.py`, added here: it reports both `bl` callers AND pointers,
+taken from the REL's relocation table rather than by scanning for a
+constant - a REL stores its sections unrelocated, so an address that is only
+ever formed by a `lis`/`addi` pair is simply not in the file to find. That
+is how the director was reached at all, and searching for `bl` alone would
+have said "nothing calls this", which is true and useless.
+
+**And the tooling was leaking emulators.** `dolphin-watch.py` killed `proc`,
+which is the `flatpak run` launcher - the emulator is its grandchild under
+bwrap and survived. The kill was also the last statement of `main()`, so a
+`timeout` around the script, a Ctrl-C or any exception skipped it entirely.
+Four emulators were running at once before the user noticed, each holding
+24 MB of guest RAM and a share of the CPU - on a machine whose load I had
+already spent time misreading (F254).
+
+Fixed: the launcher starts in its own session, cleanup kills the process
+GROUP and the emulator pid directly, and it runs from `atexit` and from
+SIGTERM/SIGINT/SIGHUP handlers rather than from the end of a happy path.
+Verified both ways - normal exit and killed by `timeout` - each leaving zero
+emulators.

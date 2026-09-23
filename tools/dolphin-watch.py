@@ -22,12 +22,73 @@ read as the disc's ID, nothing else here is trustworthy.
 """
 import os
 import shlex
+import atexit
+import signal
 import subprocess
 import sys
 import time
 
 MEM1 = 0x80000000
 VMEM = 0x7E000000     # BAT-mapped window; see regions()
+
+
+# Everything we have started, so cleanup can run from a signal handler as
+# well as from the end of main(). `timeout` sends SIGTERM, which otherwise
+# kills this script and leaves the emulator behind - which is exactly how
+# four of them ended up running at once.
+_STARTED = []
+
+def _register(proc, pid):
+    _STARTED.append((proc, pid))
+
+def _cleanup_all(*_args):
+    while _STARTED:
+        proc, pid = _STARTED.pop()
+        shutdown(proc, pid)
+
+def _install_handlers():
+    atexit.register(_cleanup_all)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, lambda s, f: (_cleanup_all(), os._exit(128 + s)))
+        except (ValueError, OSError):
+            pass
+
+
+def shutdown(proc, pid):
+    """Stop the emulator we started, and everything it started.
+
+    TWO WAYS THIS LEAKED, AND BOTH HAPPENED. `proc` is `flatpak run`, and
+    the emulator is its GRANDCHILD under bwrap - so killing `proc` left the
+    emulator running. And the kill was the last statement of main(), so a
+    `timeout` around this script, a Ctrl-C or any exception skipped it
+    entirely. Four emulators were left running at once before this was
+    noticed, each holding 24 MB of guest RAM and a share of the CPU.
+
+    So: kill the process GROUP (the launcher and bwrap), kill the emulator
+    by the pid we already had to find in order to read its memory, and do it
+    from a `finally` and from a signal handler rather than from the end of a
+    happy path.
+    """
+    for target in (pid,):
+        if not target:
+            continue
+        try:
+            os.kill(target, signal.SIGKILL)
+        except OSError:
+            pass
+    if proc is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
 
 
 def emulator_pid(exclude=frozenset()):
@@ -171,19 +232,24 @@ def main():
     proc = subprocess.Popen(
         argv + extra + ['-e', iso],
         stdout=open(os.environ.get('DOLPHIN_LOG', '/dev/null'), 'wb'),
-        stderr=subprocess.STDOUT)
+        stderr=subprocess.STDOUT,
+        start_new_session=True)   # its own group, so killpg reaches bwrap
+    _install_handlers()
+    _register(proc, None)
 
     pid = base = None
     for _ in range(90):
         time.sleep(1)
         pid = pid or emulator_pid(already)
         if pid:
+            if _STARTED and _STARTED[-1][1] is None:
+                _STARTED[-1] = (proc, pid)
             base = ram_base(pid)
             if base:
                 break
     if not base:
         print("could not find Dolphin's RAM mapping")
-        proc.kill()
+        shutdown(proc, pid)
         return 1
 
     windows = regions(pid)
@@ -366,7 +432,7 @@ def main():
                 print('emulator went away')
                 break
             time.sleep(0.05)
-    proc.kill()
+    shutdown(proc, pid)
     return 0
 
 
