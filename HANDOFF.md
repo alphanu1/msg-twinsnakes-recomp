@@ -12560,3 +12560,28 @@ MANAGER. `pkill dolphin` takes the user's file manager with it. The emulator
 is `dolphin-emu-nogui`, and `pgrep -x` is the way (the kernel truncates comm
 to 15 characters, so `-x dolphin-emu-nogui` matches nothing - it compares
 against "dolphin-emu-nog").
+
+### Verified end state of this session
+
+One run, 1.8B steps, everything measured from the same run:
+
+    VIDEO   37 frames sampled     0 noisy    0 purple
+            EFB copies 4,431      texture copies 18,184     0 DROPPED
+            movie frames decoded 616  (was 5-7 in a whole run)
+
+    AUDIO   175.5s                gaps >= 1ms: 0
+            clipping 7,354 samples (0.07%)     was 1.24%
+            steps larger than full scale: 1    was 47
+            VERDICT: clean
+
+    RATES   retrace 8,890 / 175.51s = 50.6/s   (Dolphin: 50.4/s)
+            EFB copies              = 25.2/s   (50 Hz halved, as PAL does)
+
+    TESTS   18 pass, including tests/test_tev.c (the combiner against
+            BT.601) and the texture-cache regression in test_texture.c
+
+**Still not met: phase 2c's exit criterion.** It asks for music, codec and
+SFX matched against Dolphin within tolerance, and nothing here has been
+compared against Dolphin yet - only the field and frame rates have. The
+movie's own rate is also unconfirmed against the oracle, for the reason in
+F294: its plane addresses are ours.
