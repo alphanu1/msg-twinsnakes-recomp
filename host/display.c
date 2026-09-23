@@ -24,6 +24,7 @@
 #include "platform/sdl_video.h"
 
 #include <time.h>
+#include "../runtime/platform/sdl_audio.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -312,7 +313,39 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
          * occasional slow frame is absorbed instead of accumulating drift,
          * and a frame that overruns by more than one period resynchronises
          * rather than trying to catch up forever. */
-        if ((cmd & COPY_TO_XFB) && s_fps_cap) {
+        /* PACE ON THE AUDIO QUEUE WHEN THERE IS A DEVICE.
+         *
+         * Pacing frames on the wall clock and letting the audio fall where
+         * it may is what produced "Attack" as "At t tac ck". The device
+         * consumes at a real 32,000 samples a second; the guest produces
+         * audio on ITS clock, and the two agree only to about a per cent -
+         * 175.5 s of sound against 177.8 s of guest video. A per cent is
+         * enough: the queue drains, the device runs dry, and every dry
+         * moment is a micro-pause inside a word. The queue refilling and
+         * draining is the speeding up and slowing down that goes with it.
+         *
+         * So when a device is open, the frame limiter waits on the QUEUE
+         * instead of the clock: the guest runs ahead until there is a
+         * comfortable buffer, then blocks until the device has drunk some
+         * of it. The audio then never starves, and the video follows the
+         * audio - which is the right way round, because a dropped video
+         * frame is invisible and a dropped audio sample is not.
+         *
+         * The host has the headroom for this: it simulates about seven
+         * times real time, so the guest reaches the high-water mark quickly
+         * and spends the rest of its time waiting. The window is bounded so
+         * latency stays near a tenth of a second. */
+        if ((cmd & COPY_TO_XFB) && s_fps_cap && mgs_audio_queued_is_live()) {
+            unsigned hi = s_fps_cap ? (32000u / 8u) : 4000u;   /* ~125 ms */
+            unsigned spins = 0u;
+            while (mgs_audio_queued() > hi && spins < 2000u) {
+                struct timespec ts;
+                ts.tv_sec = 0; ts.tv_nsec = 1000000l;          /* 1 ms */
+                nanosleep(&ts, NULL);
+                ++spins;
+            }
+            s_next_frame_ns = 0ll;        /* the clock path resynchronises */
+        } else if ((cmd & COPY_TO_XFB) && s_fps_cap) {
             struct timespec now;
             long long period = 1000000000ll / (long long)s_fps_cap;
             clock_gettime(CLOCK_MONOTONIC, &now);

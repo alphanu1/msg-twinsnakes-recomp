@@ -30,6 +30,10 @@ void mgs_audio_push(const int16_t* stereo, unsigned frames);
  * bug this whole subsystem exists to expose. */
 unsigned mgs_audio_queued(void);
 
+/* Is there a real device to pace against? Headless runs and MGS_NO_AUDIO
+ * have none, and must keep pacing on the clock. */
+int      mgs_audio_queued_is_live(void);
+
 /* Totals for the exit report: pushed, and dropped for want of a device. */
 void mgs_audio_stats(uint64_t* pushed, uint64_t* dropped, uint64_t* underruns);
 
