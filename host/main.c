@@ -1432,6 +1432,11 @@ int main(int argc, char** argv)
                         /* OSLink(module, bss). The bss pointer is the base
                          * every engine global is an offset from, and nothing
                          * else reports it. */
+                        {   /* MGS_LINK_BSS=0 keeps the game's own .bss
+                         * pointer, to compare against. */
+                            const char* e = getenv("MGS_LINK_BSS");
+                            mgs_module_relink_bss(!(e && e[0] == '0'));
+                        }
                         mgs_module_watch(0x80020AD8u);
                         /* Zero the overlay's .bss the moment linking is
                          * done. Until then the relocation tables occupying

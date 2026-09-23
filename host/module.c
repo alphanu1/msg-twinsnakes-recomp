@@ -873,6 +873,7 @@ void mgs_module_set_progress(uint64_t (*fn)(unsigned which)) { s_progress = fn; 
  * the host can name a structure but cannot look at one.
  */
 static uint32_t s_watch_addr;
+static int      s_relink_bss = 1;
 static uint32_t s_watch_r3, s_watch_r4;
 static int      s_watch_seen;
 
@@ -920,6 +921,7 @@ void mgs_module_trace_calls4(uint32_t address,
 
 void mgs_module_watch(uint32_t address);
 void mgs_module_watch(uint32_t address) { s_watch_addr = address; s_watch_seen = 0; }
+void mgs_module_relink_bss(int on) { s_relink_bss = on; }
 
 /* Called once, the first time the guest executes in the overlay AFTER the
  * watched call returned - which is to say, when linking is finished and the
@@ -1347,10 +1349,56 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * first sighting is the one kept: OSLink is called once per module,
          * and a later call would be a different module's. */
         if (s_watch_addr && pc == s_watch_addr && !s_watch_seen) {
-            const uint32_t* g = mgs_module_gpr(cpu);
+            uint32_t* g = mgs_module_gpr(cpu);
             s_watch_r3 = g[3];
             s_watch_r4 = g[4];
             s_watch_seen = 1;
+
+            /* GIVE OSLink THE .bss THE RECOMPILED CODE ACTUALLY USES.
+             *
+             * `mgs_clear_overlay_bss` already records that the game and the
+             * recompiled overlay disagree about where .bss lives, and zeroes
+             * the recompiler's region so its globals start at zero. That
+             * fixes INITIALISATION and nothing else, and the rest of the
+             * disagreement is still live:
+             *
+             *   - a global the recompiled code addresses DIRECTLY lands in
+             *     VMEM, at module + 0x491BA0 and up;
+             *   - a global it reaches THROUGH A POINTER HELD IN .data lands
+             *     wherever OSLink relocated that pointer to, which is the
+             *     buffer the game allocated in MEM1.
+             *
+             * So the overlay has two .bss regions and the engine uses both.
+             * Measured, in one run: the record-ring pair is live at
+             * 0x7F4EF794 (VMEM) and all zeroes at 0x8059FD74 (MEM1), while
+             * the buffer holding "r_open" and "demo50a" is live in MEM1 at
+             * 0x80566590 and all zeroes at its VMEM counterpart 0x7F4B5FB0.
+             * Each global is consistent with itself; any global reached BOTH
+             * ways is split, and a write through one route is invisible to a
+             * read through the other.
+             *
+             * r4 is OSLink's `bss` argument, and everything downstream - the
+             * section table it fills in, every address `Relocate` writes into
+             * .data and .text - follows from it. Rewriting it here, before
+             * the guest executes a single instruction of OSLink, makes the
+             * image agree with the recompiled code everywhere instead of in
+             * half the cases.
+             *
+             * The region is the same one the post-link clear covers, so the
+             * ordering still works: linking reads the relocation tables that
+             * live there, writes only pointer VALUES into .data and .text,
+             * and the clear then zeroes the region once they are dead.
+             * Relocation never writes into .bss itself. */
+            if (s_relink_bss && g[3]) {
+                uint32_t want = g[3] + MGS_OVERLAY_BSS_OFFSET;
+                if (want != g[4]) {
+                    fprintf(stderr,
+                            "[link] overlay .bss 0x%08X -> 0x%08X "
+                            "(the recompiled overlay's own)\n", g[4], want);
+                    g[4] = want;
+                    s_watch_r4 = want;
+                }
+            }
         }
 
         fntrace_step(cpu, pc);

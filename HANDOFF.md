@@ -10816,3 +10816,62 @@ mnemonic would be believed.
 
 Its output is for humans: never compiled in, never committed, not quoted in
 notes. What goes in the record is what a function *does*.
+
+
+### F260 — the overlay had TWO .bss regions and the engine used both; they are now one
+
+`mgs_clear_overlay_bss` already recorded that "the recompiled overlay and the
+game disagree about where .bss is, and both are right about their own
+world", and fixed the half of it that bites at startup: it zeroes the
+recompiler's region so the globals do not begin life full of relocation
+data.
+
+**The other half was still live, and nothing said so.** Which region a global
+ends up in depends on how the code reaches it:
+
+- addressed **directly**, the recompiled code's own base → VMEM,
+  `module + 0x491BA0`;
+- reached **through a pointer held in `.data`**, whose value OSLink wrote →
+  the buffer the GAME allocated, MEM1 `0x8054A180`.
+
+Measured in one run, two globals, opposite ways round:
+
+    record-ring pair   VMEM 0x7F4EF794  LIVE     MEM1 0x8059FD74  all zeroes
+    "r_open"/"demo50a" VMEM 0x7F4B5FB0  zeroes   MEM1 0x80566590  LIVE
+
+Proved rather than inferred: the REL file holds `lis r4,0x0000` at that site
+and the live image holds `lis r4,0x805A`, so the MEM1 address is **OSLink's
+relocation**, written by `Relocate+0x80` (`0x800205BC`), not file content.
+The relocation table names the `.data` words that target `.bss`, and they
+read back as MEM1 addresses.
+
+**The fix.** `OSLink(module, bss)` is watched already; r4 is now rewritten to
+the recompiled overlay's own base before the guest executes any of it, so
+every address `Relocate` writes agrees with the code that will read it.
+Ordering still works: linking reads the relocation tables living in that
+span and writes only pointer *values*, never into `.bss` itself, and the
+existing post-link clear then zeroes the span.
+
+**It did not fix the movie, and it changed no behaviour at all.** Same 8
+reads, same `retrace ticks: 9482`, same `interrupts delivered: 95026`, same
+final pc; the only difference in the whole log is MEM1 megabyte 05's hash,
+which is the abandoned copy no longer being written. **So the split was
+LATENT** - each global was consistently reached one way, and none was
+reached both. It is recorded as removing a hazard that would have produced
+an impossible-looking bug later, not as a movie fix.
+
+**It broke something on the way in, which is worth keeping.** The clear
+computed its region as the maximum over sections "inside the image", relying
+on `.bss` pointing at the game's buffer somewhere else. Once OSLink was
+handed an in-image `.bss` that maximum landed at the END of `.bss`, and the
+clear zeroed `0x680F8` bytes PAST the globals while leaving the globals
+themselves full of relocation data - reintroducing the exact bug the
+function exists to prevent, silently, in a run whose summary statistics were
+otherwise identical. `.bss` is now excluded by size, and the function warns
+if the recompiler's base is not inside the span it is about to clear.
+
+**What not to re-propose:** passing a different `--rel-base` to make the two
+agree. They cannot be made to agree that way - the image must load at
+`0x7F008000` because the game hard-codes it, and no single base puts both
+the sections there and `.bss` at the address the game allocates. DolRecomp
+has no `--bss-base`.

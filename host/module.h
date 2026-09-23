@@ -92,7 +92,26 @@ void mgs_module_trace_calls4(uint32_t address,
                              void (*fn)(void* cpu, const uint32_t* gpr));
 void mgs_dump_heaps(void* cpu, uint32_t rel_bss);
 void mgs_dump_tasks(void* cpu, uint32_t rel_bss);
+/* WHERE THE RECOMPILED OVERLAY PUTS .bss, as an offset from the module base.
+ *
+ * This is DolRecomp's layout decision, not the disc's: it compiles the
+ * overlay at `--rel-base` and places .bss straight after .data. It cannot be
+ * derived from the REL header - the loaded sections end at 0x491B7C and no
+ * alignment of that gives 0x491BA0 - so it is pinned here, once, and read
+ * back from the running engine: the record-ring pair the engine calls
+ * `bss_55BF4` lands at 0x7F4EF794, and 0x7F4EF794 - 0x55BF4 - 0x7F008000 is
+ * this number.
+ *
+ * It is a constant in ONE place because two copies of it silently drifting
+ * is the whole bug below. */
+#define MGS_OVERLAY_BSS_OFFSET 0x491BA0u
+
 void mgs_clear_overlay_bss(void* cpu, uint32_t module);
+
+/* Hand OSLink the .bss the RECOMPILED code uses, instead of the one the game
+ * allocated. See the long comment in host/module.c. MGS_LINK_BSS=0 restores
+ * the old behaviour for comparison. */
+void mgs_module_relink_bss(int on);
 void mgs_display_service(struct MgsMmio* mmio, struct GuestMemory* mem, unsigned height);
 int  mgs_display_present(struct MgsMmio* mmio, const struct GuestMemory* mem);
 uint64_t mgs_display_frames(void);

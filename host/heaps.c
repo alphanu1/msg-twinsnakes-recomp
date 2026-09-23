@@ -142,13 +142,21 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module)
         uint32_t size = mgs_module_guest_read32(cpu, info + i * 8u + 4u);
         if (off && off < 0x1000000u) off += module;      /* not yet relocated */
 
-        /* ONLY SECTIONS INSIDE THE IMAGE. After linking, the .bss section's
-         * entry points at the memory the GAME allocated for it - somewhere
-         * else entirely - and taking the maximum over every section then
-         * picks that instead of the image's end. The region wanted here is
-         * the image's own tail, where the recompiled overlay put its bss on
-         * top of the relocation tables. */
+        /* ONLY SECTIONS INSIDE THE IMAGE, AND NEVER .bss ITSELF.
+         *
+         * This used to rely on the .bss entry pointing at the buffer the
+         * GAME allocated, somewhere else entirely, so that taking a maximum
+         * over every section could not pick it. That is no longer true:
+         * OSLink is now handed the recompiled overlay's own .bss, inside the
+         * image (see host/module.c), and the maximum then landed at the END
+         * of .bss and cleared 0x680F8 bytes past it - leaving the globals
+         * themselves full of relocation data, which is the exact bug this
+         * function exists to fix.
+         *
+         * So .bss is excluded explicitly, by size, rather than by an
+         * assumption about where it happens to live. */
         if (off < module || off >= module + 0x01000000u) continue;
+        if (size == bss) continue;                       /* the .bss entry */
         if (size && off + size > last) last = off + size;
     }
     if (!last) {
@@ -158,10 +166,20 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module)
 
     /* From the end of the loaded sections, far enough to cover .bss wherever
      * the recompiler aligned it. Everything in this span is relocation data
-     * the linker has already used. */
+     * the linker has already used.
+     *
+     * CHECKED, not assumed: the recompiler's base is pinned in one place and
+     * has to lie inside this span, or the globals would not be zeroed and
+     * nothing would say so. */
     {
         uint32_t from = last;
         uint32_t span = bss + 0x8000u;
+        uint32_t want = module + MGS_OVERLAY_BSS_OFFSET;
+        if (want < from || want + bss > from + span)
+            printf("overlay .bss: WARNING - the recompiled overlay's .bss at "
+                   "0x%08X+0x%X is not inside the span about to be cleared "
+                   "(0x%08X+0x%X); its globals will not start at zero\n",
+                   want, bss, from, span);
         uint32_t k;
         for (k = 0; k < span; k += 4u)
             mgs_module_guest_write32(cpu, from + k, 0u);
