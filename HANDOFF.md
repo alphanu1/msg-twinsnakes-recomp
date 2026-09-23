@@ -12074,3 +12074,72 @@ and the parameter block offsets we read (mixer at 0x12, `vol_env` at 0x64)
 match `AXStructs.h` exactly. Two voices really are at full into both
 channels, and hardware would sum them the same way. So the 200% is not a
 misread, and where the real machine gets its headroom is still unknown.
+
+### F284 — pacing frames on the audio queue made it worse, and the reason is the sampling rate
+
+The soundtrack running slightly slow against picture is real, so the obvious
+fix was to stop using the wall clock and let the audio device set the pace:
+block the XFB copy until the queue has drained to a target depth. The user's
+verdict was immediate - "thats worse. audio is lowing doesn an sth gaps are
+more oftern" - and it was reverted (`git revert`, c2a33ef).
+
+**Why it could not work.** Frames are copied 12 to 25 times a second, so a
+control loop that acts only at a copy samples the queue every 40 to 80 ms,
+while the queue itself turns over in 5 ms blocks. It overshoots in both
+directions: the guest is held back past the point the queue needed it, then
+released to run down a queue that has already emptied. A slow, coarse
+controller on a fast process oscillates, and every oscillation is audible.
+
+**What not to re-propose:** blocking the guest at XFB copies to track the
+audio device, in any form - deeper target, hysteresis, a PI term. The
+sampling rate is the fault and none of those change it. If guest time is to
+be slaved to audio time, the correction belongs where the audio is consumed,
+at AI DMA granularity, as a small continuous adjustment to the tick budget,
+not as a wait at an unrelated event 10 times rarer.
+
+This also answers the standing question of why the audio does not simply have
+its own clock. It already does: AI DMA delivers an interrupt every 5 ms, 200 a
+second, and that is what drives the mixer. It never stops and never drifts.
+What can diverge is how much GUEST time passes between those interrupts, and
+that is the quantity to correct - not the audio clock, which is already right.
+
+### F285 — the crackle was the clamp, and the port now has a way to JUDGE its audio
+
+The user asked whether the clipping could be causing the gaps. It was, and the
+mixed output says so. `MGS_AUDIO_WAV=<path>` writes what the mixer produces
+and `tools/check-audio.py` measures it:
+
+    before   clipping 139,044 samples (1.24%)   jumps >150% FS  47   (0.3/s)
+    after    clipping   7,354 samples (0.07%)   jumps >150% FS   1   (0.0/s)
+             gaps >= 1 ms: 0 in both
+
+A hard clamp *is* a discontinuity, and a step larger than full scale cannot
+come from a waveform - it is a splice. Those are now essentially gone.
+
+**Why a limiter and not the real thing.** AX does not clip: it runs a
+COMPRESSOR, which Dolphin implements as `AXUCode::RunCompressor` - a threshold
+test over the frame, then an attack or release ramp whose coefficients come
+from a table the GAME supplies through a DSP command. We do not parse the DSP
+command list, so neither the table nor the threshold is available. What is in
+the mixer now is a limiter with the same purpose: gain from the frame's own
+peak, fast down and slow up, interpolated across the frame so the correction
+never makes a step of its own. It is marked as a stand-in, and the
+clipped-sample counter stays so a return to clipping is visible.
+
+**A measurement error of mine, worth keeping.** The checker first flagged
+"discontinuities" at anything stepping more than a quarter of full scale
+between neighbouring samples, and reported 189 a second on audio whose real
+splices had already been fixed. At 32 kHz a full-scale 4 kHz tone steps about
+25,000 between samples - the metric was flagging ordinary treble, and would
+have sent me hunting a fault that was not there. It now reports jumps by size
+and judges only on the impossible ones.
+
+**What not to re-propose:** raising the mixer's headroom by scaling voices
+down at the source, or by ignoring `vol_env`. The 200% peaks are not a misread
+of the parameter blocks (F283's tail records that check against `AXStructs.h`);
+they are what the game asks for, and hardware handles them with dynamics, not
+with a quieter mix.
+
+**Also eliminated, by measurement:** the suggestion that the verbose output is
+stalling the guest. A run prints 782 lines over 175.5 s - **4.5 lines a
+second**. It is not a factor, and it is not worth silencing.
