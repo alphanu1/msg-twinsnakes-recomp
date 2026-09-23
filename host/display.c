@@ -410,6 +410,10 @@ static void run_copy(uint32_t cmd)
         if (cmd & COPY_TO_XFB) {
             static unsigned vn; static int was_noisy = -1;
             unsigned yy, cnt = 0u, rough = 0u, lit = 0u;
+            /* The channels separately. "Roughness 16, ok" said nothing about
+             * the picture being purple, and a frame number is what turns a
+             * colour fault into a first occurrence. */
+            unsigned long sum_r = 0, sum_g = 0, sum_b = 0;
             for (yy = 0; yy < copy_h && yy < MGS_EFB_HEIGHT; yy += 8u) {
                 unsigned xx;
                 for (xx = 1u; xx < copy_w && xx < MGS_EFB_WIDTH; xx += 4u) {
@@ -419,6 +423,9 @@ static void run_copy(uint32_t cmd)
                     int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF)) / 3;
                     rough += (unsigned)(va > vb ? va - vb : vb - va);
                     if (b & 0x00FFFFFFu) ++lit;
+                    sum_r += (b >> 16) & 0xFFu;
+                    sum_g += (b >> 8) & 0xFFu;
+                    sum_b += b & 0xFFu;
                     ++cnt;
                 }
             }
@@ -429,8 +436,11 @@ static void run_copy(uint32_t cmd)
                     const MgsGxRaster* rr = &s_raster;
                     unsigned i2 = (rr->drawlog_at - 1u) & 63u;
                     printf("[video] frame %5u  %ux%u  roughness %3u %-5s  "
-                           "lit %3u%%  xfb 0x%08X",
+                           "rgb %3u,%3u,%3u  lit %3u%%  xfb 0x%08X",
                            vn, copy_w, copy_h, r, noisy ? "NOISE" : "ok",
+                           cnt ? (unsigned)(sum_r / cnt) : 0u,
+                           cnt ? (unsigned)(sum_g / cnt) : 0u,
+                           cnt ? (unsigned)(sum_b / cnt) : 0u,
                            cnt ? lit * 100u / cnt : 0u,
                            mgs_mmio_xfb_address(mgs_host_mmio()));
                     if (rr->drawlog_w[i2])

@@ -209,39 +209,44 @@ void mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out)
                                   : ((ks >> 9) & 0x1Fu));
     }
 
-    /* THE FOUR SWAP TABLES ARE NOT APPLIED, AND THAT IS DELIBERATE.
+    /* THE FOUR SWAP TABLES, and libogc is the reference, not Dolphin's
+     * comment.
      *
-     * They live in KSEL too, two registers per table, and the two references
-     * available here DISAGREE about which register half holds which channel:
+     * Table n lives in two KSEL registers: `GX_SetTevSwapModeTable` writes
+     * r,g to the EVEN one (regA = swapid*2) and b,a to the ODD one.
+     * Dolphin's `TevKSel` comment says the opposite - "Odd ksel number: red;
+     * even: blue" - and implementing THAT emptied the green channel across
+     * the whole frame.
      *
-     *   libogc `GX_SetTevSwapModeTable` writes r,g to the EVEN register
-     *     (regA = swapid*2) and b,a to the ODD one;
-     *   Dolphin's `TevKSel` says the opposite - "Odd ksel number: red;
-     *     even: blue", "Odd: green; even: alpha".
+     * The game settles it. Its eight KSEL registers decode, under libogc's
+     * layout, to exactly the four tables `GXInit` installs:
      *
-     * Implementing either reading was tried. This game writes all eight KSEL
-     * registers with the swap bits ZERO, which under both readings means
-     * every channel reads RED - so applying them emptied the green channel
-     * across the whole frame (green non-zero in 6,197 of 229,376 pixels,
-     * against red and blue at 121 everywhere). The screen went magenta.
+     *     table 0  (r,g,b,a) = R,G,B,A      identity
+     *     table 1              R,R,R,A
+     *     table 2              G,G,G,A
+     *     table 3              B,B,B,A
      *
-     * Zero is also what GXInit's four tables CANNOT be: it sets table 0 to
-     * identity and 1-3 to R,R,R,A / G,G,G,A / B,B,B,A, none of which encodes
-     * as zero. So either those writes do not reach us, or the field layout
-     * is a third thing again. Until that is settled the identity is used,
-     * which is what the code did before and what every observed draw wants:
-     * the movie's planes are I8, whose texels have all four channels equal,
-     * so a swap cannot change what those stages read anyway.
+     * Under Dolphin's they decode to nothing meaningful. A reading that
+     * reproduces the SDK's own initialisation is the right one.
      *
-     * Counted so the gap is a number rather than a silence. */
+     * (A first attempt read these at 40M steps, before GXInit had finished,
+     * saw all-zero swap fields, and concluded the game did not use them.
+     * Sampling a register before the thing that writes it says nothing.) */
     out->swap_set = 0;
     for (i = 0; i < 8u; ++i)
-        if (bp->written[BP_TEV_KSEL + i] &&
-            (mgs_bp_get(bp, (uint8_t)(BP_TEV_KSEL + i)) & 0xFu) != 0u)
-            out->swap_set = 1;
+        if (bp->written[BP_TEV_KSEL + i]) out->swap_set = 1;
     for (i = 0; i < 4u; ++i) {
-        out->swap[i][0] = 0; out->swap[i][1] = 1;
-        out->swap[i][2] = 2; out->swap[i][3] = 3;
+        uint32_t ra = mgs_bp_get(bp, (uint8_t)(BP_TEV_KSEL + i * 2u));
+        uint32_t ba = mgs_bp_get(bp, (uint8_t)(BP_TEV_KSEL + i * 2u + 1u));
+        if (out->swap_set) {
+            out->swap[i][0] = (unsigned)(ra & 3u);           /* red   */
+            out->swap[i][1] = (unsigned)((ra >> 2) & 3u);    /* green */
+            out->swap[i][2] = (unsigned)(ba & 3u);           /* blue  */
+            out->swap[i][3] = (unsigned)((ba >> 2) & 3u);    /* alpha */
+        } else {
+            out->swap[i][0] = 0; out->swap[i][1] = 1;
+            out->swap[i][2] = 2; out->swap[i][3] = 3;
+        }
     }
 }
 

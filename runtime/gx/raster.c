@@ -1221,6 +1221,108 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                 }
             }
 
+            /* MGS_DUMP_COMPOSITE=<dir>: the three planes a composite draw
+             * binds, and the buffer it produces, FROM THE SAME MOMENT.
+             *
+             * Comparing the port's frame against a reference built from
+             * planes dumped at a different instant cannot settle a colour
+             * question - the two are different pictures. These are the
+             * actual inputs to one draw, so the expected colour can be
+             * computed from them and compared pixel for pixel.
+             *
+             * Rule 8: game data. Scratchpad only, never the tree. */
+            if (tex && stage_n >= 3u && tex->height == 320u &&
+                getenv("MGS_DUMP_COMPOSITE")) {
+                static unsigned done;
+                const char* dir = getenv("MGS_DUMP_COMPOSITE");
+                if (done < 2u) {
+                    unsigned k;
+                    char path[512];
+                    for (k = 0; k < 3u; ++k) {
+                        const MgsTexture* st = stage_tex[k];
+                        FILE* f;
+                        if (!st) continue;
+                        snprintf(path, sizeof path, "%s/plane%u_%u.pgm",
+                                 dir, done, k);
+                        f = fopen(path, "wb");
+                        if (!f) continue;
+                        fprintf(f, "P5\n%u %u\n255\n", st->width, st->height);
+                        {
+                            unsigned px;
+                            for (px = 0; px < st->width * st->height; ++px)
+                                fputc((int)(st->texels[px] & 0xFFu), f);
+                        }
+                        fclose(f);
+                        fprintf(stderr, "[composite] %u stage %u: %ux%u "
+                                "fmt 0x%X at 0x%08X -> %s\n", done, k,
+                                st->width, st->height, st->format, st->addr,
+                                path);
+                    }
+                    r->composite_dump = ++done;   /* write the buffer after */
+                }
+            }
+
+            /* MGS_TRACE_TEVCFG=<w>: the whole combiner configuration for
+             * the first draws that bind a texture that wide. The movie's
+             * composite is three stages over a luma plane and two chroma
+             * planes, and "the colour is wrong" cannot be narrowed without
+             * seeing what those stages were asked to compute. */
+            if (tex && getenv("MGS_TRACE_TEVCFG")) {
+                static unsigned shown;
+                unsigned want = (unsigned)strtoul(getenv("MGS_TRACE_TEVCFG"),
+                                                  NULL, 0);
+                if (tex->height == want && shown < 6u) {
+                    MgsTevCompiled tc;
+                    unsigned st;
+                    ++shown;
+                    mgs_tev_compile(&gx->bp, &tc);
+                    fprintf(stderr, "[tevcfg] texture %ux%u fmt 0x%X at "
+                            "0x%08X, %u stages, %u extra textures, "
+                            "blend %s (src %u dst %u%s)\n",
+                            tex->width, tex->height, tex->format, tex->addr,
+                            tc.stages, stage_n,
+                            (r->blend_enable && !r->blend_noop) ? "ON" : "off",
+                            r->blend_src, r->blend_dst,
+                            r->blend_sub ? ", subtract" : "");
+                    for (st = 0; st < tc.stages; ++st) {
+                        uint32_t ce = tc.ce[st], ae = tc.ae[st];
+                        fprintf(stderr,
+                            "[tevcfg]  stage %u colour: a=%u b=%u c=%u d=%u "
+                            "op=%u bias=%u scale=%u clamp=%u dest=%u "
+                            "konst=(%d,%d,%d)\n", st,
+                            (ce >> 12) & 0xFu, (ce >> 8) & 0xFu,
+                            (ce >> 4) & 0xFu, ce & 0xFu,
+                            (ce >> 18) & 1u, (ce >> 16) & 3u,
+                            (ce >> 20) & 3u, (ce >> 19) & 1u,
+                            (ce >> 22) & 3u,
+                            tc.kc[st][0], tc.kc[st][1], tc.kc[st][2]);
+                        fprintf(stderr, "[tevcfg]  stage %u swap: "
+                                "raster table %u, texture table %u\n", st,
+                                ae & 3u, (ae >> 2) & 3u);
+                        fprintf(stderr,
+                            "[tevcfg]  stage %u alpha : a=%u b=%u c=%u d=%u "
+                            "op=%u bias=%u scale=%u clamp=%u dest=%u "
+                            "konst=%d\n", st,
+                            (ae >> 13) & 7u, (ae >> 10) & 7u,
+                            (ae >> 7) & 7u, (ae >> 4) & 7u,
+                            (ae >> 18) & 1u, (ae >> 16) & 3u,
+                            (ae >> 20) & 3u, (ae >> 19) & 1u,
+                            (ae >> 22) & 3u, tc.ka[st]);
+                    }
+                    for (st = 0; st < 4u; ++st)
+                        fprintf(stderr, "[tevcfg]  register %u = "
+                                "(%d,%d,%d,a %d)   konst %u = "
+                                "(%d,%d,%d,a %d)\n", st, tc.reg[st][0],
+                                tc.reg[st][1], tc.reg[st][2], tc.reg[st][3],
+                                st, gx->bp.konst[st][0], gx->bp.konst[st][1],
+                                gx->bp.konst[st][2], gx->bp.konst[st][3]);
+                    for (st = 0; st < 8u; ++st)
+                        fprintf(stderr, "[tevcfg]  KSEL[%u] (0x%02X) = "
+                                "0x%06X\n", st, 0xF6u + st,
+                                mgs_bp_get(&gx->bp, (uint8_t)(0xF6u + st)));
+                }
+            }
+
             /* WHICH DRAW TURNS THE BUFFER NOISY?
              *
              * Every trace so far scores the buffer once a frame and the
@@ -1232,6 +1334,56 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * Only full-screen draws - the movie composite is one - because
              * scoring the buffer around every primitive costs more than the
              * frame. */
+            /* MGS_TRACE_DRAWCOLOUR: which draw changes the buffer's COLOUR
+             * BALANCE. The composite leaves a blue-ish picture in the right
+             * proportions, and what reaches the screen is purple, so
+             * something after it moves the channels apart. Same method as
+             * the noise trace - score the buffer either side of one
+             * full-screen draw - with the channels kept separate. */
+            if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWCOLOUR")) {
+                unsigned yy, xx3, cnt = 0u;
+                unsigned long sr = 0, sg = 0, sb = 0;
+                for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
+                    for (xx3 = 0; xx3 < MGS_EFB_WIDTH; xx3 += 8u) {
+                        uint32_t v = r->efb->pixels[yy * MGS_EFB_WIDTH + xx3];
+                        sr += (v >> 16) & 0xFFu;
+                        sg += (v >> 8) & 0xFFu;
+                        sb += v & 0xFFu;
+                        ++cnt;
+                    }
+                r->col_before[0] = (unsigned)(sr / (cnt ? cnt : 1u));
+                r->col_before[1] = (unsigned)(sg / (cnt ? cnt : 1u));
+                r->col_before[2] = (unsigned)(sb / (cnt ? cnt : 1u));
+                r->col_armed = 1;
+                {   /* What the quad is about to paint, and how strongly. */
+                    unsigned k2, m = 0; unsigned long tr = 0, tg = 0, tb = 0;
+                    MgsTevCompiled tc2; MgsTevInput ti2;
+                    unsigned long ta = 0;
+                    mgs_tev_compile(&gx->bp, &tc2);
+                    memset(&ti2, 0, sizeof ti2);
+                    for (k2 = 0; k2 < tex->width * tex->height; k2 += 997u) {
+                        uint32_t c2 = tex->texels[k2];
+                        tr += (c2 >> 16) & 0xFFu;
+                        tg += (c2 >> 8) & 0xFFu;
+                        tb += c2 & 0xFFu;
+                        ti2.texture = c2; ti2.has_texture = 1;
+                        ti2.raster = 0xFFFFFFFFu;
+                        ta += (mgs_tev_run_compiled(&tc2, &ti2) >> 24) & 0xFFu;
+                        ++m;
+                    }
+                    if (m) { r->col_tex[0] = (unsigned)(tr / m);
+                             r->col_tex[1] = (unsigned)(tg / m);
+                             r->col_tex[2] = (unsigned)(tb / m);
+                             r->col_tex_a  = (unsigned)(ta / m); }
+                }
+                r->noise_tex_addr = tex->addr;
+                r->noise_tex_fmt = (uint8_t)tex->format;
+                r->noise_tex_w = (uint16_t)tex->width;
+                r->noise_tex_h = (uint16_t)tex->height;
+            } else {
+                r->col_armed = 0;
+            }
+
             if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWNOISE")) {
                 static unsigned said;
                 unsigned yy, xx2, cnt = 0u, before = 0u;
@@ -1334,6 +1486,69 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         sp.dw1dx = -(sy[0] - sy[2]) * sp.inv_area;
         sp.x0 = x0; sp.x1 = x1;
         raster_dispatch(r, &sp, y0, y1);
+    }
+
+    if (r->composite_dump) {
+        const char* dir = getenv("MGS_DUMP_COMPOSITE");
+        char path[512];
+        FILE* f;
+        snprintf(path, sizeof path, "%s/efb_%u.ppm", dir ? dir : ".",
+                 r->composite_dump - 1u);
+        f = fopen(path, "wb");
+        if (f) {
+            unsigned yy, xx3;
+            fprintf(f, "P6\n%u %u\n255\n", 512u, 448u);
+            for (yy = 0; yy < 448u; ++yy)
+                for (xx3 = 0; xx3 < 512u; ++xx3) {
+                    uint32_t v = r->efb->pixels[yy * MGS_EFB_WIDTH + xx3];
+                    fputc((int)((v >> 16) & 0xFFu), f);
+                    fputc((int)((v >> 8) & 0xFFu), f);
+                    fputc((int)(v & 0xFFu), f);
+                }
+            fclose(f);
+            fprintf(stderr, "[composite] buffer after the draw -> %s\n", path);
+        }
+        r->composite_dump = 0;
+    }
+
+    if (r->col_armed) {
+        static unsigned said;
+        unsigned yy, xx3, cnt = 0u;
+        unsigned long sr = 0, sg = 0, sb = 0;
+        for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
+            for (xx3 = 0; xx3 < MGS_EFB_WIDTH; xx3 += 8u) {
+                uint32_t v = r->efb->pixels[yy * MGS_EFB_WIDTH + xx3];
+                sr += (v >> 16) & 0xFFu;
+                sg += (v >> 8) & 0xFFu;
+                sb += v & 0xFFu;
+                ++cnt;
+            }
+        if (cnt) {
+            unsigned a2v = (unsigned)(sr / cnt), b2 = (unsigned)(sg / cnt),
+                     c2 = (unsigned)(sb / cnt);
+            /* The balance, not the brightness: a draw that lifts everything
+             * is a fade, and a draw that lifts red and blue past green is
+             * what turns the picture purple. */
+            int was = (int)r->col_before[0] + (int)r->col_before[2]
+                    - 2 * (int)r->col_before[1];
+            int now = (int)a2v + (int)c2 - 2 * (int)b2;
+            if (now - was > 12 && said < 10u) {
+                ++said;
+                fprintf(stderr, "[drawcolour] (%u,%u,%u) -> (%u,%u,%u)  "
+                        "r+b-2g %d -> %d   texture %ux%u fmt 0x%X at "
+                        "0x%08X  %u stages, blend %s (src %u dst %u)"
+                        "   texture (%u,%u,%u) alpha %u\n",
+                        r->col_before[0], r->col_before[1], r->col_before[2],
+                        a2v, b2, c2, was, now,
+                        r->noise_tex_w, r->noise_tex_h, r->noise_tex_fmt,
+                        r->noise_tex_addr, stage_n,
+                        (r->blend_enable && !r->blend_noop) ? "ON" : "off",
+                        r->blend_src, r->blend_dst,
+                        r->col_tex[0], r->col_tex[1], r->col_tex[2],
+                        r->col_tex_a);
+            }
+        }
+        r->col_armed = 0;
     }
 
     /* ...and the buffer again, now that this draw has run. */

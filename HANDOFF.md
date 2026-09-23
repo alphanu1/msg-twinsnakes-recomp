@@ -12245,10 +12245,9 @@ sits in the stream. The drop counter stays in the exit report.
 them. The single slot is not the only problem - the ordering against draws
 is, and that cannot be recovered by making the queue deeper.
 
-### F288 — the TEV swap tables are NOT implemented, and the two references disagree
+### F288 — the TEV swap tables: libogc is right, Dolphin's comment is not
 
-Recorded as an open question rather than a guess, because guessing cost a
-whole colour channel.
+Recorded first as an open question, then settled by the game itself.
 
 KSEL also holds four channel-swap tables, two registers each. The references
 contradict each other on which half is which:
@@ -12263,17 +12262,92 @@ at 121 everywhere, a magenta screen - because this game writes all eight
 KSEL registers with the swap bits ZERO, which under either reading means
 every channel reads red. Removing it took green's mean from **2.4 to 28.2**.
 
-Zero is also what `GXInit` cannot produce: it sets table 0 to identity and
-1-3 to R,R,R,A / G,G,G,A / B,B,B,A, none of which encodes as zero. So either
-those writes never reach the parser, or the field layout is a third thing.
-Until that is settled the identity is used, and a counter records when a
-non-zero swap is programmed so the gap is a number.
+**The mistake was in the measurement, not the reading.** That sample was
+taken 40M steps in, and only the FIRST write to each register was printed -
+before `GXInit` had finished writing them. Read during the movie instead,
+the eight registers decode under LIBOGC's layout to exactly the four tables
+`GXInit` installs:
+
+    KSEL[0] (r=0,g=1)  KSEL[1] (b=2,a=3)   table 0 = R,G,B,A   identity
+    KSEL[2] (r=0,g=0)  KSEL[3] (b=0,a=3)   table 1 = R,R,R,A
+    KSEL[4] (r=1,g=1)  KSEL[5] (b=1,a=3)   table 2 = G,G,G,A
+    KSEL[6] (r=2,g=2)  KSEL[7] (b=2,a=3)   table 3 = B,B,B,A
+
+Under Dolphin's reading they decode to nothing meaningful. A reading that
+reproduces the SDK's own initialisation is the right one, so the tables are
+now implemented with libogc's layout: `GX_SetTevSwapModeTable` writes r,g to
+the EVEN register and b,a to the ODD one.
+
+**What not to re-propose:** reading a register before the code that writes
+it has run, and concluding from the value. That is what produced F288's
+first, wrong answer, and it cost a colour channel and two runs.
 
 This does not affect the movie either way: its planes are I8, whose texels
 have all four channels equal, so no swap can change what those stages read.
 
-**Still open after all this: the colour is wrong.** The noise is gone and
-the picture is legible, but the frame reads R 67.6 G 28.2 B 74.5 where it
-should be a dark blue-grey - too purple, green too low. That is the next
-thing, and it is now a colour problem on a correct picture rather than a
-correct picture under noise.
+### F289 — the combiner is now TESTED, against BT.601 rather than against itself
+
+`tests/test_tev.c`. Two combiner faults reached the screen and neither was
+visible as "the combiner is wrong", so the combiner now has a test, and the
+test uses the game's own configuration read out of a running frame with
+`MGS_TRACE_TEVCFG`:
+
+    pass 1, replacing:  R and B        pass 2, ADDING:  G
+      konst (148,0,148) x luma           konst (0,148,0) x luma
+      konst (0,0,255)   x chroma U       konst (0,50,0)  x U, SUBTRACT
+      konst (203,0,0)   x chroma V       konst (0,103,0) x V, SUBTRACT
+      offset (-111,0,-138)               offset (0,68,0)
+      both scaled x2 at the last stage
+
+Those numbers ARE BT.601, which is what makes this a test rather than a
+transcription of our own output:
+
+    2 x 203/255 = 1.592   against the standard's  1.596   (R from V)
+    2 x 255/255 = 2.000                           2.018   (B from U)
+    2 x  50/255 = 0.392                           0.391   (G from U)
+    2 x 103/255 = 0.808                           0.813   (G from V)
+    2 x -111    = -222                           -222.9   (R offset)
+    2 x -138    = -276                           -276.9   (B offset)
+    2 x   68    =  136                            135.5   (G offset)
+
+The test runs seven YUV triples - including the movie's real (42,133,123) -
+through the combiner and requires every channel within 8 of BT.601. It also
+pins the register layout (alpha is NOT red), the sign of a negative offset,
+the konst selectors including the splat forms and the invalid ones that read
+zero, and that a konst write does not destroy the colour register at the
+same address. **It passes.**
+
+So the combiner arithmetic is right, which is what makes the remaining
+colour fault findable: it is not in the maths.
+
+### F290 — the colour fault is NOT in the composite; it is a later draw (OPEN)
+
+The movie composite produces a correct picture. `MGS_DUMP_COMPOSITE` writes
+the three planes a composite draw binds AND the buffer it produced, from the
+same instant - which matters, because comparing the port's frame against a
+reference built from planes dumped at a different moment compares two
+different pictures and settles nothing.
+
+The right planes are bound (luma 512x320 at 0x8120A0C0, chroma 256x160 at
+0x812320C0 and 0x8123C0C0), and straight after the composite the buffer is
+blue-ish in the right proportions - R < G < B, as BT.601 says for this
+frame - though darker than expected.
+
+`MGS_TRACE_DRAWCOLOUR` then scores the buffer's channels either side of each
+full-screen draw, and names what ruins it:
+
+    (0,20,26) -> (45,19,58)   texture 512x448 fmt 0x6 at 0x800EA480
+                              blend ON (src 4 dst 5), texture (63,29,82),
+                              COMBINER ALPHA 254
+
+An OPAQUE full-screen quad of a buffer that is already purple. Red goes from
+0 to 45 while green stays at 19. Per frame, the picture is neutral at frame
+1200 - (51,48,56) - and by 1320 green has HALVED: (51,24,63).
+
+**Where purple enters is still open.** The quad paints a texture that is a
+copy of an earlier buffer, so it circulates; the first cause is somewhere
+between frames 1200 and 1320.
+
+**Eliminated so far:** the combiner arithmetic (F289); the blend factors
+(src/dst ONE is additive and is not treated as the no-op, which is only
+ONE/ZERO); the planes bound to the stages; and the composite's own output.

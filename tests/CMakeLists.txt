@@ -49,6 +49,10 @@ add_executable(test_gx test_gx.c)
 target_link_libraries(test_gx PRIVATE mgs_runtime)
 add_test(NAME gx COMMAND test_gx)
 
+add_executable(test_tev test_tev.c)
+target_link_libraries(test_tev PRIVATE mgs_runtime)
+add_test(NAME tev COMMAND test_tev)
+
 add_executable(test_texture test_texture.c)
 target_link_libraries(test_texture PRIVATE mgs_runtime)
 add_test(NAME texture COMMAND test_texture)
