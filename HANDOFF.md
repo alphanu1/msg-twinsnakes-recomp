@@ -11203,3 +11203,44 @@ through `0x7F0FD204`, 65 times in a run, every one of them from
 `0x7F011DF0` - inside `fn_1_9CB0`, a script opcode handler with no `bl`
 callers (F253). So the question is what the script is waiting for, roughly
 35 seconds of console time after the movie opens.
+
+
+### F266 — the port was running a PAL disc at NTSC field rate, and the movie's clock is slaved to that
+
+Two constants in the runtime were NTSC's, and only NTSC's:
+
+    VI_HALF_LINES_PER_FIELD 525        (PAL is 625)
+    675000 ticks per field             (40.5 MHz / 60; PAL is 810000 / 50)
+
+GGSPA4 is the European release. The guest programs `VI_DCR`'s format field
+for PAL and we advanced the screen 60 times a second where the console
+advances it 50.
+
+That is not cosmetic here. F245 established that this game's movie clock is
+**slaved to the sound system's playback position**, so a video clock running
+fast against audio is exactly the "plays the first frame or two of each
+chunk" symptom. Measured over 200M steps:
+
+    before   video 189.6s   audio 155.8s   ratio 1.220
+    after    video 158.1s   audio 155.6s   ratio 1.016
+
+and 810000/675000 is 1.20, which is the drift almost exactly.
+
+**Read, not assumed.** Both numbers now come from `VI_DCR`'s format field
+rather than a constant, and the auto-detected run reproduces the forced one -
+which is the check that the guest really is in PAL rather than that a
+constant happened to fit. NTSC stays the default until `VIConfigure` runs,
+because that is what the register reads from reset.
+
+**Honest about what it did NOT do.** The movie still stops after 8 reads of
+`movie.dat`, and measured non-silent audio frames went DOWN, from 681 to 285
+of ~31,100, with the peak from 87% to 14% of full scale. The mixer runs the
+same 31,126 frames either way - it is clocked by the audio DMA, not by VI -
+so what changed is which voices the game has active at a given step, not the
+mixer. This is filed as a correctness fix with a sync measurement behind it,
+not as "more sound".
+
+**One thing it exposed:** with the forced-period run the mixer reported
+`peak 54629 of 32767 (166.7% of full scale)`. The peak is tracked before the
+clamp, so that is real clipping in the mix, not a reporting artefact. Worth
+chasing separately.

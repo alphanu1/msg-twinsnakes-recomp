@@ -625,6 +625,23 @@ static void trace_recv(void* cpu, const uint32_t* gpr)
             gpr[3], mgs_module_lr(cpu));
 }
 
+/* MGS_TRACE_EVENT: every event the engine posts, with its KEY and CODE.
+ *
+ * The movie waits on an event whose `payload[0]` is 1 and never gets one
+ * (F265), so "which events are posted, and what code does each carry" is
+ * THE question - and nothing reported it. The poster takes a descriptor in
+ * r3 whose first word is the key and whose +0x08 points at the payload it
+ * copies, so both are one guest read away at the call. */
+static void trace_event_post(void* cpu, const uint32_t* gpr)
+{
+    uint32_t desc = gpr[3];
+    uint32_t key  = mgs_module_guest_read32(cpu, desc);
+    uint32_t src  = mgs_module_guest_read32(cpu, desc + 8u);
+    uint32_t code = src ? mgs_module_guest_read32(cpu, src) : 0xFFFFFFFFu;
+    fprintf(stderr, "[event] post key 0x%08X  code %d  from 0x%08X\n",
+            key, (int)code, gpr[1] ? mgs_module_guest_read32(cpu, gpr[1] + 0x14u) : 0u);
+}
+
 static void trace_send(void* cpu, const uint32_t* gpr)
 {
     /* The link register here is the poster's own return address, which is
@@ -1469,6 +1486,8 @@ int main(int argc, char** argv)
                             mgs_module_trace_calls(0x7F008174u, trace_mainloop);
                             mgs_module_trace_calls2(0x7F0FBA38u, trace_sched);
                         }
+                        if (getenv("MGS_TRACE_EVENT"))
+                            mgs_module_trace_calls3(0x7F0FD204u, trace_event_post);
                         if (getenv("MGS_TRACE_MSG")) {
                             mgs_module_trace_calls(0x80020C3Cu, trace_recv);
                             mgs_module_trace_calls2(0x80020B74u, trace_send);

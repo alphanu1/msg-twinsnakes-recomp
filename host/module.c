@@ -835,14 +835,28 @@ static unsigned mgs_tick_rate(void);
 
 static unsigned long long mgs_retrace_period(void)
 {
-    static unsigned long long period;
-    if (!period) {
+    static unsigned long long forced;
+    static int asked;
+    unsigned long long period;
+
+    if (!asked) {
         const char* e = getenv("MGS_RETRACE_STEPS");
-        period = (e && *e) ? strtoull(e, NULL, 10)
-                           : 675000ull / mgs_tick_rate();
-        if (!period) period = 1ull;
+        asked = 1;
+        forced = (e && *e) ? strtoull(e, NULL, 10) : 0ull;
     }
-    return period;
+    if (forced) return forced;
+
+    /* THE FIELD PERIOD COMES FROM THE GUEST'S OWN VI REGISTER, not a
+     * constant here. It used to be 675000 - NTSC's - and this is the PAL
+     * disc, so the screen advanced 60 times a second where the console
+     * advances it 50. See the long note in runtime/platform/mmio.c.
+     *
+     * Read rather than cached because the guest programs the format in
+     * VIConfigure, well after the first call here, and a value latched
+     * before that would be the reset default for the whole run. */
+    period = (unsigned long long)mgs_mmio_vi_field_ticks(mgs_host_mmio())
+           / mgs_tick_rate();
+    return period ? period : 1ull;
 }
 
 /* Ticks of guest time per interpreted step. See the note at its use. */

@@ -288,6 +288,11 @@ uint64_t mgs_mmio_aid_starts(const MgsMmio* m);
 uint64_t mgs_mmio_aid_blocks(const MgsMmio* m);
 int      mgs_mmio_aid_enabled(const MgsMmio* m);
 
+/* The video field period in timebase ticks, from the format the guest
+ * programmed: 810000 for PAL, 675000 for NTSC. */
+unsigned mgs_mmio_vi_field_ticks(const MgsMmio* m);
+int      mgs_mmio_vi_is_pal(const MgsMmio* m);
+
 /* Print the registers the guest read most, most-read first. */
 void     mgs_mmio_report_hot(const MgsMmio* m, unsigned top);
 

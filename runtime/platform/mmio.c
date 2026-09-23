@@ -25,10 +25,48 @@
 #define VI_DI0         0x30u   /* display interrupt 0 */
 
 /* The GameCube's video output is 525 half-lines per field at 60 Hz, and the
- * SDK waits for the counter to cross a threshold. The exact number matters
- * less than that it wraps at a sane rate; this is NTSC's.
- */
-#define VI_HALF_LINES_PER_FIELD 525u
+ * SDK waits for the counter to cross a threshold.
+ *
+ * WHICH VIDEO STANDARD IS NOT A FREE CHOICE, AND THIS DISC IS PAL. The
+ * constant below is NTSC's, and it was the only one here - as was the 60 Hz
+ * field period the run loop paced retraces on. GGSPA4 is the European
+ * release and the guest programs `VI_DCR` for PAL, so the screen was being
+ * advanced 60 times a second where the console advances it 50.
+ *
+ * It showed as a 20% drift against the audio - which is not cosmetic here,
+ * because this game's movie clock is slaved to the sound system's playback
+ * position (F245). Measured over 200M steps: video 189.6 s against audio
+ * 155.8 s, a ratio of 1.22, and 810000/675000 is 1.20. With the field
+ * period taken from the guest's own register the same run gives 158.0 s
+ * against 155.6 s, a ratio of 1.016 (F266).
+ *
+ * So both numbers are read from `VI_DCR`'s format field rather than
+ * assumed. The SDK writes it in `VIConfigure` before anything depends on
+ * it, and until then NTSC is the sane default - that is what the register
+ * reads as from reset. */
+#define VI_HALF_LINES_NTSC  525u
+#define VI_HALF_LINES_PAL   625u
+#define VI_FIELD_TICKS_NTSC 675000u   /* 40.5 MHz / 60 */
+#define VI_FIELD_TICKS_PAL  810000u   /* 40.5 MHz / 50 */
+#define VI_DCR_FMT_PAL      1u
+
+/* The format the guest has programmed: 0 NTSC, 1 PAL, 2 MPAL, 3 debug. */
+static unsigned vi_format(const MgsMmio* m)
+{
+    const uint8_t* p = &m->regs[(MMIO_VI - MMIO_BASE) + VI_DISP_CFG];
+    return (unsigned)(((p[0] << 8) | p[1]) >> 8) & 3u;
+}
+
+unsigned mgs_mmio_vi_field_ticks(const MgsMmio* m)
+{
+    return (m && vi_format(m) == VI_DCR_FMT_PAL) ? VI_FIELD_TICKS_PAL
+                                                 : VI_FIELD_TICKS_NTSC;
+}
+
+int mgs_mmio_vi_is_pal(const MgsMmio* m)
+{
+    return m && vi_format(m) == VI_DCR_FMT_PAL;
+}
 
 /* External interface, by offset from MMIO_EXI. Three channels, 0x14 apart.
  *
@@ -1164,8 +1202,8 @@ void mgs_mmio_tick_frame(MgsMmio* m)
      * rather than from reads is deliberate: a guest that polls the beam
      * position must see time pass at the rate the host is actually running,
      * not as fast as it can spin. */
-    m->vi_half_line = (uint16_t)((m->vi_half_line + VI_HALF_LINES_PER_FIELD)
-                                 % VI_HALF_LINES_PER_FIELD);
+    m->vi_half_line = (uint16_t)((m->vi_half_line + (vi_format(m) == VI_DCR_FMT_PAL ? VI_HALF_LINES_PAL : VI_HALF_LINES_NTSC))
+                                 % (vi_format(m) == VI_DCR_FMT_PAL ? VI_HALF_LINES_PAL : VI_HALF_LINES_NTSC));
     if (m->vi_half_line == 0u) m->vi_half_line = 1u;
 }
 
