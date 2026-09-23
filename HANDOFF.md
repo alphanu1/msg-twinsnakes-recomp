@@ -10916,3 +10916,64 @@ the movie's audio by a path that never enters states 3 and 4, then the
 message types that drive us there (5, 7, 11) are the divergence; if it is
 simply a different scene, the whole comparison is worth less than it looks.
 **Do not build on F257 without settling this.**
+
+
+### F262 — the same stream object, side by side: ours stops 12 blocks in
+
+F257's comparison is **valid**, and this settles the doubt recorded there.
+The stream object at `0x8022AA40` is a `main.dol` address, and in Dolphin it
+holds the same sub-object pointers ours does - `+0x28 = 0x8022AC20`,
+`+0x2C = 0x8022CC80`. Same object, same job, so the state-machine comparison
+stands.
+
+Every field matches except three, and they are the position:
+
+    field    Dolphin     ours
+    +0x30    0x00193C00  0x00003000     stream position
+    +0x38    0x00000400  0x00000400     block size (the same)
+    +0x3C    0x00194000  0x00003400     next position
+    +0x34    0x8021E500  0x8021D900     buffer
+
+**Ours advanced twelve blocks of 0x400 and stopped. Dolphin reached
+1,653,760 bytes and was still going.** Twelve matches the thirteen
+iterations of the thread body at `0x80055264` exactly.
+
+Per-queue throughput says the same thing in a second way - messages received,
+Dolphin over 150 s against our whole run:
+
+    0x8027B4D8  stream      1481   vs   70
+    0x802133A4              1350   vs   68
+    0x80213384              1477   vs   34
+    0x80213364               417   vs   30
+    0x8027B618                 0   vs   26
+
+The last row is its own finding: **the console never puts a single message
+in `0x8027B618`, and we put twenty-six there** - thirteen pairs of types 9
+and 13, all carrying the stream object, sent from the thread body at
+`0x80055264` (`0x80055444` and `0x80055670`). It is a real two-slot queue
+and it is being read (26 in, 26 out), so it is a live path the console
+simply does not take. Thirteen pairs, twelve blocks: the same thirteen
+iterations.
+
+And the ARAM side agrees: `8 transfers out` (ARAM -> main memory) in our
+whole run. That is the direction a stream reads its audio back through, and
+Dolphin does it continuously.
+
+**Where this leaves the movie.** The chain is now traced end to end and each
+link is measured:
+
+    ARAM DMA completion -> __ARQInterruptServiceRoutine -> type 11
+      -> sound stream state machine -> ring consumer -> mpeg_movie_task
+
+Every link works, briefly, and then the whole pipeline quiesces with all four
+sound threads drained and waiting. Three real faults were found and fixed on
+the way through (F256, F260, F261) and **none of them moved it**, which is
+itself worth knowing: the stall is not an interrupt being dropped, not the
+split .bss, and not the doubled ARAM completion.
+
+**The next question, and it is a narrow one:** what does the thread at
+`0x80055264` do on its fourteenth iteration that it did not do on the
+thirteenth - or rather, what does it wait for that never arrives? It is a
+thread body (one call, from `0x800237A4`), it advances the stream 0x400
+bytes per pass, and it is the only thing in the run that talks to
+`0x8027B618`. Read it with `tools/ppc-dis.py`; that is what it is for.
