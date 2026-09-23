@@ -229,6 +229,21 @@ static void wr32pair(void* cpu, uint32_t at, uint32_t v)
 }
 
 static uint64_t s_frames, s_advanced, s_looped, s_ended;
+
+/* HOW LATE IS THE REFILL, in AX frames.
+ *
+ * A starved voice stands still, and this game's movie clock IS the sound
+ * position (F245), so every frame a voice does not advance is a frame the
+ * movie's pacing does not advance either - which is what keeps the movie
+ * task falling out of its playing state (F272). "8.7% of voice-mixes
+ * starved" says it happens; it does not say whether the refill is one frame
+ * late or twenty, and those want different fixes.
+ *
+ * So: remember the frame a voice starved on, and when the game finally
+ * extends that voice's `end`, record the gap. */
+static uint64_t s_starve_at[AXPB_COUNT];
+static uint32_t s_seen_end[AXPB_COUNT];
+static uint64_t s_refill_n, s_refill_frames, s_refill_max;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
 static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
@@ -294,6 +309,19 @@ void mgs_ax_dsp_frame(void* cpu)
 
         ++s_mixed_voices;
         ++s_advanced;
+        /* The refill's latency, measured where both halves are visible: the
+         * mixer knows when it starved, and it re-reads `end` every frame. */
+        if (end != s_seen_end[i]) {
+            if (s_starve_at[i] && end > s_seen_end[i]) {
+                uint64_t late = s_frames - s_starve_at[i];
+                ++s_refill_n;
+                s_refill_frames += late;
+                if (late > s_refill_max) s_refill_max = late;
+                s_starve_at[i] = 0;
+            }
+            s_seen_end[i] = end;
+        }
+
         /* THE LAST LINK. 99% of samples read are non-zero and the output is
          * silent, which leaves only the gain between them. */
         if (!vol) ++s_vol_zero;
@@ -435,6 +463,7 @@ void mgs_ax_dsp_frame(void* cpu)
                         ++s_loop_empty;
                     curr = loop;
                     ++s_starved;
+                    if (!s_starve_at[i]) s_starve_at[i] = s_frames;
                     /* AND STOP FOR THIS FRAME.
                      *
                      * `loop` is `end + 1` here - the console shows the same
@@ -546,6 +575,11 @@ void mgs_ax_dsp_report(void)
            "%llu underruns\n",
            (unsigned long long)pushed, (unsigned long long)dropped,
            (unsigned long long)under);
+    printf("  refill latency: %llu refills after a starve, mean %.1f AX "
+           "frames, worst %llu\n",
+           (unsigned long long)s_refill_n,
+           s_refill_n ? (double)s_refill_frames / (double)s_refill_n : 0.0,
+           (unsigned long long)s_refill_max);
     printf("  clipping: %llu of %llu output samples clipped (%.2f%%)\n",
            (unsigned long long)s_clipped, (unsigned long long)s_out_samples,
            s_out_samples ? 100.0 * (double)s_clipped / (double)s_out_samples

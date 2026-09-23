@@ -119,10 +119,47 @@ static void movie_kick(void* cpu)
     mgs_module_guest_write32(cpu, ctx + 0x40u, 1u);
 }
 
+/* MGS_TRACE_MOVIECLOCK=1: the movie's pacing decision, as it is made.
+ *
+ * `mpeg_movie_task` decodes a record only while `timestamp <= clock + 6`,
+ * where the clock is `stream->0x08` and the timestamp sits eight bytes
+ * before the record's payload. Every other measurement so far has inferred
+ * how far behind the clock is; this reads both numbers from the same place
+ * the guest reads them and prints the difference. */
+static void movie_clock_trace(void* cpu)
+{
+    static int on = -1;
+    static unsigned n;
+    uint32_t node, stream, ring, rd, clock, tag, stamp;
+
+    if (on < 0) on = getenv("MGS_TRACE_MOVIECLOCK") != NULL;
+    if (!on || !s_engine_bss) return;
+    if ((++n % 200u) != 0u) return;
+
+    node = mgs_module_guest_read32(cpu, s_engine_bss + 0x55EA8u);
+    if (!node) return;
+    stream = mgs_module_guest_read32(cpu, node + 0x3Cu);
+    if (!stream) return;
+    ring = mgs_module_guest_read32(cpu, stream + 0x0Cu);
+    if (!ring) return;
+    rd = mgs_module_guest_read32(cpu, ring + 0x14u);
+    if (!rd) return;
+
+    clock = mgs_module_guest_read32(cpu, stream + 0x08u);
+    tag   = mgs_module_guest_read32(cpu, rd);
+    stamp = mgs_module_guest_read32(cpu, rd + 8u);
+    fprintf(stderr, "[mclk] state %u  clock %11d  head tag 0x%02X stamp %11d"
+                    "  due %s\n",
+            mgs_module_guest_read32(cpu, node + 0x44u),
+            (int)clock, tag & 0xFFu, (int)stamp,
+            (int)stamp <= (int)clock + 6 ? "YES" : "no");
+}
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     task_mask_watch(cpu);
     movie_kick(cpu);
+    movie_clock_trace(cpu);
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
     /* The card's mount completion rides the same pump: both are completions
      * the guest is waiting for, and both may only be delivered from here. */

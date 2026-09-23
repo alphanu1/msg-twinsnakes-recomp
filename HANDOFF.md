@@ -11594,3 +11594,76 @@ between here and a movie that plays by itself.
 over 6,135 transitions a streaming voice's `currAddr` goes backwards 41
 times and 40 of those are the ring wrap (~32,548 on a 0x8000 ring). The
 regression seen in the CLOCK is not a regression in the position.
+
+
+### F273 — a heap object that is FREED AND REUSED makes a watch lie, and it cost several conclusions today
+
+`MGS_WATCH` on the movie task node `0x811CDDC0` reported 180 "state changes"
+with the kick against 4 without, and that number was used to argue the movie
+was cycling properly. Looking at the values kills it:
+
+    +0x044: 0x00000000 -> 0xFFFFFFFF   lr 0x7F11E980
+    +0x044: 0x0F000000 -> 0x00000000   lr 0x7F01FA34
+    +0x044: 0xFFFFFFFF -> 0xBF5688FC   lr 0x7F11F2B0
+
+Float bit patterns and pixel bytes. **The node had been freed and the
+allocation reused**, so the watch was reporting writes to whatever now lives
+there. A state field only ever holds 0..4.
+
+This is F255 again - an address that was right when it was written down -
+but one level further in: not the load address moving between runs, the
+OBJECT dying inside one run. A long run makes it far more likely, and every
+measurement in this session that watched a heap address over hundreds of
+millions of steps is suspect for the same reason.
+
+**The rule that falls out:** when watching a heap object, watch a field
+whose legal values are known and CHECK THEM. A state machine field that
+reads 0xBF5688FC is not a state change, it is a different object.
+
+**What survives.** The luma plane comparison does, because it compares
+CONTENT and the content is self-evidently a picture or not:
+
+    no kick    23232323 25252525 25252525 23232323
+    with kick  0004001E 1E1E0026 00150006 0012005C
+
+and so does the record-due trace, which reports the guest's own return
+values (1,262 records against 32 refusals with the kick).
+
+**What does not.** The "180 vs 4 state changes" figure, and any argument
+built on it - including the reasoning about how long the task stays in
+state 2 per wake, which needs re-measuring against a field that is checked
+for plausibility.
+
+### F274 — the refill is only 2.2 frames late, and two fixes for it failed
+
+Instrumented in the mixer, which is the one place that sees both halves:
+remember the frame a voice starved on, and record the gap when the game
+extends that voice's `end`.
+
+    1,470 refills after a starve, mean 2.2 AX frames, worst 8
+
+So the four-thread sound pipeline is **not** slow. The voice runs dry
+because the game only refills once it has seen consumption, and it keeps
+about one block of headroom where the console keeps twelve.
+
+**Two attempts, both measured, both reverted:**
+
+1. *Play on into the block the game has filled but not yet declared.* The
+   probe says the data is there 99% of the time (3,176 against 34). Result:
+   starves 3,210 -> 3,351, luma changes unchanged, non-silent frames 14,537
+   -> 14,160. Less faithful than stopping, since hardware does not read past
+   `endAddr`. Reverted.
+2. *Keep the position advancing through the gap*, on the theory that `curr`
+   is the movie's clock and freezing it freezes the clock. Result: starves
+   3,210 -> 3,376, luma changes 16 -> 16, non-silent 14,537 -> 13,664.
+   **So the game's reported sound position is not simply our `currAddr`** -
+   that assumption was wrong and is worth not repeating. Reverted.
+
+**And the clock is not behind anyway.** `MGS_TRACE_MOVIECLOCK=1` reads the
+clock and the head record's timestamp from the same place the guest does:
+
+    state 1  clock 29378  stamp 11630  due YES
+
+The clock runs well AHEAD of the timestamps, so records are due and the
+record test is not what parks the movie. That removes the last few messages'
+working theory: it is the wake-up, and only the wake-up.
