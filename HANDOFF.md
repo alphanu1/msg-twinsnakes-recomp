@@ -10775,7 +10775,10 @@ reads.
 
 - *The mixer or ADPCM is starving the movie.* `MGS_AX_MODEL=0` produces a
   byte-identical run - same 8 reads, same 16 distinct pictures, same frozen
-  end. The mixer is not involved.
+  end. **WITHDRAWN (F263): that test was vacuous**, because the default had
+  the AX task unlinked and so both sides of the comparison had no mixer at
+  all. The movie does still stall at 8 reads with the mixer running, so the
+  conclusion may hold - but not on this evidence.
 - *Task mask 0x8 is what the movie never recovers from (F200).* The mask
   goes to 8 **after** the movie has already parked; it is a consequence.
   Every one of the movie's state transitions happens while the mask is 0.
@@ -10994,3 +10997,65 @@ re-derived:
 So the thread is alive and the loop is entered; what stops is the decision
 inside it to issue another transfer. Read `0x80055188` onwards with
 `tools/ppc-dis.py`; that is what it is for.
+
+
+### F263 — there was no sound because the AX task was being UNLINKED, and every sound measurement against the default measured a mixer that was never called
+
+Asked "is sound working", the answer turned out to be that the mixer was not
+running at all, and had not been all session.
+
+`mgs_ax_dsp_report` begins `if (!s_frames) return;`, so a run with no mixed
+frames prints nothing - and **no run this session printed an `AX mixer:`
+line**, including the ones taken before any of tonight's changes. Not a
+regression; it had been silent the whole time.
+
+The cause is the DSP task mail. The SDK treats them very differently
+(dolsdk2004 `dsp_task.c`):
+
+    0xDCD10000  init    -> init_cb
+    0xDCD10001  resume  -> res_cb
+    0xDCD10003  done    -> done_cb, then __DSP_remove_task() UNLINKS the task
+
+We posted `done`. That unlinks AX's task, so `__AXOutDspReady` is never set,
+`__AXOutAiCallback` never runs a mixing frame, and the mixer is never
+called. `MGS_DSP_RESUME=1` selected the correct mail and was **not the
+default**, for a reason recorded in the code: "switching it lets AX actually
+run and the boot then reaches audio paths this runtime does not model - one
+run ended in an unhandled exception at 2.5M steps".
+
+**That reason is gone, and it was re-measured rather than assumed.** Those
+paths are now modelled - the voice mixer, the SDL device, the ARAM store the
+voices read from, the audio-DMA clock that paces them. With the resume mail:
+
+    200M steps  clean, pc 0x80061584
+    400M steps  clean, pc 0x8005BF18
+
+against a recorded failure at 2.5M. So it is now the default, and
+`MGS_DSP_RESUME=0` restores the old mail for comparison.
+
+**What that buys, measured:**
+
+    AX mixer: 31,160 frames (155.8s of sound), 43,674 voice-mixes, 1,683 loops
+    ADPCM samples decoded: 202,240; read outside ARAM: 0
+    samples contributed: PCM 6,675,543 of 6,840,960 non-zero
+    output: peak 28,650 of 32,767 (87.4% of full scale)
+
+**And what it does not buy: 681 of 31,160 frames are not silent - 2.2%.**
+The reason is the one F250 and F253 already found and is unchanged here:
+**42,294 of 43,674 voice-mixes have envelope volume 0**. The samples are
+there and at full amplitude; the game is holding the gain down, because the
+movie it would be scoring is not playing. The 681 non-silent frames are the
+same 681 at 200M and at 400M steps - all the sound happens early and then
+stops, which is the fade-out of F253 seen from the mixer's side.
+
+**This also invalidates a test from tonight.** F257 recorded that
+`MGS_AX_MODEL=0` produced a byte-identical run and concluded "the mixer is
+not involved" in the movie stall. That comparison was **vacuous**: the
+default already had AX disabled, so both sides of it had no mixer. The
+conclusion may still be true - the movie stalls at 8 reads with the resume
+mail as well - but it is not supported by that test, and the claim in F257 is
+withdrawn.
+
+**What not to re-propose:** measuring whether there is sound without first
+checking that `AX mixer:` appears in the log. A missing line there is not a
+quiet mixer, it is no mixer.

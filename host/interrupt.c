@@ -415,19 +415,39 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
          * That is the far end of the movie stall (F218).
          *
          * So `done` is wrong and `resume` is what a persistent AX task
-         * expects. It is NOT the default yet, because switching it lets AX
-         * actually run and the boot then reaches audio paths this runtime
-         * does not model - one run ended in an unhandled exception at 2.5M
-         * steps. Fixing this properly means bringing the audio path up with
-         * it, not flipping a constant.
+         * expects.
          *
-         * MGS_DSP_RESUME=1 selects the correct mail, so the rest of that
-         * work can be done against it without a rebuild.
+         * IT IS NOW THE DEFAULT, AND THE REASON IT WAS NOT IS GONE (F263).
+         * The note here used to read "switching it lets AX actually run and
+         * the boot then reaches audio paths this runtime does not model -
+         * one run ended in an unhandled exception at 2.5M steps", and that
+         * was the right call at the time. Those paths are now modelled: the
+         * voice mixer, the SDL device, the ARAM store the voices read from
+         * and the audio-DMA clock that paces them all exist.
+         *
+         * Re-measured before changing it, rather than assumed: with the
+         * resume mail, runs reach the 200M and 400M step limits cleanly
+         * (pc 0x80061584 and 0x8005BF18), where the recorded failure was at
+         * 2.5M. The mixer then runs 31,160 frames in 200M steps and reaches
+         * 87.4% of full scale.
+         *
+         * WITH THE `done` MAIL THERE IS NO SOUND AT ALL, and that is worth
+         * stating plainly because it is not obvious from the outside: `done`
+         * runs the task's done_cb and `__DSP_remove_task` UNLINKS the task,
+         * so `__AXOutDspReady` is never set, `__AXOutAiCallback` never runs
+         * a mixing frame, and the mixer reports zero frames. Every "is there
+         * sound yet" measurement taken against the default was measuring a
+         * mixer that was never called.
+         *
+         * MGS_DSP_RESUME=0 restores the old mail, for comparison.
          */
         static int resume_mail = -1;
         static uint32_t seen_sends;
         uint32_t mail;
-        if (resume_mail < 0) resume_mail = getenv("MGS_DSP_RESUME") != NULL;
+        if (resume_mail < 0) {
+            const char* e = getenv("MGS_DSP_RESUME");
+            resume_mail = !(e && e[0] == '0');
+        }
         mail = phase == 0 ? 0xDCD10000u
              : (resume_mail ? 0xDCD10001u : 0xDCD10003u);
 
