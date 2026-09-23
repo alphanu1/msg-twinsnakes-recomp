@@ -11721,3 +11721,42 @@ plays for half a million ticks without it), the clock (it runs AHEAD of the
 record timestamps - `clock 29378, stamp 11630, due YES` - while the task is
 parked), and the mixer's overrun handling (two variants tried, both measured,
 both reverted, F274).
+
+
+### F276 — the engine renders at 12 fps at the current tick rate, 25 at half it; and the movie's behaviour depends on which
+
+Measured over the SAME 178 s of guest video each time (the step budget is
+scaled so the guest clock covers the same span):
+
+    MGS_TICK_RATE=8   XFB copies 2190 = 12.3 fps   movie.dat 65 reads, 1.8 MB
+    MGS_TICK_RATE=6   XFB copies 4325 = 24.3 fps   movie.dat  8 reads, 256 KB
+    MGS_TICK_RATE=4   XFB copies 4507 = 25.3 fps   movie.dat  8 reads, 256 KB
+
+A PAL game targets 25 fps, so **4 and 6 render at the right rate and 8 does
+not**. Audio stays in sync throughout (176 s against 178 s).
+
+Why lowering it helps is not subtle: the tick rate fixes how many
+interpreted steps the guest gets per second of its own clock, and at 8 the
+engine cannot finish its frame inside that budget during the movie - between
+200M and 900M steps it renders one frame per 6.3 fields, about 8 fps.
+Over-provisioning is safe in a way under-provisioning is not: a game that
+finishes its frame early waits for retrace, which is what `VIWaitForRetrace`
+is for. Being short of steps has no such safety valve.
+
+**But it is not a free change.** At 8 the movie streams 65 chunks; at 6 and 4
+it stops at 8 chunks and parks, with the task mask gating it:
+
+    tick 4:  0 -> 2 after 242 ticks,  2 -> 1 after 941,  then mask -> 0x8 and nothing
+
+At 8 the movie's second wake arrives about 59 s into guest time; at 4 it has
+not arrived after 356 s. So **the port's outcome depends on the tick rate in
+a way it should not**, and that dependence is the finding - not a reason to
+pick one number.
+
+**So this is recorded, not applied.** Changing the default to 4 would trade a
+reported symptom ("the game is slow") for a worse one ("the movie never
+plays"), and the honest position is that neither rate is right: the engine
+should render at 25 fps AND the movie should stream, and at present no
+single value does both. What that points at is something still paced by step
+count rather than by guest time - the same class of fault as F268, one level
+down.
