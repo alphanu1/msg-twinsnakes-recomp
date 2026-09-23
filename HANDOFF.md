@@ -10875,3 +10875,44 @@ agree. They cannot be made to agree that way - the image must load at
 `0x7F008000` because the game hard-codes it, and no single base puts both
 the sections there and `.bss` at the address the game allocates. DolRecomp
 has no `--bss-base`.
+
+
+### F261 — the ARAM completion interrupt was raised on the wrong half of the length register
+
+The streamed-sound pipeline is clocked by ARAM DMA completions:
+`__ARQInterruptServiceRoutine` is the origin of the type-11 messages that
+advance it, so the whole chain runs at the rate those completions arrive.
+
+Our port raised that completion on the write to the length register's HIGH
+half, while the copy itself ran on the LOW half. Dolphin settles which is
+right (`Source/Core/Core/HW/DSP.cpp` @ `ee018d0`): `AR_DMA_CNT_H` is a plain
+register write, `AR_DMA_CNT_L` is the one whose handler calls
+`Do_ARAM_DMA()`, and the comment above it says so outright.
+
+So every completion was announced **before** the copy it belonged to, and a
+high-half write not followed by a transfer announced a completion that never
+happened at all. The count is the proof, and it is exact:
+
+    before   139 in + 8 out = 147 transfers, 294 interrupts delivered
+    after    139 in + 8 out = 147 transfers, 147 interrupts delivered
+
+Two per transfer, to one per transfer. The SDK's handler calls back the ARAM
+queue once per completion, so the queue was being drained twice as fast as it
+was being filled.
+
+Other numbers from the same pair of runs: ARAM interrupts refused 630 -> 166,
+mails reaching the DSP 0 -> 1, DSP task mails 22,248 -> 22,280.
+
+**It did not fix the movie.** Still 8 reads of `movie.dat`, still parked in
+WAITING, and the sound state byte still runs `4 -> 1 -> 2 -> 3 -> 4` where
+the console oscillates `1 <-> 2`. The final pc moved, so the run is not the
+same run, but the stall is unchanged. Recorded as a hardware-correctness fix
+(rule 12, order of authority 1) with the count as its evidence.
+
+**Still open, and the next thing to settle:** whether Dolphin's `1 <-> 2`
+really is the same object doing the same job. Both runs watch the same
+`main.dol` address, but a static slot can be reused - if the console reaches
+the movie's audio by a path that never enters states 3 and 4, then the
+message types that drive us there (5, 7, 11) are the divergence; if it is
+simply a different scene, the whole comparison is worth less than it looks.
+**Do not build on F257 without settling this.**

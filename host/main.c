@@ -639,8 +639,17 @@ static void trace_send(void* cpu, const uint32_t* gpr)
      * 0x10 bytes with the return address at +0x14, so the grandparent's is
      * at +0x24. */
     uint32_t origin = mgs_module_guest_read32(cpu, gpr[1] + 0x24u);
-    fprintf(stderr, "[msg] send 0x%08X msg=0x%08X caller 0x%08X origin 0x%08X\n",
-            gpr[3], gpr[4], caller, origin);
+    /* AND THE TYPE, because that is what the receiver switches on.
+     *
+     * The sound stream thread dispatches every message through a jump table
+     * on the word at +0x08, and which types arrive - and in what order - is
+     * the difference between our run and the console's (F257). A trace that
+     * says a message was sent but not WHICH message cannot answer that, and
+     * the queue and pointer alone were costing a re-run per question. */
+    uint32_t type = gpr[4] ? mgs_module_guest_read32(cpu, gpr[4] + 8u) : 0u;
+    fprintf(stderr,
+            "[msg] send 0x%08X msg=0x%08X type %-3u caller 0x%08X origin 0x%08X\n",
+            gpr[3], gpr[4], type, caller, origin);
 }
 
 /* Did the engine's main loop ever start, and does it still run?

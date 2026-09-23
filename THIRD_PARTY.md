@@ -63,6 +63,7 @@ files copied — but the *knowledge* is Dolphin's and is recorded as such.
 | What | Where here | Dolphin source |
 |---|---|---|
 | The TLUT load address is 25 bits; the GameCube ignores the rest | `runtime/gx/fifo.c`, `BP_LOAD_TLUT0` | `Source/Core/VideoCommon/BPStructs.cpp`, `BPMEM_LOADTLUT1`: `addr = addr & 0x01FFFFFF` with the comment "The GameCube ignores the upper bits of this address. Some games (WW, MKDD) set them." Twin Snakes is another such game — it set them, and every CI-format texture in the movie was refused until this matched the hardware (HANDOFF F241). |
+| Only the LOW half of the ARAM DMA length starts a transfer | `runtime/platform/mmio.c`, the `AR_DMA_CNT+2` block | `Source/Core/Core/HW/DSP.cpp`: `AR_DMA_CNT_H` is registered as a plain `MMIO::Utils::HighPart` write with the comment "AR_DMA_CNT_L triggers DMA", and only the `AR_DMA_CNT_L` handler calls `Do_ARAM_DMA()`. Ours ran the copy on the low half already but raised the COMPLETION interrupt on the high half, so every completion was announced before its copy and a high-half write with no transfer announced one that never happened: 147 transfers against 294 delivered interrupts (HANDOFF F261). |
 
 ### The memory card's wire protocol
 

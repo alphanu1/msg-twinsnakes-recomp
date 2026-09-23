@@ -926,6 +926,32 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
             v &= ~0x200u;
             csr[0] = (uint8_t)(v >> 8); csr[1] = (uint8_t)v;
         }
+        /* AND THE COMPLETION, HERE, WHERE THE COPY HAPPENED.
+         *
+         * ARINT SAYS "FINISHED"; 0x400 SAYS "STILL RUNNING". Setting both is
+         * a contradiction, and the audio system's start-up is where that
+         * showed: it programmes a transfer and then spins until 0x400 goes
+         * CLEAR. Ours finishes inside the store that starts it, so that bit
+         * should never be seen set at all.
+         *
+         * Setting the status bit only says which source it was; the queued
+         * interrupt is what makes the operating system's handler run, and
+         * without it the queue that owns the transfer never calls back and
+         * whoever is waiting on it waits for ever. It is raised from the run
+         * loop, because that is where the guest can be interrupted. */
+        {
+            uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
+            if (cr) {
+                uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
+                v |= (uint16_t)DSP_CR_ARINT;
+                v &= (uint16_t)~DSP_CR_ARDMA_DONE;
+                cr[0] = (uint8_t)(v >> 8);
+                cr[1] = (uint8_t)v;
+                m->dsp_status |= (uint16_t)DSP_CR_ARINT;
+                dsp_refresh_line(m);
+                ++m->aram_irq_pending;
+            }
+        }
     }
 
     /* Acknowledging an interrupt AT THE DEVICE is what drops its line into
@@ -1046,36 +1072,24 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
             }
         }
 
-        /* Starting an ARAM DMA completes it: raise the completion flag the
-         * guest is about to poll for. Writing the count register is what
-         * starts a transfer on hardware. */
-        if (addr == MMIO_DSP + AR_DMA_CNT) {
-            uint8_t* cr = at(m, MMIO_DSP + DSP_CONTROL);
-            if (cr) {
-                uint16_t v = (uint16_t)((cr[0] << 8) | cr[1]);
-                /* ARINT SAYS "FINISHED"; 0x400 SAYS "STILL RUNNING".
-                 *
-                 * Setting both was a contradiction, and the audio system's
-                 * start-up is where it showed: it programmes a transfer and
-                 * then spins until 0x400 goes CLEAR. Ours finishes inside the
-                 * store that starts it, so that bit should never be seen set
-                 * at all, and leaving it raised is an endless loop. */
-                v |= (uint16_t)DSP_CR_ARINT;
-                v &= (uint16_t)~DSP_CR_ARDMA_DONE;
-                cr[0] = (uint8_t)(v >> 8);
-                cr[1] = (uint8_t)v;
-                m->dsp_status |= (uint16_t)DSP_CR_ARINT;
-                dsp_refresh_line(m);
-                /* A completed transfer also RAISES A LINE. Setting the
-                 * status bit only says which source it was; without the
-                 * interrupt the operating system's handler never runs, so
-                 * the queue that owns the transfer never calls back and
-                 * whoever is waiting on it waits for ever. Raised from the
-                 * run loop, because that is where the guest can be
-                 * interrupted. */
-                ++m->aram_irq_pending;
-            }
-        }
+        /* THE HIGH HALF OF THE LENGTH IS A PLAIN REGISTER. It carries the
+         * top bits and the direction bit, and writing it starts nothing.
+         *
+         * This used to raise the completion - the status bit, the line and
+         * the queued interrupt - which was wrong twice over. The transfer
+         * runs on the write to the LOW half (see the AR_DMA_CNT+2 block
+         * above, and Dolphin's DSP.cpp, where AR_DMA_CNT_L is the only one
+         * of the pair that calls Do_ARAM_DMA), so every completion was
+         * announced BEFORE the copy it belonged to, and a high-half write
+         * not followed by a transfer announced a completion that never
+         * happened at all.
+         *
+         * Measured, one run: 147 transfers actually performed against 294
+         * completion interrupts delivered - exactly two per transfer. The
+         * SDK's handler calls back the ARAM queue once per completion, so
+         * the queue was being advanced twice as fast as it was being fed,
+         * and the streamed-sound pipeline it drives deadlocked once the
+         * mismatch caught up with it (F261). */
 
         /* Serial transfer start: the same shape again. */
         /* VI GEOMETRY CHANGES. The external framebuffer is scanned out with
