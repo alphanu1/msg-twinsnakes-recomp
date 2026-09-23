@@ -12074,38 +12074,3 @@ and the parameter block offsets we read (mixer at 0x12, `vol_env` at 0x64)
 match `AXStructs.h` exactly. Two voices really are at full into both
 channels, and hardware would sum them the same way. So the 200% is not a
 misread, and where the real machine gets its headroom is still unknown.
-
-
-### F284 — the micro-pauses inside words were the audio device running dry, because frames were paced on the wrong clock
-
-"Attack" heard as "At t tac ck", speeding up and slowing down. That is not
-the block-boundary gap of F283 - those are about 95 ms apart - it is the
-OUTPUT STREAM stuttering, and it is invisible to every headless measurement
-because a headless run has no device at all.
-
-The cause is structural. Presentation was paced on the WALL CLOCK at the
-field rate, while the audio device consumes at a real 32,000 samples a
-second and the guest produces audio on ITS clock. Those two agree only to
-about a per cent - 175.5 s of sound against 177.8 s of guest video - and a
-per cent is plenty: the queue drains, the device runs dry, and every dry
-moment is a micro-pause inside a word. The queue refilling and draining
-again is the speeding up and slowing down heard with it.
-
-**The frame limiter now waits on the audio queue** when a device is open:
-the guest runs ahead until about 125 ms is buffered, then blocks until the
-device has drunk some of it. The audio cannot starve, and the video follows
-the audio - which is the right way round, since a dropped video frame is
-invisible and a dropped audio sample is not. The host has the headroom for
-it: it simulates about seven times real time, so the guest reaches the
-high-water mark quickly and waits.
-
-Headless keeps the clock path, because `mgs_audio_queued_is_live()` is false
-with no device - verified unchanged: 35,102 AX frames, 175.5 s, 74,012
-voice-mixes, 5,829 of 5,855 overruns played on.
-
-**Why this took three rounds to see.** Every measurement in this session was
-headless, where `device: ... dropped (no device), 0 underruns` - the mixer's
-output goes nowhere and nothing can starve. The fault only exists when there
-IS a device, so no amount of headless instrumenting could have found it. The
-reports of what it sounded like were the only evidence available, and
-"speeding up and slowing down" is what named it.

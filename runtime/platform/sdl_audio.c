@@ -63,8 +63,6 @@ void mgs_audio_push(const int16_t* stereo, unsigned frames)
     s_pushed += frames;
 }
 
-int mgs_audio_queued_is_live(void) { return s_stream != NULL; }
-
 unsigned mgs_audio_queued(void)
 {
     int bytes;
@@ -80,7 +78,6 @@ int  mgs_audio_open(unsigned rate) { (void)rate; return 0; }
 void mgs_audio_close(void) { }
 void mgs_audio_push(const int16_t* s, unsigned n) { (void)s; s_dropped += n; }
 unsigned mgs_audio_queued(void) { return 0u; }
-int      mgs_audio_queued_is_live(void) { return 0; }
 
 #endif
 
