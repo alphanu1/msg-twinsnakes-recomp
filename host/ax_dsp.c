@@ -244,6 +244,15 @@ static uint64_t s_frames, s_advanced, s_looped, s_ended;
 static uint64_t s_starve_at[AXPB_COUNT];
 static uint32_t s_seen_end[AXPB_COUNT];
 static uint64_t s_refill_n, s_refill_frames, s_refill_max;
+
+/* HOW MUCH RUNWAY A STREAMING VOICE HAS, in samples ahead of the read
+ * position. The console keeps a streaming voice about twelve AX frames
+ * ahead of its end; if ours starts with that and loses it, something is
+ * consuming the headroom, and if it never has it the game is simply not
+ * being asked for more. Those want opposite fixes. */
+static uint64_t s_played_on;
+static uint64_t s_head_n, s_head_sum;
+static uint32_t s_head_min = 0xFFFFFFFFu, s_head_first;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
 static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
@@ -309,6 +318,14 @@ void mgs_ax_dsp_frame(void* cpu)
 
         ++s_mixed_voices;
         ++s_advanced;
+        /* Runway: how far `end` is ahead of where we are about to read. */
+        if (looping && end > curr) {
+            uint32_t head = end - curr;
+            ++s_head_n; s_head_sum += head;
+            if (head < s_head_min) s_head_min = head;
+            if (!s_head_first) s_head_first = head;
+        }
+
         /* The refill's latency, measured where both halves are visible: the
          * mixer knows when it starved, and it re-reads `end` every frame. */
         if (end != s_seen_end[i]) {
@@ -457,13 +474,46 @@ void mgs_ax_dsp_frame(void* cpu)
                     }
                     int probe = (format == AX_FMT_ADPCM)
                               ? 1 : sample_at(format, loop, &ok3);
-                    if (format == AX_FMT_ADPCM || (ok3 && probe))
+                    int probe_ok = (format == AX_FMT_ADPCM) || (ok3 && probe);
+                    if (probe_ok)
                         ++s_loop_has_data;
                     else
                         ++s_loop_empty;
                     curr = loop;
                     ++s_starved;
                     if (!s_starve_at[i]) s_starve_at[i] = s_frames;
+                    /* PLAY ON IF THE NEXT BLOCK IS ALREADY THERE.
+                     *
+                     * A streaming voice holds `loop == end + 1` and the game
+                     * extends `end` only after the block at `loop` is
+                     * filled - measured at a mean of 2.1 AX frames later.
+                     * Stopping for those frames puts a 5 ms hole in the
+                     * voice every block: the runway sawtooths from 4,095
+                     * samples to nothing 5,596 times a run, and each hole is
+                     * a discontinuity you can hear as judder.
+                     *
+                     * But the data is nearly always already there - the
+                     * probe above finds it 99% of the time - because the
+                     * DMA lands well before `end` moves. The DSP, reaching
+                     * `end` with the loop flag set, loads `loopAddr` and
+                     * keeps reading; it does not fall silent waiting for a
+                     * bookkeeping field to catch up.
+                     *
+                     * So when the probe finds data, carry on for the rest of
+                     * this frame and no further: `end` is moved out by
+                     * exactly what the resampler can still consume before
+                     * the frame ends, which can never run past the block the
+                     * game has just filled. When the probe finds nothing,
+                     * the voice stops as before, because then the data
+                     * really is absent and reading on would be inventing
+                     * sound. */
+                    if (probe_ok) {
+                        uint32_t left = (uint32_t)(AX_FRAME_SAMPLES - k);
+                        end = curr + (uint32_t)((((uint64_t)left * ratio)
+                                                 + frac) >> 16) + 1u;
+                        ++s_played_on;
+                        continue;
+                    }
                     /* AND STOP FOR THIS FRAME.
                      *
                      * `loop` is `end + 1` here - the console shows the same
@@ -575,6 +625,13 @@ void mgs_ax_dsp_report(void)
            "%llu underruns\n",
            (unsigned long long)pushed, (unsigned long long)dropped,
            (unsigned long long)under);
+    printf("  played on into an already-filled block: %llu of %llu overruns\n",
+           (unsigned long long)s_played_on, (unsigned long long)s_starved);
+    printf("  runway: first %u samples, mean %.0f, min %u  (a frame consumes "
+           "about 220)\n",
+           s_head_first,
+           s_head_n ? (double)s_head_sum / (double)s_head_n : 0.0,
+           s_head_min == 0xFFFFFFFFu ? 0u : s_head_min);
     printf("  refill latency: %llu refills after a starve, mean %.1f AX "
            "frames, worst %llu\n",
            (unsigned long long)s_refill_n,

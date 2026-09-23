@@ -12028,3 +12028,49 @@ of exactly 200% of full scale - about two voices at full summing - and
 are the remaining pops. The 200% peak suggests a master output volume that
 AX applies and this mixer does not; that is the next thing to find rather
 than guess at with an attenuation.
+
+
+### F283 — the judder was a 5 ms hole every block, and the data to fill it was already there
+
+With the audio clock fixed (F282) the remaining complaint was "very small
+gaps, like juddering". Instrumenting the runway - how far `end` is ahead of
+the read position - shows exactly where they come from:
+
+    runway: first 4095 samples, mean 2306, min 39   (a frame consumes ~220)
+    refill latency: mean 2.1 AX frames, worst 4
+    voices starved: 5,596 of 74,012 voice-mixes
+
+The game hands over one 0x1000-sample block at a time and extends `end`
+only once the NEXT block is filled, about two frames later. So the runway
+sawtooths from 4,095 to nothing and the voice falls silent for those two
+frames, every block, for ever. Each hole is a discontinuity, and there were
+5,596 of them.
+
+**The data is already there when it happens.** The probe finds a sample at
+the loop point in 99% of overruns, because the DMA lands well before the
+bookkeeping moves. The console's DSP, reaching `end` with the loop flag set,
+loads `loopAddr` and keeps reading - it does not stop and wait for a field
+to be updated.
+
+So the mixer now plays on when the probe finds data, extending `end` by
+exactly what the resampler can still consume this frame and no further, and
+stops as before when it finds nothing:
+
+    played on into an already-filled block: 5,829 of 5,855 overruns (99.6%)
+
+leaving 26 real gaps in a run instead of 5,596.
+
+**This was tried once before and reverted**, and the reason it looked
+useless then is worth keeping: it was measured while the audio clock was
+still losing 9% of its frames (F282), so the thing it fixed was invisible
+under a much larger fault. A change that measures as doing nothing may only
+be waiting for a different bug to be fixed first.
+
+**Not the cause of the clipping**, which is still 2.48% with a peak of
+exactly 200%. Checked against Dolphin's AX HLE rather than guessed:
+`ConvertMixerControl` sets `MIX_MAIN_L | MIX_MAIN_R` unconditionally on
+GameCube - every voice mixes to both channels, so applying both is right -
+and the parameter block offsets we read (mixer at 0x12, `vol_env` at 0x64)
+match `AXStructs.h` exactly. Two voices really are at full into both
+channels, and hardware would sum them the same way. So the 200% is not a
+misread, and where the real machine gets its headroom is still unknown.
