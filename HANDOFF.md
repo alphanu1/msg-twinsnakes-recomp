@@ -10971,9 +10971,26 @@ the way through (F256, F260, F261) and **none of them moved it**, which is
 itself worth knowing: the stall is not an interrupt being dropped, not the
 split .bss, and not the doubled ARAM completion.
 
-**The next question, and it is a narrow one:** what does the thread at
-`0x80055264` do on its fourteenth iteration that it did not do on the
-thirteenth - or rather, what does it wait for that never arrives? It is a
-thread body (one call, from `0x800237A4`), it advances the stream 0x400
-bytes per pass, and it is the only thing in the run that talks to
-`0x8027B618`. Read it with `tools/ppc-dis.py`; that is what it is for.
+**The next question, and it is a narrow one.** The thread body at
+`0x80055264` (one call, from `0x800237A4`) advances the stream 0x400 bytes a
+pass and issues the ARAM read through `0x80055114`, which was entered
+**exactly 13 times**, with `r4` stepping 0, 0x400, 0x800, 0xC00 ... and a
+context of `0x8027AD00`.
+
+Where the next session should start, already measured so it need not be
+re-derived:
+
+- `ctx+0xDA` is the channel count the request loop runs on. It is **2**, not
+  zero, so the loop is not being skipped at the top.
+- `ctx+0xA4` is read first inside that loop and **never leaves zero**, so the
+  wrap branch is taken every time and the comparison that decides whether to
+  issue a transfer is `ctx+0x88` against position+size.
+- `ctx+0x88` never changes; `ctx+0x90` changes 13 times.
+- `ctx+0xD9` toggles 0<->1 sixty-two times from `0x80054D48` (lr
+  `0x80054FCC`) - a busy flag that is still being serviced long after the
+  stream stopped advancing.
+- `ctx+0x7C` is a ring descriptor: base `0x80222920`, size `0x40000`.
+
+So the thread is alive and the loop is entered; what stops is the decision
+inside it to issue another transfer. Read `0x80055188` onwards with
+`tools/ppc-dis.py`; that is what it is for.

@@ -136,6 +136,12 @@ could be last. **What is now known,** established over F218–F245:
   reaches the claim that takes 2→3. So the port is delivering message types,
   or an order of them, that the console does not — and that, not the mixer
   and not the task mask, is what parks the movie.
+- **Three real faults found and fixed on the way through, none of which moved
+  the stall** (F256, F260, F261) - an undelivered interrupt being destroyed
+  rather than held, the overlay's two disjoint `.bss` regions, and the ARAM
+  completion being raised on the wrong half of the length register. Each is
+  justified on hardware grounds with a measured count; none is a movie fix,
+  and the record says so.
 - Two earlier explanations are now **dead** and must not be re-proposed:
   `MGS_AX_MODEL=0` gives a byte-identical run, so the mixer is not starving
   the movie; and task mask `0x8` is set **after** the movie has parked, so
