@@ -173,6 +173,23 @@ static void fifo_sink(void* user, uint32_t value, unsigned size)
     mgs_gx_write(&s_gx, value, size);
 }
 
+/* HOW MANY MOVIE FRAMES HAVE BEEN DECODED.
+ *
+ * The luma plane is a 512x320 I8 texture and the cache re-decodes it only
+ * when its contents change, so a decode IS a new frame. Printed beside the
+ * frame counter because "the movie plays at the right rate" is phase 2c's
+ * exit criterion and it is a ratio, not a count: what matters is how many
+ * movie frames pass per frame presented. */
+static unsigned movie_frames(void)
+{
+    const MgsGxRaster* r = &s_raster;
+    unsigned k;
+    for (k = 0; k < r->tex.shape_n; ++k)
+        if (r->tex.shape_key[k] == ((0x1u << 24) | (512u << 12) | 320u))
+            return r->tex.shape_hit[k];
+    return 0u;
+}
+
 /* The run loop's interrupt flag, read from inside the rasteriser. */
 static int raster_abandon(void) { return mgs_module_interrupted != 0; }
 
@@ -458,12 +475,14 @@ static void run_copy(uint32_t cmd)
                     const MgsGxRaster* rr = &s_raster;
                     unsigned i2 = (rr->drawlog_at - 1u) & 63u;
                     printf("[video] frame %5u  %ux%u  roughness %3u %-5s  "
-                           "rgb %3u,%3u,%3u  lit %3u%%  xfb 0x%08X",
+                           "rgb %3u,%3u,%3u  lit %3u%%  movie %u  "
+                           "xfb 0x%08X",
                            vn, copy_w, copy_h, r, noisy ? "NOISE" : "ok",
                            cnt ? (unsigned)(sum_r / cnt) : 0u,
                            cnt ? (unsigned)(sum_g / cnt) : 0u,
                            cnt ? (unsigned)(sum_b / cnt) : 0u,
                            cnt ? lit * 100u / cnt : 0u,
+                           movie_frames(),
                            mgs_mmio_xfb_address(mgs_host_mmio()));
                     if (rr->drawlog_w[i2])
                         printf("  last texture %ux%u fmt 0x%X @0x%08X r%u",
