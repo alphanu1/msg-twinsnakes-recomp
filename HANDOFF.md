@@ -11723,7 +11723,7 @@ parked), and the mixer's overrun handling (two variants tried, both measured,
 both reverted, F274).
 
 
-### F276 — the engine renders at 12 fps at the current tick rate, 25 at half it; and the movie's behaviour depends on which
+### F276 — PARTLY WRONG (see F279): 25 fps was not the target; the console renders 13
 
 Measured over the SAME 178 s of guest video each time (the step budget is
 scaled so the guest clock covers the same span):
@@ -11844,3 +11844,54 @@ been found, and "it fits" is not evidence.
 **What is NOT the cause:** the run loop's periodic hooks (converted to guest
 time in F277 and it changed nothing), the frame semaphore, and the DVD
 timing model.
+
+
+### F279 — the console renders 13 fps here, not 25, and the engine was never slow
+
+The claim in F276 that "a PAL game targets 25 fps, so 4 and 6 render at the
+right rate and 8 does not" was **wrong**, and it was wrong because it
+reasoned from what PAL video is instead of measuring what the game does.
+
+Both halves are now measured on the console, through fixed `main.dol`
+addresses that read the same under Dolphin:
+
+    VIGetTvFormat's variable   0x8027DDB4 = 1          PAL, confirmed
+    VIGetRetraceCount's        0x8027DD6C              +25 every 0.5 s = 50 fields/s
+    VISetNextFrameBuffer's     0x801ED668              1828 flips in 139.8 s
+
+So the console runs at **50 fields a second and flips 13.1 times a second** -
+one flip per **3.82 fields**. It is not hitting any every-other-field cap; the
+game is genuinely CPU-bound in this section, as a 2004 game in a movie scene
+may well be.
+
+Ours, over the same span:
+
+    rate 8   1 flip per 4.31 fields = 11.6 fps     <- the current default
+    rate 7   1 per 1.96 = 25.6
+    rate 6   1 per 2.06 = 24.3
+    rate 4   1 per 1.97 = 25.3
+    rate 2   1 per 1.87 = 26.7
+    console  1 per 3.82 = 13.1
+
+**The default is already within about 12% of the console.** Everything from
+7 down runs the game FASTER than the hardware does - it stops being
+CPU-bound and parks on its own one-flip-per-two-fields cap. So "the engine
+renders at half speed" was never true; it renders at very nearly the rate
+the console does.
+
+**And that is the shape of the demo failure.** The demo stops starting at
+exactly the point the game stops being CPU-starved: it streams at rate 8
+(4.31 fields a flip) and not at 7, 6, 4 or 2 (about 2). Something in this
+port only works while the guest is short of CPU, which is a race, not a
+tuning problem - and tuning the tick rate to hide it is the wrong move. The
+user said so directly: capping the CPU makes no sense, the frame cap should
+do it, and that is right.
+
+**Fixed while here:** the presentation cap was hardcoded to 60 fps on a PAL
+disc - the same NTSC assumption F266 removed from the retrace period, left
+behind in `main.c`. It now follows `VI_DCR`'s format like the rest.
+
+**What this changes about the plan.** The tick rate should stop being a
+speed control at all: the guest should run as fast as the host allows and
+be paced by the field rate. What stands in the way is the race above, and
+finding it is the next job - not choosing a number.
