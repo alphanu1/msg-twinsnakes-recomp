@@ -11795,3 +11795,52 @@ all code 0; at rate 8 over 494 s it posts 480, of which 191 are code 1. The
 next question is whether that is a rate effect or simply a different point
 in the game, which needs the two compared at EQUAL guest time - the
 comparison that was running when this was written.
+
+
+### F278 — at the correct frame rate the game never starts the demo, and the two runs are identical until it does
+
+Comparing `MGS_TICK_RATE=8` and `=4` at **equal guest time** (355 s each, the
+step budget scaled so the guest clock covers the same span):
+
+    rate 8   320 events (128 of them code 1)   demo.dat 282 reads   movie.dat 63
+    rate 4    65 events (  0 of them code 1)   demo.dat  14 reads   movie.dat  8
+
+and the event streams are **identical for the first 65 events**, key for key
+and code for code. Then rate 8 posts `0x002D5221 code 1` and carries on for
+another 255; rate 4 posts nothing more. So both runs do exactly the same
+thing and then one of them stops.
+
+**What stops is the sound.** Same guest time, same number of AX frames
+(35,101 against 35,102), but:
+
+    rate 8   60,408 voice-mixes   ARAM 5,839 transfers
+    rate 4      788 voice-mixes   ARAM   183 transfers
+
+The mixer is running identically; the GAME is not starting voices. What few
+voices do play at rate 4 are ADPCM (59,482 samples decoded from 788 mixes)
+where rate 8's are the PCM streams - different content, so the demo's
+streamed audio never starts at all.
+
+**Two candidates checked and eliminated:**
+
+- *The engine's main thread is deadlocked.* It is blocked in
+  `OSWaitSemaphore` on `0x8020B964` at exit, which looks alarming and is
+  not: that semaphore is signalled 8,888 times at BOTH rates - once per
+  field - so it is the frame limiter, and being caught waiting on it is
+  what a healthy frame loop looks like. Rate 8 waits on it 3,821 times and
+  rate 4 8,621, which is just the difference between 12 fps and 25.
+- *Our DVD is too slow, so something times out.* It is not: 40,500 ticks of
+  latency plus 8 ticks a byte is 7.5 ms for a 32 KB read, about 4.3 MB/s
+  against a real drive's ~3.1 MB/s and ~100 ms seek. The model is faster
+  than the hardware, not slower.
+
+**The shape of it**, which is as far as this got: something the game counts
+in FRAMES is racing something paced in guest time. At 12 fps a frame-counted
+wait spans twice the guest time it does at 25, so a wait that completes at
+rate 8 can expire at rate 4. That would explain identical behaviour up to
+the first such wait and divergence after it - but the specific wait has not
+been found, and "it fits" is not evidence.
+
+**What is NOT the cause:** the run loop's periodic hooks (converted to guest
+time in F277 and it changed nothing), the frame semaphore, and the DVD
+timing model.
