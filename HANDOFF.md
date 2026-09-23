@@ -11240,6 +11240,15 @@ so what changed is which voices the game has active at a given step, not the
 mixer. This is filed as a correctness fix with a sync measurement behind it,
 not as "more sound".
 
+**AND THE GARBAGE PICTURE IS GONE.** A 400M-step run samples nine frames and
+reports `NOISE: 0`. The frame the movie draws now reads
+`roughness 0 ok, lit 71%` where the same frame read
+`roughness 36 NOISE, lit 99%` before. The movie still does not ADVANCE - it
+is one clean frame rather than a moving picture - but what is drawn is no
+longer noise, which is the "video is garbage" Ben reported. Sampling is
+every 120 frames plus on change, so this is nine clean samples and no noisy
+one, not a frame-by-frame proof.
+
 **One thing it exposed:** with the forced-period run the mixer reported
 `peak 54629 of 32767 (166.7% of full scale)`. The peak is tracked before the
 clamp, so that is real clipping in the mix, not a reporting artefact. Worth
