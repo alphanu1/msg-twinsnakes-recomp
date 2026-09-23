@@ -638,8 +638,13 @@ static void trace_event_post(void* cpu, const uint32_t* gpr)
     uint32_t key  = mgs_module_guest_read32(cpu, desc);
     uint32_t src  = mgs_module_guest_read32(cpu, desc + 8u);
     uint32_t code = src ? mgs_module_guest_read32(cpu, src) : 0xFFFFFFFFu;
+    /* LR, not the frame. At a function's ENTRY the caller's return address
+     * is still in the link register and has not been spilled yet, so
+     * reading the frame the way the message tracer does gives whatever the
+     * caller happened to leave there - it reported "from 0x00000001" for 64
+     * of 65 events. */
     fprintf(stderr, "[event] post key 0x%08X  code %d  from 0x%08X\n",
-            key, (int)code, gpr[1] ? mgs_module_guest_read32(cpu, gpr[1] + 0x14u) : 0u);
+            key, (int)code, mgs_module_lr(cpu));
 }
 
 static void trace_send(void* cpu, const uint32_t* gpr)

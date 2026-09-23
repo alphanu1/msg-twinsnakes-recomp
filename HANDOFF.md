@@ -11142,7 +11142,7 @@ in, which is the difference between a port that can be tested and one that
 cannot.
 
 
-### F265 — the movie stall is ONE MISSING EVENT, and the console sits in our "stalled" state for 35 seconds first
+### F265 — RETIRED by F268: the event was not missing, it was not due yet
 
 The whole stall reduces to a single word. `mpeg_movie_task` in state 1 does
 nothing but poll; `mpeg_poll_stream_events` does not generate a wake, it
@@ -11306,3 +11306,57 @@ GROUP and the emulator pid directly, and it runs from `atexit` and from
 SIGTERM/SIGINT/SIGHUP handlers rather than from the end of a happy path.
 Verified both ways - normal exit and killed by `timeout` - each leaving zero
 emulators.
+
+
+### F268 — the guest's clock ran four times faster than the guest's work, and that was the "it is slow"
+
+`mgs_tick_rate` is guest timebase ticks per interpreted step, and it was 32.
+Everything timed hangs off it - the retrace period is a field's ticks
+divided by it, and the audio DMA drains on it - so video and audio stay in
+step with **each other** whatever it is. That is why the ratio looked
+healthy (F266) and hid this.
+
+What it does not keep in step is the clock against the WORK. Counting XFB
+copies against fields over 200M steps:
+
+    rate 32   7903 fields    920 frames   1 frame per 8.6 fields
+    rate 16   3952 fields    918 frames   1 frame per 4.3
+    rate  8   1977 fields   1095 frames   1 frame per 1.8
+    rate  4    989 fields    750 frames   1 frame per 1.3
+
+A PAL game at 25 fps on 50 Hz fields is one frame per two. At 32 the game
+rendered one frame every 8.6 fields, about 6 fps.
+
+**It is not a host performance problem.** The host simulates 1578 s of guest
+time in 224 s of wall clock - seven times real time. The game was being told
+far more time had passed than it had had steps to act on, so it skipped
+work, faded voices and retired them on a clock running ahead of the code
+that feeds them.
+
+**Eight is what the hardware suggests, not only what the measurement
+prefers.** The Gekko's timebase is the 162 MHz bus over four, 40.5 MHz,
+against a 486 MHz core - twelve CPU cycles a tick. Eight ticks per dispatch
+is about ninety-six guest instructions per chunk, which is a plausible
+chunk. Thirty-two would be nearly four hundred, which is not.
+
+**Measured, 2B steps, same build either side:**
+
+    rate 32   audio   6,216 of 315,570 frames not silent    (2%)
+    rate  8   audio  51,120 of  78,557                      (65%)
+    rate 32   movie.dat 63 reads in 1578 s of guest time
+    rate  8   movie.dat 73 reads in  395 s                  (4.6x the rate)
+    rate  8   11 files read, against 9
+
+**And it retires F265.** That finding concluded the movie stall was "one
+missing code-1 event", from a 200M-step run. It was not missing, it was not
+due yet: at 2B steps the movie streams 73 chunks, the context is created and
+torn down normally, and the engine moves on to `shared/audio/stream/0058L`
+and `0058R`. **The movie was never stalled - it was being run at a sixth of
+its proper rate.** Every conclusion in F257, F262 and F265 that rests on
+"the ring is full and nothing consumes it" is a measurement taken before the
+game had had the steps to consume it, and should be read that way.
+
+**What it exposes:** the mix now clips hard - `peak 65532 of 32767`, 200% of
+full scale, where the peak is tracked before the clamp. With most frames
+silent that was invisible; with 65% of them audible it will be audible too.
+Next thing to chase on the audio side.

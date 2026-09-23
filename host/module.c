@@ -859,13 +859,51 @@ static unsigned long long mgs_retrace_period(void)
     return period ? period : 1ull;
 }
 
-/* Ticks of guest time per interpreted step. See the note at its use. */
+/* Ticks of guest time per interpreted step. See the note at its use.
+ *
+ * THIS IS THE RATE THE GUEST'S CLOCK RUNS AT RELATIVE TO ITS OWN WORK, and
+ * at 32 it ran four times too fast. Everything timed hangs off it: the
+ * retrace period is the field's tick count divided by this, and the audio
+ * DMA drains on it too, so the two stay in step with each other whatever it
+ * is - which is why the video/audio ratio looked healthy at 32 and hid the
+ * problem.
+ *
+ * What it does NOT keep in step is the guest's clock against the guest's
+ * WORK. Counting XFB copies against fields over 200M steps:
+ *
+ *     rate 32   7903 fields    920 frames   1 frame per 8.6 fields
+ *     rate 16   3952 fields    918 frames   1 frame per 4.3
+ *     rate  8   1977 fields   1095 frames   1 frame per 1.8
+ *     rate  4    989 fields    750 frames   1 frame per 1.3
+ *
+ * A PAL game at 25 fps on 50 Hz fields is one frame per two fields. At 32
+ * the game rendered one frame every 8.6 fields - about 6 fps - which is the
+ * "it runs slowly" the user reported, and it is not a host performance
+ * problem: the host simulates guest time several times faster than real.
+ * The game was simply being told that far more time had passed than it had
+ * had steps to act on.
+ *
+ * Eight is also what the hardware suggests rather than only what the
+ * measurement prefers. The Gekko's timebase is the 162 MHz bus divided by
+ * four, 40.5 MHz, against a 486 MHz core - twelve CPU cycles per tick. So
+ * eight ticks per dispatch is about ninety-six guest instructions per
+ * chunk, which is a plausible chunk; thirty-two would be nearly four
+ * hundred, which is not.
+ *
+ * Measured over 400M steps, the audible difference is not subtle:
+ *
+ *     rate 32    285 of 62,731 AX frames not silent   (0.5%)
+ *     rate  8  9,961 of 15,340                        (65%)
+ *
+ * because voices were being faded and retired on a clock running ahead of
+ * the code that feeds them (F268).
+ */
 static unsigned mgs_tick_rate(void)
 {
     static unsigned rate;
     if (!rate) {
         const char* e = getenv("MGS_TICK_RATE");
-        rate = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 32u;
+        rate = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 8u;
         if (!rate) rate = 1u;
     }
     return rate;
