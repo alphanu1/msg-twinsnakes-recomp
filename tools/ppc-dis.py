@@ -17,7 +17,18 @@ ITS OUTPUT IS FOR HUMANS. Per the project's standing rules it is never
 compiled in, never committed, and not quoted in notes: record what a
 function DOES, not its instructions.
 
-usage: ppc-dis.py <main.dol> <start-addr> [end-addr]
+A REL works too, given the base it was loaded at:
+
+    ppc-dis.py <mgso_pal.rel> <start> <end> --rel-base 0x7F008000
+
+WHAT A REL FILE CANNOT TELL YOU. Its sections are stored unrelocated, so
+every absolute address formed by a `lis`/`addi` pair reads as zero and every
+`bl` to another section points at nothing. Control flow WITHIN a function -
+the compares, the conditional branches, the offsets off a struct pointer -
+is all there and is usually the question. Read the run for the addresses;
+read this for the logic.
+
+usage: ppc-dis.py <main.dol|module.rel> <start-addr> [end-addr] [--rel-base <addr>]
 """
 import struct, sys
 
@@ -88,11 +99,29 @@ def decode(w, pc):
         return f"{DFORM[op]:<7} r{rD},{d}(r{rA})"
     return f".long   0x{w:08X}   ; op={op}"
 
+def rel_segments(d, base):
+    """(file offset, guest address, length) per loaded REL section."""
+    nsec, secoff = struct.unpack('>2I', d[0x0C:0x14])
+    segs = []
+    for i in range(nsec):
+        o, l = struct.unpack('>2I', d[secoff + i * 8:secoff + i * 8 + 8])
+        o &= ~3                      # low bits are the executable flag
+        if o and l:                  # offset 0 with a length is .bss
+            segs.append((o, base + o, l))
+    return segs
+
 def main():
-    if len(sys.argv) < 3:
+    argv = [a for a in sys.argv[1:] if not a.startswith('--')]
+    rel_base = None
+    for i, a in enumerate(sys.argv):
+        if a == '--rel-base':
+            rel_base = int(sys.argv[i + 1], 0)
+            argv = [x for x in argv if x != sys.argv[i + 1]]
+    if len(argv) < 2:
         print(__doc__); return 2
-    d = open(sys.argv[1], 'rb').read()
-    segs = dol_segments(d)
+    d = open(argv[0], 'rb').read()
+    segs = rel_segments(d, rel_base) if rel_base is not None else dol_segments(d)
+    sys.argv = ['ppc-dis'] + argv
     start = int(sys.argv[2], 0)
     end = int(sys.argv[3], 0) if len(sys.argv) > 3 else start + 0x100
     off = to_off(segs, start)

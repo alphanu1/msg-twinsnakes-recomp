@@ -65,16 +65,39 @@ unsigned mgs_dvd_in_flight(const MgsDvd* dvd)
 
 uint64_t mgs_dvd_refused_full(const MgsDvd* dvd) { return dvd->refused_full; }
 
-MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
-                                  uint32_t guest_dest, uint32_t offset,
-                                  uint32_t length, uint32_t guest_callback,
-                                  uint32_t guest_block)
+/* EVERY FIELD IS SET BEFORE THE JOB IS SUBMITTED, AND THAT IS THE WHOLE
+ * CONTRACT OF THIS FUNCTION.
+ *
+ * `mgs_jobs_submit` hands the request to a worker that may read it on the
+ * very next instruction, so a field written after the submit is a data race
+ * with the worker reading it. `mgs_dvd_read_abs_async` used to do exactly
+ * that - call this, then set `req->absolute = 1` - and lost the race about
+ * half the time.
+ *
+ * What losing it did: the worker saw `absolute == 0` and read by PATH, with
+ * the empty path that entry point passes, so the read failed, the guest was
+ * handed a failed DVD read it never sees on console, and the run diverged
+ * from there. It presented as a crash at `pc = 0x00000800` a few million
+ * steps later - an FP-unavailable exception taken while `OSCurrentContext`
+ * was zero - which looks nothing like a disc read and cost a long hunt
+ * (F264). ThreadSanitizer names it in one line.
+ *
+ * So `absolute` is a parameter now rather than something a caller patches
+ * in afterwards, and there is no window in which a worker can see a
+ * half-built request. */
+static MgsDvdRequest* dvd_build_and_submit(MgsDvd* dvd, const char* path,
+                                           int absolute,
+                                           uint32_t guest_dest, uint32_t offset,
+                                           uint32_t length,
+                                           uint32_t guest_callback,
+                                           uint32_t guest_block)
 {
     MgsDvdRequest* req = alloc_request(dvd);
     if (!req || !path) return NULL;
 
     memset(req, 0, sizeof *req);
     req->in_use = 1;
+    req->absolute = absolute;
     req->owner = dvd;
     snprintf(req->path, sizeof req->path, "%s", path);
     req->guest_dest = guest_dest;
@@ -114,19 +137,26 @@ MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
     return req;
 }
 
+MgsDvdRequest* mgs_dvd_read_async(MgsDvd* dvd, const char* path,
+                                  uint32_t guest_dest, uint32_t offset,
+                                  uint32_t length, uint32_t guest_callback,
+                                  uint32_t guest_block)
+{
+    return dvd_build_and_submit(dvd, path, 0, guest_dest, offset, length,
+                                guest_callback, guest_block);
+}
+
 MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
                                       uint32_t guest_dest, uint32_t length,
                                       uint32_t guest_callback,
                                       uint32_t guest_block)
 {
     /* The path is unused for an absolute read, but passing "" rather than
-     * NULL keeps the one allocation path: mgs_dvd_read_async refuses a null
-     * path, and duplicating the request setup to avoid that is how the two
-     * would drift apart. */
-    MgsDvdRequest* req = mgs_dvd_read_async(dvd, "", guest_dest, disc_offset,
-                                            length, guest_callback, guest_block);
-    if (req) req->absolute = 1;
-    return req;
+     * NULL keeps the one allocation path: the builder refuses a null path,
+     * and duplicating the request setup to avoid that is how the two would
+     * drift apart. */
+    return dvd_build_and_submit(dvd, "", 1, guest_dest, disc_offset, length,
+                                guest_callback, guest_block);
 }
 
 unsigned mgs_dvd_drain(MgsDvd* dvd, MgsDvdRequest** completed, unsigned max,

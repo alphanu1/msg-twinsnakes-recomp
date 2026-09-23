@@ -10613,7 +10613,7 @@ frames of 62,763, which is a separate and un-investigated question.
 turned out wrong. They are worth more than a clean narrative.*
 
 
-### F254 — the headless port is BIT-DETERMINISTIC, so measurements under load are trustworthy
+### F254 — WRONG (see F264): the port was NOT deterministic, and the two runs that said so agreed by luck
 
 Two headless runs, identical arguments, taken while the machine sat at load
 average 19 with three Quartus jobs running:
@@ -10622,7 +10622,26 @@ average 19 with three Quartus jobs running:
     zd2.log  211 lines  10638 bytes
 
 They differ in **one** line, and it is the output filename each was told to
-write. Everything else matches exactly: `retrace ticks: 20000`, `interrupts
+write.
+
+**THIS CONCLUSION WAS WRONG, AND IT CONTRADICTED THE PROJECT'S OWN RECORD.**
+F204 had already found "three 120M runs where two were byte-identical and the
+third was not", and the comment above `MGS_JOBS` in `host/main.c` says so in
+as many words. Two agreeing runs cannot establish determinism when the known
+failure mode is *one run in three*; I generalised from the smallest possible
+sample and did not check the record first. Measured properly later, the same
+build crashed in **4 of 8 runs** (F264). The cause was a genuine data race,
+now fixed - but the reasoning here was unsound before the race was found, and
+would have been unsound even if the port had turned out to be deterministic.
+
+**What survives.** The three specific mechanisms checked below are all still
+true and still worth having: guest time is derived from guest ticks, DVD
+completion is decided by the guest's clock, and AX frames are driven by guest
+mail. None of that was the source of the divergence. What does not survive is
+the conclusion drawn from them, because "I checked three ways host time could
+leak in and found none" does not establish that there is no fourth.
+
+ Everything else matches exactly: `retrace ticks: 20000`, `interrupts
 delivered: 29207`, `refused while masked: 9097`, `handler failed: 4`,
 `best frame: 26570 lit pixels (11.6%)`.
 
@@ -11059,3 +11078,65 @@ withdrawn.
 **What not to re-propose:** measuring whether there is sound without first
 checking that `AX mixer:` appears in the log. A missing line there is not a
 quiet mixer, it is no mixer.
+
+
+### F264 — a DVD request was handed to a worker before it was finished being built, and it crashed half of all runs
+
+`mgs_dvd_read_abs_async` was three lines:
+
+    req = mgs_dvd_read_async(dvd, "", ...);   /* this SUBMITS the job */
+    if (req) req->absolute = 1;               /* ...and this sets a field */
+
+`mgs_dvd_read_async` submits to the worker pool as its last act, and
+`read_job` reads `req->absolute` as its first. So the flag was written after
+the worker could already have read it: a plain data race, lost about half the
+time.
+
+**What losing it did.** The worker saw `absolute == 0` and read by PATH -
+with the empty path that entry point passes for an absolute read - so the
+read failed. The guest was handed a failed DVD read it never sees on
+console, and diverged from there. It surfaced a few million steps later as
+
+    [fp] refused: OSCurrentContext = 0x00000000 is not a usable context
+    stopped after 3703635 steps: unhandled exception, pc = 0x00000800
+
+an FP-unavailable exception taken while the current context was zero, which
+looks nothing like a disc read.
+
+**Measured, same build, 6M steps a run:**
+
+    default pool   4 of 8 runs crashed
+    MGS_JOBS=2     5 of 6 crashed
+    MGS_JOBS=4     3 of 6 crashed
+    MGS_JOBS=1     0 of 8 crashed
+    after the fix  0 of 10 crashed
+
+and ThreadSanitizer goes from 1 race to 0.
+
+**How it was found, because the route matters more than the bug.** Three
+things had to be in place, and two of them were laid this session:
+
+1. **Every disc failure says why** (committed earlier today). The signature
+   is `[disc] path read FAILED: ` with an EMPTY path - an absolute read gone
+   down the path branch. Before that change this printed nothing at all, and
+   the same failure had already been seen and mis-explained twice.
+2. **A sanitizer, rather than more reading.** A TSan build named the file,
+   the line and both threads in one run. Two hours of reading the job pool,
+   the band splitting and the texture cache had found nothing, because the
+   race was not in the rasteriser at all - the worker count only changed how
+   often it was lost.
+3. **Bisecting on `MGS_JOBS`** to establish it was concurrency at all.
+
+**What not to re-propose:** looking for this in the rasteriser. `MGS_JOBS=1`
+makes it disappear, which points there and is misleading - the raster and
+DVD workers share one pool, so the knob changes both.
+
+**The general rule this leaves:** a request handed to a worker pool must be
+COMPLETE before it is submitted. `dvd_build_and_submit` now takes `absolute`
+as a parameter so there is no window in which a worker can see a half-built
+request, and the comment above it says why.
+
+**It does not fix the movie.** Still 8 reads of `movie.dat`, still parked in
+WAITING. It does mean the game no longer dies at random a few million steps
+in, which is the difference between a port that can be tested and one that
+cannot.
