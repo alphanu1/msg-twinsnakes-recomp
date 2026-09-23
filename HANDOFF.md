@@ -10611,3 +10611,208 @@ frames of 62,763, which is a separate and un-investigated question.
 
 *Record further findings here as they are established — including the ones that
 turned out wrong. They are worth more than a clean narrative.*
+
+
+### F254 — the headless port is BIT-DETERMINISTIC, so measurements under load are trustworthy
+
+Two headless runs, identical arguments, taken while the machine sat at load
+average 19 with three Quartus jobs running:
+
+    zd1.log  211 lines  10638 bytes
+    zd2.log  211 lines  10638 bytes
+
+They differ in **one** line, and it is the output filename each was told to
+write. Everything else matches exactly: `retrace ticks: 20000`, `interrupts
+delivered: 29207`, `refused while masked: 9097`, `handler failed: 4`,
+`best frame: 26570 lit pixels (11.6%)`.
+
+**This corrects the working assumption behind F237.** F237's lesson was real
+— two builds were judged at load average 32 and the *reverted* one failed
+too — but the conclusion drawn from it grew too broad: "do not measure while
+the machine is loaded". That is true only of **wall-clock** judgements (does
+it run at full speed, does it finish in time). Anything counted in guest
+steps is a function of the guest's own clock and does not move with host
+load, so it can be measured whenever.
+
+Why it holds, checked in the code rather than assumed — three places where
+host timing could have leaked into the guest, and all three refuse it:
+
+- `runtime/os/os_time.c` — `OSGetTime`/`OSGetTick` return `rt->ticks`, a
+  count the frame loop advances. Never `clock_gettime`.
+- `runtime/dvd/dvd.c:142` — a read completes when the **guest's** tick
+  passes `ready_tick`, and `drain` then spins on an acquire load
+  (`while (!__atomic_load_n(&req->done, __ATOMIC_ACQUIRE));`) rather than
+  completing early. Host I/O speed changes how long that spin takes, not
+  what the guest sees.
+- `host/interrupt.c:478` — an AX frame is driven by DSP mail, which the
+  guest posts. `mgs_audio_queued()` is a statistic and is fed back to
+  nothing; `grep` across the tree confirms no caller outside
+  `sdl_audio.c`.
+
+The one place host time does enter is the frame-rate cap in
+`host/display.c:318`, and it is **off in headless** for exactly this reason.
+
+**What this costs if forgotten:** a measurement discarded for being "taken
+under load" is a measurement that has to be taken again. One was discarded
+this session on those grounds and the real fault was elsewhere entirely —
+that run was made from a part-edited build, which is why it died at 3.65M
+steps with `pc = 0x00000800`. **Check what the binary was before blaming the
+machine.**
+
+**What not to re-propose:** waiting for a quiet machine before running a
+headless measurement. Judge wall-clock claims that way, nothing else.
+
+### F255 — hardcoded guest addresses go stale, and they fail SILENTLY
+
+A watch on the movie context at `0x8107F0BC` reported **zero writes**, and
+zero writes reads exactly like "this field is never written". It is not: the
+context is a heap allocation, and the retrace-period change, the mixer and
+the ARAM fix had each moved it. The address was live when it was written
+down and pointed at nothing by the time it was used.
+
+The overlay's `.bss` base moves too — `0x7F4BEF90` in one run, `0x7F499BA0`
+in the next — so even addresses derived from it have to be re-derived per
+run, not copied between them.
+
+`mgs_report_movie` (`host/heaps.c`, `MGS_REPORT_MOVIE=1`) resolves the whole
+chain from `.bss` instead: the context and task node from `bss+0x55EA4` and
+`bss+0x55EA8`, both record rings from `bss+0x55BF4`. Same picture in any
+run, and a moved allocation now shows as a null pointer rather than as a
+field that is never written.
+
+First use of it contradicted an assumption immediately: at 40M steps the
+movie context and task node are **both null**. The movie chain is not
+stalled there, it is **not yet allocated** — 40M steps is before the movie
+starts, and every earlier conclusion drawn at that step count needs reading
+with that in mind.
+
+
+### F256 — an undelivered interrupt was DESTROYED, not held; the port manufactured a hole the console does not have
+
+`mgs_interrupt_raise` enters the guest's dispatcher by taking an exception.
+When that failed - no current `OSContext` - the old code took the cause bit
+back off, with the comment "leaving it set would have the guest service a
+stale interrupt the moment it does become ready".
+
+**That reasoning is backwards, and it contradicts the rule the very next
+comment in the same file spends a paragraph establishing.** An interrupt
+raised and never delivered is not stale, it is OUTSTANDING: the device
+really did complete, nothing acknowledged it, and the line is still
+asserted. Hardware holds it high until a handler writes the bit back.
+
+The window it lands in is a **thread switch** - there is no current
+OSContext for a few instructions between `OSClearContext` and the next
+`OSSetCurrentContext`. On console that window is covered by `MSR[EE]` being
+clear. Our delivery tests EE separately, so the hole is ours, not the
+hardware's.
+
+It fires mid-run, not during startup: the one-shot notice lands at line 150
+of a 690-line log, long after boot.
+
+Leaving the bit set costs nothing, because `mgs_interrupt_pending` already
+re-offers exactly while `cause & mask` says the guest still has that source
+armed. Measured, same build otherwise:
+
+    dropped (handler failed)        4  ->      1
+    interrupts delivered       29,207  -> 95,026
+
+Sanity check on the new figure rather than trusting the direction of the
+change: VI at 50 Hz plus AX frames near 190 Hz over the ~190 s of game time
+in the step budget predicts tens of thousands, so 95,026 is the right order
+and **29,207 was far too few**.
+
+**It did not fix the movie.** The stall is unchanged at 8 reads of
+`movie.dat`. Recorded as a correctness fix on hardware grounds (rule 12,
+order of authority 1), not as a movie fix.
+
+### F257 — the oracle says our sound stream runs a state machine the console never enters
+
+The streamed-sound pipeline keeps a state byte per buffer at `+0x2038` of
+the two objects hanging off the stream at `+0x28`/`+0x2C` (`0x8022CC58` and
+`0x8022ECB8` - **main.dol addresses, so they are the same in Dolphin**,
+which is what made this comparable at all).
+
+    Dolphin   1 -> 2 -> 1 -> 2 ...   384 transitions in 125 s, forever
+    our port  0 -> 4 -> 1 -> 2 -> 3 -> 4 -> 1 -> 2 ... then STUCK at 2
+
+**The console oscillates between two states. It never sets 3 or 4 at all.**
+Ours enters both every cycle and finally parks in 2, where the 2->3 claim
+never comes.
+
+The states are reached from a switch on message type, through a jump table
+at `0x801E7C48` covering types 5..16:
+
+    type  5  -> calls the buffer servicer with its "reset" argument, which
+                is what writes state 4
+    type 10  -> normal service; writes 1, then 2
+    type 11  -> writes 3 -> 4
+    type 16  -> reaches the claim, which takes 2 -> 3
+    others   -> ignored
+
+So our port is delivering message types the console does not, or delivering
+them in an order it does not. **That is the next thing to chase, and it is
+the movie's blocker**: when the pipeline parks, all four sound threads are
+drained and waiting -
+
+    0x8027B640  on 0x8027B4D8, 70 messages carried
+    0x802134E8  on 0x802133A4, 68
+    0x80215920  on 0x80213384, 34
+    0x80217D58  on 0x80213364, 30
+
+and the movie's ring consumer dies with them. Against the oracle, on the
+ring the movie actually streams through (`ring 0`, buffer `0x81741AA0` -
+the same MEM1 address in both):
+
+    Dolphin   consumer 1895 advances, producer   68   (~20/s, never stops)
+    our port  consumer   37 advances, producer  521   (stops)
+
+Dolphin's consumer is the busy end and its producer feeds it rarely; ours is
+inverted - the producer races to fill the ring and the consumer dies. The
+movie then parks in WAITING on top of 468 well-formed records it never
+reads.
+
+**What not to re-propose.** Three theories died here, each with evidence:
+
+- *The mixer or ADPCM is starving the movie.* `MGS_AX_MODEL=0` produces a
+  byte-identical run - same 8 reads, same 16 distinct pictures, same frozen
+  end. The mixer is not involved.
+- *Task mask 0x8 is what the movie never recovers from (F200).* The mask
+  goes to 8 **after** the movie has already parked; it is a consequence.
+  Every one of the movie's state transitions happens while the mask is 0.
+- *`mpeg_poll_stream_events` sets `ctx->0x3C` on a code-1 event.* It
+  **consumes** that flag; something in the movie-start path sets it. The
+  note in `config/symbols/mgso_pal.rel.symbols.txt` had it backwards and is
+  corrected there.
+
+### F258 — a one-slot queue defeated the "has this been read from" test, and it cost a wrong root cause
+
+The thread dump distinguishes "empty now" from "never used" by the read
+cursor, because `usedCount` cannot. For a capacity of ONE that test is
+worthless: `first` advances modulo the capacity, so it is always zero.
+
+The busiest queue in the whole run - 149 sends, `usedCount` seen moving 300
+times - was printed as `empty, and never read from`, and was chased as the
+head of the deadlock before the contradiction showed up. It is perfectly
+healthy.
+
+Fixed in `host/threads.c`: a one-slot queue now says its cursor cannot say
+more, rather than asserting something false. The general lesson is the one
+the surrounding comment already drew and did not carry far enough - **a
+diagnostic that can be confidently wrong is worse than one that is silent.**
+
+### F259 — there is no PowerPC disassembler on this machine, so there is one now
+
+Targeted reading of single functions is explicitly in scope and was the only
+way through F257, but nothing here could disassemble PowerPC: the system
+`objdump -i` lists i386 and bpf only, the `llvm-objdump` on PATH rejects
+`-b binary` and `--binary-architecture`, and Ghidra is a flatpak with no
+headless launcher wired up.
+
+`tools/ppc-dis.py` decodes the subset that answers "why did this function
+take that branch" - loads, stores, address arithmetic, compares, conditional
+branches and calls - against a DOL's own segment table. **Anything it does
+not know prints as its opcode numbers rather than a guess**, because a wrong
+mnemonic would be believed.
+
+Its output is for humans: never compiled in, never committed, not quoted in
+notes. What goes in the record is what a function *does*.

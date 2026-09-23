@@ -2729,6 +2729,58 @@ different population in a working run would have been wrong.
 takes it to 1,032 and **1,076**; `__AXServiceVPB`, `__AXGetNumVoices`,
 `__AXPB` and `__AXNumVoices` (F235) take it to 1,034 and **1,078**.
 
+## Stage 5r — Read a function when there is no disassembler · **DONE**
+
+**The problem.** Targeted reading of individual functions is in scope and is
+repeatedly the fastest route through a stall, but nothing on this machine
+could disassemble PowerPC:
+
+    $ objdump -i | tail            # system binutils
+      i386
+      bpf
+    $ llvm-objdump -b binary ...
+      error: unknown argument '-b'
+    $ find / -name analyzeHeadless # Ghidra is a flatpak, no headless launcher
+      (nothing)
+
+**The command.**
+
+    python3 tools/ppc-dis.py discs/GGSPA4/disc1/sys/main.dol 0x80055FF4 0x80056260
+
+It resolves an address through the DOL's own segment table and decodes the
+subset that answers "why did this function take that branch": D-form loads
+and stores, `addi`/`addis`/`lis`, `rlwinm`, the compare forms, `bc`/`b`/`bl`
+with resolved targets, and the common op-31 forms. **An instruction it does
+not know prints as its opcode numbers, never as a guessed mnemonic** — a
+wrong mnemonic would be believed, which is worse than a gap.
+
+**What it produced.** The streamed-sound message dispatch: a switch on
+message type through a jump table at `0x801E7C48` covering types 5–16, and
+the guard on the send that feeds the stream thread (three conditions, one of
+them a state byte that must read 1).
+
+**How it was checked, by a second and independent route.** The decode was
+not trusted on its own. Every structural claim it made was confirmed against
+the *running* port, which had no part in producing it:
+
+| claimed from the decode | confirmed by |
+|---|---|
+| state byte lives at `+0x2038` of the object at stream `+0x28` | `MGS_WATCH` on that exact address shows 35 changes, all of them the values the decode predicts (1, 2, 3, 4) |
+| the send is guarded and can be declined | traced call counts: the function is entered 53 times and sends 36 |
+| type 11 writes 3 → 4 | the watch attributes that transition to `0x8005632C`, which is the address the jump table gives for type 11 |
+| stream object at `0x8022AA40`, sub-objects at `+0x28`/`+0x2C` | `MGS_DUMP` of that address reads back `0x8022AC20` and `0x8022CC80` |
+
+Two of those addresses were then read in **Dolphin** — they are `main.dol`
+addresses, identical under both — and the state byte's behaviour there
+differs from ours in a way the decode explains (F257). Agreement between a
+static decode, a live watch in our port, and a live watch in the oracle is
+three independent routes to the same structure.
+
+**Its output is for humans.** Per the standing rules it is never compiled
+in, never committed, and not quoted in the record. What is recorded is what
+a function *does*, and the addresses — which are our own analysis and carry
+their origin like any other symbol.
+
 ## Stage 9 — Verify against the original · **PLANNED**
 
 **In:** the port and Dolphin. **Out:** a divergence report.

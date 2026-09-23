@@ -43,7 +43,7 @@ phase 3.
 | 1 | Boot in ModernGekko | Title screen renders through recompiled CPU code, no interpreter fallback on the boot path | 1–2 weeks | **BYPASSED, not completed.** This phase means running under the *Dolphin-derived* template so Dolphin supplies GX and audio. We never did: the own runtime came first. Its purpose — proving the recompiled CPU before blaming our own shims — was therefore never bought, and every CPU-level doubt since has had to be settled another way. The host-instruction fallback now reports **unhandled: 0**. |
 | 2b | *(within 2)* Our own renderer | — | — | **the Konami logo is drawn by `runtime/gx/`**, 0 parser desyncs; the 86% of the boot that was `memcpy`/`__fill_mem` is now native (F92) — measured before the change, effect not yet re-measured |
 | 2 | Native OS + DVD + PAD, headless | Main loop runs headless, reads assets, responds to input, `OSReport` matches Dolphin | 3–4 weeks | **THIS IS WHERE WE ARE.** Runs **400M steps with no fault**, reads 9 files / 21 MB, **reaches the main menu and responds to input**, streams `movie.dat` and `demo.dat`. Exit criterion **not** met: the `OSReport`-against-Dolphin comparison has never been run. |
-| **2c** | **Audio — moved from phase 4 on 2026-09-22** | AX voice mixer, per-voice SRC, SDL output; music, codec and SFX match Dolphin within tolerance, **and the movie plays at the right rate** | 3–6 weeks | **IN PROGRESS** — SDL3 device + real voice mixer built (F246): PCM16/PCM8 decoded from ARAM, volume and per-voice mix applied, position advanced by actual consumption. **THERE IS SOUND** (F247): peak 23, **52,979 of 62,763 frames non-silent**. The silence was *two* ARAM buffers — the DMA filled one, the mixer read the other, and nothing noticed while only the DMA used it. **ADPCM decoded too** (F248) — peak now **10,750 of 32,767, 32.8% of full scale**, 81,072 ADPCM samples a run, 0 voices skipped. **The mixer is built and working; the remaining silence is the MOVIE STALL seen from the audio side** (F253) — the game fades its movie voice out deliberately (7FFF → 7E88 → 2A62 → … → 0) from `sd_ax_frame_callback`, because the movie is not playing. Fixing the movie fixes the sound. Earlier note kept: **gain, not samples** (F250): 99% of PCM samples read are non-zero and **99.2% of voice-mixes have envelope volume 0**, so only ~828 of 106,326 mixes contribute. Level/pitch not yet verified by ear |
+| **2c** | **Audio — moved from phase 4 on 2026-09-22** | AX voice mixer, per-voice SRC, SDL output; music, codec and SFX match Dolphin within tolerance, **and the movie plays at the right rate** | 3–6 weeks | **IN PROGRESS** — SDL3 device + real voice mixer built (F246): PCM16/PCM8 decoded from ARAM, volume and per-voice mix applied, position advanced by actual consumption. **THERE IS SOUND** (F247): peak 23, **52,979 of 62,763 frames non-silent**. The silence was *two* ARAM buffers — the DMA filled one, the mixer read the other, and nothing noticed while only the DMA used it. **ADPCM decoded too** (F248) — peak now **10,750 of 32,767, 32.8% of full scale**, 81,072 ADPCM samples a run, 0 voices skipped. **The mixer is built and working; the remaining silence is the MOVIE STALL seen from the audio side** (F253) — the game fades its movie voice out deliberately (7FFF → 7E88 → 2A62 → … → 0) from `sd_ax_frame_callback`, because the movie is not playing. Fixing the movie fixes the sound. **The blocker is now located** (F257): against Dolphin, our sound pipeline runs a state machine the console never enters (1↔2 there, 1→2→3→4 here) and deadlocks with all four sound threads drained; the movie's ring consumer dies with it — 37 advances against the oracle's 1895. Earlier note kept: **gain, not samples** (F250): 99% of PCM samples read are non-zero and **99.2% of voice-mixes have envelope volume 0**, so only ~828 of 106,326 mixes contribute. Level/pitch not yet verified by ear |
 | 3 | GX renderer | Title screen, the Dock and the Heliport render correctly at native resolution, frame-compared against Dolphin | 2–4 months | **partly underway, not blocked.** The software rasteriser draws textured geometry, video frames and subtitles with **0 parser desyncs** and 0 texture refusals; per-stage TEV added (F242). No Vulkan backend, and nothing frame-compared against Dolphin yet. |
 | ~~4~~ | *moved to 2c, 2026-09-22* | — | — | — |
 | 5 | Saves and completeness | Game completable start to finish on both platforms | 1–2 months | blocked on 3 |
@@ -123,6 +123,23 @@ could be last. **What is now known,** established over F218–F245:
   (F240).
 - Guest video time was running **10.6× ahead** of guest audio time; correcting
   it improved streaming again (F245).
+- **The oracle now says where the pipeline goes wrong** (F257). The streamed
+  sound keeps a state byte per buffer, at a `main.dol` address — so the same
+  address in Dolphin, which is what made the comparison possible at all:
+
+      Dolphin   1 → 2 → 1 → 2 …   384 transitions in 125 s, forever
+      our port  0 → 4 → 1 → 2 → 3 → 4 → … then STUCK at 2
+
+  **The console only ever oscillates between two states. It never sets 3 or
+  4.** Ours enters both every cycle, from a jump table on message type
+  (`0x801E7C48`, types 5–16): type 5 writes 4, type 11 writes 3→4, type 16
+  reaches the claim that takes 2→3. So the port is delivering message types,
+  or an order of them, that the console does not — and that, not the mixer
+  and not the task mask, is what parks the movie.
+- Two earlier explanations are now **dead** and must not be re-proposed:
+  `MGS_AX_MODEL=0` gives a byte-identical run, so the mixer is not starving
+  the movie; and task mask `0x8` is set **after** the movie has parked, so
+  F200's "the one the movie never recovers from" is a consequence.
 
 **Two consequences for the order.** Deferring audio does not defer its cost —
 it pays it as mis-attributed *rendering* bugs, because the renderer is being

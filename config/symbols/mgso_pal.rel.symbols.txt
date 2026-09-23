@@ -99,10 +99,21 @@
 # 0 opens the movie by id (the two asserts at mpegGCN.c lines 905 and 910
 # guard the lookup and the attach), 1 waits, 2 plays, 3 ends.
 #
-# State 1 leaves only when `(*bss_55EA4)->0x3C` is non-zero, and
-# `mpeg_poll_stream_events` is what sets it - on an event whose code is 1,
-# taken from `gcn_event_poll`. That is the stall of F196: the poll returns
-# nothing at all while the task mask is non-zero.
+# State 1 leaves only when `(*bss_55EA4)->0x3C` is non-zero.
+#
+# CORRECTED (F257). This used to say `mpeg_poll_stream_events` SETS that
+# flag on a code-1 event. It does the opposite: it CONSUMES it. Watching
+# the context through a whole run shows the flag written once, by the
+# movie-start path, and cleared by `mpeg_poll_stream_events` - which also
+# writes the task's state back to 1. Two events do wake the task; a third
+# arrives while it is waiting and is taken by a second poller of the same
+# key, and the task never wakes again.
+#
+# The task mask is NOT the cause of that park, either. Every one of the
+# movie's state transitions happens while the mask is zero, and the mask
+# only goes to 8 afterwards - so F200's "the one the movie never recovers
+# from" is a consequence, not the stall. The real blocker is upstream, in
+# the streamed-sound pipeline (F257).
 .text 0x149048 0x0E0 mpeg_poll_stream_events own
 .text 0x149128 0x5CC mpeg_movie_task own
 

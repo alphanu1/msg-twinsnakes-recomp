@@ -382,3 +382,129 @@ void mgs_dump_ring(void* cpu, uint32_t ring)
                (seen[i] & 0x80u) ? "  (claimed)" : "");
     if (!distinct) printf("    no records\n");
 }
+
+/* The whole streamed-media chain, resolved rather than hardcoded.
+ *
+ * WHY THIS EXISTS. Every diagnostic in this investigation named a guest
+ * address found in an earlier run - the movie context at 0x8107F080, its
+ * task node at 0x811CDDE0, a voice's parameter block. Those are heap
+ * allocations, and they MOVE whenever behaviour changes: the retrace period,
+ * the mixer and the ARAM fix between them shifted the movie context, and a
+ * watch on the old address then reported zero writes. That reads exactly
+ * like "this never happens" and is worth nothing.
+ *
+ * Everything here is reached from the overlay's .bss instead, which is fixed
+ * for a build: the movie's context and task node from bss_55EA4/55EA8, the
+ * two record rings from bss_55BF4. So one flag gives the same picture in any
+ * run, and a moved allocation stops being a silent wrong answer.
+ */
+#define MOVIE_CTX_PTR   0x55EA4u
+#define MOVIE_NODE_PTR  0x55EA8u
+#define POOL_ARRAY      0x55BF4u
+
+void mgs_report_movie(void* cpu, uint32_t rel_bss);
+void mgs_report_movie(void* cpu, uint32_t rel_bss)
+{
+    uint32_t ctx  = mgs_module_guest_read32(cpu, rel_bss + MOVIE_CTX_PTR);
+    uint32_t node = mgs_module_guest_read32(cpu, rel_bss + MOVIE_NODE_PTR);
+    unsigned i;
+
+    printf("movie chain (overlay .bss 0x%08X):\n", rel_bss);
+    printf("  context  0x%08X", ctx);
+    if (ctx) {
+        printf("  key 0x%08X  +0x3C %u  +0x40 0x%08X  %ux%u",
+               mgs_module_guest_read32(cpu, ctx + 0x38u),
+               mgs_module_guest_read32(cpu, ctx + 0x3Cu),
+               mgs_module_guest_read32(cpu, ctx + 0x40u),
+               mgs_module_guest_read32(cpu, ctx + 0x44u),
+               mgs_module_guest_read32(cpu, ctx + 0x48u));
+    }
+    printf("\n  task     0x%08X", node);
+    if (node) {
+        uint32_t st = mgs_module_guest_read32(cpu, node + 0x44u);
+        printf("  state %u (%s)  tag 0x%08X  stream 0x%08X", st,
+               st == 0u ? "opening" : st == 1u ? "WAITING" :
+               st == 2u ? "playing" : "ending",
+               mgs_module_guest_read32(cpu, node + 0x38u),
+               mgs_module_guest_read32(cpu, node + 0x3Cu));
+    }
+    printf("\n");
+
+    for (i = 0; i < 2u; ++i) {
+        uint32_t ring = rel_bss + POOL_ARRAY + i * 0x40u;
+        printf("  ring %u   0x%08X\n", i, ring);
+        mgs_dump_ring(cpu, ring);
+    }
+}
+
+/* The guest's interrupt handler table, resolved from r13.
+ *
+ * WHY. A run stopped with `no code for that address, pc = 0x41F66F14`, and
+ * the path into it ended `__OSDispatchInterrupt+0x2FC` - the instruction
+ * after the dispatcher calls OSDisableScheduler, which is where it calls the
+ * handler it just looked up. A garbage pc reached from there means the
+ * TABLE holds garbage, not that the dispatcher is wrong.
+ *
+ * The table's address is not in the symbol map because it is a .sbss
+ * pointer, so it is read the way the SDK reads it. __OSSetInterruptHandler
+ * is seven instructions:
+ *
+ *     extsh   r0, r3
+ *     lwz     r3, -0x7D58(r13)     <- the table pointer
+ *     rlwinm  r0, r0, 2, 0, 29
+ *     add     r5, r3, r0
+ *     lwz     r3, 0(r5)
+ *     stw     r4, 0(r5)
+ *     blr
+ *
+ * so the pointer lives at r13-0x7D58 and the table is 32 entries of 4 bytes.
+ * Both the displacement and the count are read back out of the guest rather
+ * than assumed: the displacement is decoded from the instruction itself, so
+ * this keeps working if the map moves.
+ */
+#define OS_SET_INTERRUPT_HANDLER 0x8001FD18u
+#define OS_INTERRUPT_COUNT       32u
+
+void mgs_report_interrupts(void* cpu);
+void mgs_report_interrupts(void* cpu)
+{
+    uint32_t insn = mgs_module_guest_read32(cpu, OS_SET_INTERRUPT_HANDLER + 4u);
+    uint32_t r13  = mgs_module_gpr(cpu)[13];
+    int32_t  disp;
+    uint32_t slot, table;
+    unsigned i, bad = 0u;
+
+    /* lwz rD, d(rA) - d is the sign-extended low half. Check it IS a lwz
+     * off r13 before trusting it; a changed map should say so, not print
+     * confident nonsense. */
+    if ((insn >> 26) != 32u || ((insn >> 16) & 0x1Fu) != 13u) {
+        printf("interrupt table: 0x%08X+4 is not `lwz rD,d(r13)` (0x%08X); "
+               "the symbol map has moved\n", OS_SET_INTERRUPT_HANDLER, insn);
+        return;
+    }
+    disp  = (int32_t)(int16_t)(uint16_t)(insn & 0xFFFFu);
+    slot  = (uint32_t)((int32_t)r13 + disp);
+    table = mgs_module_guest_read32(cpu, slot);
+
+    printf("interrupt table: r13 0x%08X  slot 0x%08X (r13%+d)  table 0x%08X\n",
+           r13, slot, disp, table);
+    if (!table) { printf("  table pointer is null\n"); return; }
+
+    for (i = 0; i < OS_INTERRUPT_COUNT; ++i) {
+        uint32_t h = mgs_module_guest_read32(cpu, table + i * 4u);
+        const char* name;
+        if (!h) continue;
+        name = mgs_symbol_for(h);
+        /* A handler is guest code: it lives in MEM1's code range or in the
+         * overlay. Anything else is corruption, and saying so beats making
+         * the reader compare 32 hex numbers by eye. */
+        if (!(h >= 0x80003000u && h < 0x80300000u) &&
+            !(h >= 0x7E000000u && h < 0x80000000u)) {
+            printf("  [%2u] 0x%08X  *** NOT CODE ***\n", i, h);
+            ++bad;
+        } else {
+            printf("  [%2u] 0x%08X  %s\n", i, h, name ? name : "");
+        }
+    }
+    printf("  %u entr%s outside any code range\n", bad, bad == 1u ? "y" : "ies");
+}

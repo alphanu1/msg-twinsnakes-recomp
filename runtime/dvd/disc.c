@@ -1,5 +1,6 @@
 #include "disc.h"
 
+#include <errno.h>
 #include <pthread.h>
 
 #include <stdlib.h>
@@ -261,13 +262,43 @@ long mgs_disc_file_size(MgsDisc* disc, const char* path)
     return (long)len;
 }
 
+/* EVERY FAILURE SAYS WHY.
+ *
+ * This file already learned this once, for the read that fell outside every
+ * file: "READ FAILED" with no reason cost a whole investigation, because a
+ * missing file, a short read and a refused offset want completely different
+ * fixes and look identical in the log.
+ *
+ * The lesson was applied to that one path and not to the others, and the
+ * others then cost the same thing again. A run stopped with a wild jump out
+ * of __OSDispatchInterrupt; the first thing that differed from a clean run
+ * was six failed reads, and not one of them said anything - so which of
+ * fopen, fseek, the FST path or an unmounted disc had failed was
+ * unknowable, and the reads could not even be shown to be the cause.
+ *
+ * The transient ones matter most. A read that fails because the host could
+ * not open the file is not a bug in the port at all, but it diverges the
+ * guest from that point on, so it has to be distinguishable from a genuine
+ * mapping error at a glance. */
+static long disc_fail(const char* what, const char* detail, int err)
+{
+    if (err)
+        fprintf(stderr, "[disc] %s FAILED: %s: %s\n", what, detail, strerror(err));
+    else
+        fprintf(stderr, "[disc] %s FAILED: %s\n", what, detail);
+    return -1;
+}
+
 long mgs_disc_read(MgsDisc* disc, const char* path,
                    void* out, uint32_t offset, uint32_t length)
 {
     uint32_t file_off, file_len;
 
-    if (!disc->mounted || !out) return -1;
-    if (!mgs_fst_file(&disc->fst, path, &file_off, &file_len)) return -1;
+    if (!disc->mounted || !out)
+        return disc_fail("abs read", disc->mounted ? "null destination"
+                                                   : "no disc mounted", 0);
+    if (!mgs_fst_file(&disc->fst, path, &file_off, &file_len))
+        return disc_fail("path read", path, 0);
 
     /* Clamp rather than fail. The SDK's DVDRead returns a length and the game
      * checks it, so a read running off the end of a file is a short read, not
@@ -279,7 +310,7 @@ long mgs_disc_read(MgsDisc* disc, const char* path,
 
     if (disc->kind == MGS_DISC_IMAGE) {
         if (!read_at(disc->image, (long)file_off + (long)offset, out, length))
-            return -1;
+            return disc_fail("image read", path, errno);
         return (long)length;
     } else {
         char buf[1400];
@@ -288,8 +319,10 @@ long mgs_disc_read(MgsDisc* disc, const char* path,
         /* The FST path is relative to files/ on an extracted disc. */
         snprintf(buf, sizeof buf, "%s/files/%s", disc->root, path);
         f = fopen(buf, "rb");
-        if (!f) return -1;
-        if (fseek(f, (long)offset, SEEK_SET) != 0) { fclose(f); return -1; }
+        if (!f) return disc_fail("open", buf, errno);
+        if (fseek(f, (long)offset, SEEK_SET) != 0) {
+            long e = disc_fail("seek", buf, errno); fclose(f); return e;
+        }
         n = fread(out, 1, length, f);
         fclose(f);
 
@@ -322,7 +355,8 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
     if (!disc->mounted || !out) return -1;
 
     if (disc->kind == MGS_DISC_IMAGE) {
-        if (!read_at(disc->image, (long)offset, out, length)) return -1;
+        if (!read_at(disc->image, (long)offset, out, length))
+            return disc_fail("abs image read", "seek or short read", errno);
         return (long)length;
     }
 
@@ -335,7 +369,9 @@ long mgs_disc_read_abs(MgsDisc* disc, void* out, uint32_t offset, uint32_t lengt
             offset >= e.offset_or_parent + e.length_or_next)
             continue;
 
-        if (!mgs_fst_path(&disc->fst, i, path, sizeof path)) return -1;
+        if (!mgs_fst_path(&disc->fst, i, path, sizeof path))
+            return disc_fail("abs read", "the FST entry containing that "
+                             "offset has no reconstructible path", 0);
         /* NAMED BY DEFAULT, NOT BEHIND A SWITCH.
          *
          * Which file the game is reading, and where in it, is the first

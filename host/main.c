@@ -2286,6 +2286,10 @@ int main(int argc, char** argv)
                                     /* What the per-frame scheduler would
                                      * actually run. See host/heaps.c. */
                                     mgs_dump_tasks(cpu, bss);
+                                    if (getenv("MGS_REPORT_MOVIE"))
+                                        mgs_report_movie(cpu, bss);
+                                    if (getenv("MGS_REPORT_INTR"))
+                                        mgs_report_interrupts(cpu);
                                 }
                             }
                         }

@@ -85,10 +85,20 @@ static int describe_queue(void* cpu, uint32_t queue, uint32_t off)
      * it because THAT does distinguish them - a `first` that has moved is
      * proof the queue has been read from, whatever it holds at this
      * instant. */
+    /* AND A ONE-SLOT QUEUE DEFEATS THAT TEST ENTIRELY. `first` advances
+     * modulo the capacity, so for a capacity of one it is ALWAYS zero, and
+     * the rule above then reports the busiest queue in the run as one
+     * nothing was ever read from. That happened: a one-slot queue that had
+     * carried a hundred and fifty messages was read as the head of a
+     * deadlock and chased as such (F258). Say what can honestly be said
+     * about it instead, which is nothing. */
     printf("        %s queue 0x%08X: %u of %u slots used, read cursor %u%s\n",
            off ? "receive on" : "send to", mq, used, count, first,
-           used ? "" : (first ? "  <- drained (it has carried messages)"
-                              : "  <- empty, and never read from"));
+           used ? ""
+                : count == 1u
+                      ? "  <- empty; a one-slot queue's cursor cannot say more"
+                : first ? "  <- drained (it has carried messages)"
+                        : "  <- empty, and never read from");
     return 1;
 }
 

@@ -122,12 +122,31 @@ int mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit)
             fprintf(stderr, "[interrupt] no current OSContext yet; "
                             "interrupt not delivered\n");
         }
-        /* Take the cause bit back off. Leaving it set would have the guest
-         * service a stale interrupt the moment it does become ready. */
-        {
-            uint32_t cur = mgs_mmio_read(mmio, MMIO_PI + PI_INTSR, 4);
-            mgs_mmio_write(mmio, MMIO_PI + PI_INTSR, cur & ~cause_bit, 4);
-        }
+        /* THE CAUSE BIT STAYS SET. It used to be taken back off here, to
+         * avoid the guest "servicing a stale interrupt the moment it does
+         * become ready" - but that reasoning is backwards, and it
+         * contradicts the rule the next comment in this file spends a
+         * paragraph establishing. An interrupt that was raised and never
+         * delivered is not stale: it is OUTSTANDING. The device really did
+         * complete, nothing has acknowledged it, and the line is still
+         * asserted. Hardware holds it high until a handler writes the bit
+         * back, and the CPU takes it as soon as it can.
+         *
+         * The window this lands in is a THREAD SWITCH. There is no current
+         * OSContext for a few instructions between OSClearContext and the
+         * next OSSetCurrentContext, and an interrupt arriving exactly there
+         * found none and was destroyed. On hardware that window is covered
+         * by MSR[EE] being clear; our delivery checks EE separately, so we
+         * manufactured a hole the console does not have.
+         *
+         * Dropping it lost whole events. Four were destroyed in a single
+         * boot, mid-run rather than during startup, and a sound stream that
+         * had carried seventy messages then waited forever for the
+         * seventy-first (F256).
+         *
+         * Leaving it set costs nothing: mgs_interrupt_pending re-offers it
+         * on a later step, once a context exists, and does so only while
+         * `cause & mask` says the guest still has that source armed. */
         ++s_failed;
         return 0;
     }

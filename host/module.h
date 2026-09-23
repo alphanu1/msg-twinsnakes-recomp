@@ -123,6 +123,13 @@ const char* mgs_symbol_for(uint32_t addr);
 /* Walks a stream record ring and reports which tags are in it. */
 void mgs_dump_ring(void* cpu, uint32_t ring);
 
+/* The whole movie/stream chain, resolved from .bss so it survives a moved
+ * allocation. MGS_REPORT_MOVIE=1. */
+void mgs_report_movie(void* cpu, uint32_t rel_bss);
+
+/* The guest's 32 interrupt handlers, resolved from r13. MGS_REPORT_INTR=1. */
+void mgs_report_interrupts(void* cpu);
+
 /* The DSP's one observable effect: AX voices advance. See host/ax_dsp.c.
  * Called once per frame the DSP would have mixed, which is once per resume
  * mail; MGS_AX_MODEL=0 turns it off. */
