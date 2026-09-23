@@ -11985,3 +11985,46 @@ in guest time", and the whole line of reasoning that the port had a race
 only visible at speed. There was no race. There were two scheduling bugs -
 this one and the modulus of F280 - both of which happened to bite harder the
 more CPU the guest had.
+
+
+### F282 — the audio clock was forgiving its arrears, so the soundtrack fell 9% behind and kept falling
+
+The user described it exactly: "voices do match when the subtitles start...
+but a little slow with juddering and popping", and "the longer it goes on
+the worse the popping and the slower the voices". That is not an offset, it
+is an accumulating loss.
+
+One AX frame is owed per audio-DMA interrupt. The gate compared against the
+LATEST interrupt count:
+
+    if (aid == seen_sends) { no frame due }    ...    seen_sends = aid;
+
+so whenever a frame could not be produced - the resume refused, the guest
+busy - the arrears were forgiven. The next success set the mark to wherever
+`aid` had reached and the skipped blocks were never mixed.
+
+Measured over 1.8B steps:
+
+    audio DMA delivered   35,102 interrupts   (702,029 blocks, exactly 20 each)
+    AX mixer produced     31,965 frames       8.9% never made
+    sound produced         159.8 s            against 175.5 s of DMA
+                                              and 177.8 s of guest video
+
+Nine per cent of the audio was simply never generated, 5 ms at a time, for
+ever - a soundtrack that starts in sync and drifts further behind the longer
+it plays.
+
+`seen_sends` now counts frames PRODUCED rather than tracking the last
+interrupt seen, so arrears are kept and made up:
+
+    AX frames    31,965 -> 35,102     exactly one per interrupt
+    sound         159.8 s -> 175.5 s   matching the DMA
+    voice-mixes  68,862 -> 74,012
+    non-silent   96.4% of frames
+
+**Still open, and audible:** clipping at 2.42% of output samples with a peak
+of exactly 200% of full scale - about two voices at full summing - and
+5,596 starves across 74,012 voice-mixes, each a 5 ms discontinuity. Those
+are the remaining pops. The 200% peak suggests a master output volume that
+AX applies and this mixer does not; that is the next thing to find rather
+than guess at with an attenuation.

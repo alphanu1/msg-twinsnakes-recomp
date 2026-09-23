@@ -442,7 +442,7 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
          * MGS_DSP_RESUME=0 restores the old mail, for comparison.
          */
         static int resume_mail = -1;
-        static uint32_t seen_sends;
+        static uint64_t seen_sends;   /* AX frames produced, not the last AID seen */
         uint32_t mail;
         if (resume_mail < 0) {
             const char* e = getenv("MGS_DSP_RESUME");
@@ -501,7 +501,24 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
             if (!mgs_module_guest_read32(cpu, GUEST_DSP_CURR_TASK)) {
                 ++s_dsp_no_task; return 0;
             }
-            if (aid == seen_sends) { ++s_dsp_no_frame; return 0; }
+            /* A COUNT OF FRAMES PRODUCED, NOT THE LAST INTERRUPT SEEN.
+             *
+             * One AX frame per audio-DMA interrupt. Comparing against the
+             * latest `aid` means that whenever a frame is missed - the
+             * resume refused, the guest busy - the arrears are FORGIVEN:
+             * the next success sets the mark to wherever `aid` has reached
+             * and the skipped blocks are never mixed.
+             *
+             * Measured, they add up. The DMA delivered 35,102 interrupts
+             * and the mixer produced 31,965 frames: 8.9% of the audio was
+             * simply never made, which is 5 ms lost every time and a
+             * soundtrack that falls further behind the longer it plays -
+             * exactly the "voices get slower, with popping" reported.
+             *
+             * Counting instead lets it catch up: if two interrupts pass
+             * while one frame could not be delivered, the next two offers
+             * each produce one. */
+            if (seen_sends >= aid) { ++s_dsp_no_frame; return 0; }
 
             /* THE CREDIT IS SPENT WHEN THE RESUME IS DELIVERED, NOT WHEN IT
              * IS OFFERED - and this used to spend it here.
@@ -550,7 +567,7 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
                 const char* e = getenv("MGS_AX_MODEL");
                 on = !(e && e[0] == '0');
             }
-            seen_sends = (uint32_t)mgs_interrupt_aid_raised();
+            ++seen_sends;            /* one frame produced, arrears kept */
             if (on) mgs_ax_dsp_frame(cpu);
         }
         if (mail == 0xDCD10000u) { phase = 1; return 1; }
