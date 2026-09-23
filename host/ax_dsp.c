@@ -435,6 +435,30 @@ void mgs_ax_dsp_frame(void* cpu)
                         ++s_loop_empty;
                     curr = loop;
                     ++s_starved;
+                    /* AND STOP FOR THIS FRAME.
+                     *
+                     * `loop` is `end + 1` here - the console shows the same
+                     * geometry, so this is the game's real streaming
+                     * hand-off and not a misread: voice 60 in a Dolphin
+                     * snapshot reads loop 0x0000D000, end 0x0000CFFF,
+                     * loopFlag 1, with `curr` still well inside the block.
+                     *
+                     * So after jumping, `curr > end` is STILL true, and
+                     * continuing the sample loop re-entered this branch for
+                     * every remaining sample of the frame: the voice stuck
+                     * at one position repeating a sample, and the overrun
+                     * counter read 388,532 against 36,720 voice-mixes -
+                     * about seventeen per frame, where a real block boundary
+                     * can only happen once. That is the "voices cut out, the
+                     * full sample is not played" the user reported.
+                     *
+                     * A voice whose queued block is exhausted has nothing to
+                     * play until the game extends `end`, and what hardware
+                     * emits then is silence, not the last sample over and
+                     * over. Leaving `curr` at `loop` is what the engine
+                     * watches to decide the block was consumed (F249), so
+                     * the refill still gets its signal. */
+                    break;
                 } else {
                     /* A one-shot voice that reaches its end stops, and
                      * `__AXServiceVPB` copies that state back to the game. */
