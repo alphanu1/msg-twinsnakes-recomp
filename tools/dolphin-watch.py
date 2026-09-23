@@ -223,7 +223,22 @@ def main():
     binary = os.environ.get('DOLPHIN_BIN', 'dolphin-emu-nogui')
     platform = os.environ.get('DOLPHIN_PLATFORM', 'headless')
     video = os.environ.get('DOLPHIN_VIDEO', 'Null')
-    argv = ['flatpak', 'run', '--command=/app/bin/' + binary,
+    # --die-with-parent IS THE ONLY CLEANUP THAT SURVIVES A SIGKILL.
+    #
+    # The signal handlers below cover an orderly exit, and they work. What
+    # they cannot cover is this process being killed outright - a `timeout`
+    # that escalates, a shell tearing down a background job, Ctrl-C twice -
+    # and then the emulator is left running with nothing holding it. That
+    # happened again tonight: three dolphin-emu-nogui processes still
+    # running after the watcher was gone, which is the exact complaint this
+    # file's shutdown code was written for.
+    #
+    # flatpak's own flag makes the sandbox die with its launcher, in the
+    # kernel, with no cooperation needed from us. Belt and braces: the
+    # handlers stay, because they also reap on a NORMAL exit rather than
+    # waiting for process teardown.
+    argv = ['flatpak', 'run', '--die-with-parent',
+            '--command=/app/bin/' + binary,
             '--filesystem=home', 'org.DolphinEmu.dolphin-emu']
     if platform:
         argv += ['-p', platform]

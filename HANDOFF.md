@@ -12512,3 +12512,51 @@ cannot: the question "have these bytes changed" has the answer "yes" every
 frame, and the right answer is "that does not matter". This is what the hash
 was blind to by accident before F291 fixed its stride, which is why the
 picture looked better while the video was frozen - two faults cancelling.
+
+### F294 — the oracle says our field rate and frame rate are already right
+
+Dolphin boots the extracted disc through `sys/main.dol` - it will not take
+the directory itself ("Could not recognize file"), which is worth knowing
+because it is the only way to run the oracle without building an ISO.
+
+    Dolphin   retrace counter 0x8027DD6C: 3,062 in 60.7s  =  50.4 /s
+    port      retrace ticks 8,890 in 175.51s              =  50.6 /s
+
+PAL's 50 Hz field rate, matched. And the game's own frame rate:
+
+    port      4,431 EFB copies in 175.51s                 =  25.2 /s
+
+which is 50 Hz halved - one drawn frame shown for two fields, which is what
+this game does on PAL. So "the game runs too slowly" is not a fault we have;
+an earlier reading of 15.7 fps was my arithmetic, taken from the last line
+of a sampled trace rather than from the total in the exit report.
+
+**What the oracle could NOT answer, and why.** The movie plane addresses
+(0x8120A0C0 and 0x811CE0C0) are ours, from our heap; watching them in
+Dolphin gave 3 changes in 300 seconds, because its heap puts the planes
+somewhere else. Comparing the movie's rate against the oracle needs those
+addresses found in Dolphin first - `@path` dumps MEM1 at a chosen second and
+a 512x320 I8 plane is findable in it. Not done.
+
+**What not to re-propose:** watching a heap address in Dolphin that was
+derived from our run. Fixed MEM1 addresses (the SDK's variables) transfer;
+allocations do not.
+
+### F295 — the emulator leak came back, and the fix that holds is flatpak's own
+
+Three `dolphin-emu-nogui` processes were left running tonight, which is the
+exact complaint the shutdown code in `dolphin-watch.py` was written for. The
+handlers are not wrong - they cover an orderly exit and they work. What they
+cannot cover is the watcher being SIGKILLed, and a background job torn down
+by the shell is exactly that.
+
+`flatpak run --die-with-parent` makes the sandbox die with its launcher, in
+the kernel, needing no cooperation from us. Tested by SIGKILLing the watcher
+and checking: nothing left. The handlers stay, because they also reap on a
+normal exit instead of waiting for teardown.
+
+**Note for anyone killing these by hand:** `/usr/bin/dolphin` is KDE's FILE
+MANAGER. `pkill dolphin` takes the user's file manager with it. The emulator
+is `dolphin-emu-nogui`, and `pgrep -x` is the way (the kernel truncates comm
+to 15 characters, so `-x dolphin-emu-nogui` matches nothing - it compares
+against "dolphin-emu-nog").
