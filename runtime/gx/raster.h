@@ -86,6 +86,15 @@ typedef struct MgsGxRaster {
     unsigned  col_tex[3], col_tex_a;
     int       col_watch;
     int       scissor_box[4], scissor_seen;
+    /* Diagnostics, read once at init like every other option here. */
+    const char* dump_composite;
+    const char* dump_drawseq;
+    unsigned    trace_tevcfg;
+    unsigned    trace_drawh;
+    int         trace_drawh_set;
+    int         trace_drawall, trace_drawnoise;
+    int         trace_drawcolour;
+    unsigned    trace_drawcolour_from;
     unsigned* noise_said;
     uint32_t  noise_tex_addr;
     uint8_t   noise_tex_fmt;

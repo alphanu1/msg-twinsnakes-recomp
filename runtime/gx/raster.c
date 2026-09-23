@@ -52,6 +52,29 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->no_depth = getenv("MGS_NO_DEPTH") != NULL;
     r->trace_preload = getenv("MGS_TRACE_PRELOAD") != NULL;
     r->trace_texuse = getenv("MGS_TRACE_TEXUSE") != NULL;
+    /* The diagnostics added while chasing the video faults, read ONCE like
+     * everything else here. Called per draw they were thousands of string
+     * lookups a frame, which is a measurable cost to leave behind in a
+     * renderer that was profiled down to 10.6s. */
+    r->dump_composite = getenv("MGS_DUMP_COMPOSITE");
+    r->trace_drawnoise = getenv("MGS_TRACE_DRAWNOISE") != NULL;
+    r->trace_drawall = getenv("MGS_TRACE_DRAWALL") != NULL;
+    r->dump_drawseq = getenv("MGS_DUMP_DRAWSEQ");
+    {
+        const char* e = getenv("MGS_TRACE_TEVCFG");
+        r->trace_tevcfg = (e && *e) ? (unsigned)strtoul(e, NULL, 0) : 0u;
+    }
+    {
+        const char* e = getenv("MGS_TRACE_DRAWH");
+        r->trace_drawh = (e && *e) ? (unsigned)strtoul(e, NULL, 0) : 0u;
+        r->trace_drawh_set = e != NULL;
+    }
+    {
+        const char* e = getenv("MGS_TRACE_DRAWCOLOUR");
+        r->trace_drawcolour = e != NULL;
+        r->trace_drawcolour_from = (e && *e) ? (unsigned)strtoul(e, NULL, 0)
+                                             : 0u;
+    }
     {
         const char* e = getenv("MGS_TRACE_RASTER");
         r->trace = e != NULL;
@@ -1235,9 +1258,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              *
              * Rule 8: game data. Scratchpad only, never the tree. */
             if (tex && stage_n >= 3u && tex->height == 320u &&
-                getenv("MGS_DUMP_COMPOSITE")) {
+                r->dump_composite) {
                 static unsigned done;
-                const char* dir = getenv("MGS_DUMP_COMPOSITE");
+                const char* dir = r->dump_composite;
                 if (done < 2u) {
                     unsigned k;
                     char path[512];
@@ -1270,10 +1293,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * composite is three stages over a luma plane and two chroma
              * planes, and "the colour is wrong" cannot be narrowed without
              * seeing what those stages were asked to compute. */
-            if (tex && getenv("MGS_TRACE_TEVCFG")) {
+            if (tex && r->trace_tevcfg) {
                 static unsigned shown;
-                unsigned want = (unsigned)strtoul(getenv("MGS_TRACE_TEVCFG"),
-                                                  NULL, 0);
+                unsigned want = r->trace_tevcfg;
                 if (tex->height == want && shown < 6u) {
                     MgsTevCompiled tc;
                     unsigned st;
@@ -1348,22 +1370,20 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * presents the finished frame binds a 512x448 surface. Watching
              * both at once buries whichever is being asked about. */
             {
-                const char* wh = getenv("MGS_TRACE_DRAWH");
-                unsigned want_h = (wh && *wh) ? (unsigned)strtoul(wh, NULL, 0)
-                                              : 0u;
+                unsigned want_h = r->trace_drawh;
                 /* MGS_TRACE_DRAWALL widens this to EVERY draw, textured
                  * or not. The big-texture filter was hiding the answer: a
                  * room's background can be untextured geometry, and a
                  * full-screen tint can come from a draw that binds nothing
                  * at all. Sampling is coarser here because this runs around
                  * thousands of draws a frame rather than a handful. */
-                r->col_watch = getenv("MGS_TRACE_DRAWALL")
+                r->col_watch = r->trace_drawall
                     ? 1
                     : (tex && tex->width >= 256u &&
                        (want_h ? tex->height == want_h
                                : tex->height >= 256u));
             }
-            if (r->col_watch && getenv("MGS_TRACE_DRAWCOLOUR")) {
+            if (r->col_watch && r->trace_drawcolour) {
                 unsigned yy, xx3, cnt = 0u;
                 unsigned long sr = 0, sg = 0, sb = 0;
                 for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
@@ -1410,7 +1430,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * away the arm the luma bind had just made, and the composite
              * draws never reported at all. The end of the draw disarms. */
 
-            if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWNOISE")) {
+            if (tex && tex->width >= 256u && r->trace_drawnoise) {
                 static unsigned said;
                 unsigned yy, xx2, cnt = 0u, before = 0u;
                 for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
@@ -1515,7 +1535,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     }
 
     if (r->composite_dump) {
-        const char* dir = getenv("MGS_DUMP_COMPOSITE");
+        const char* dir = r->dump_composite;
         char path[512];
         FILE* f;
         snprintf(path, sizeof path, "%s/efb_%u.ppm", dir ? dir : ".",
@@ -1563,14 +1583,12 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * the balance. Which draw first introduces the cast cannot be
              * seen from the ones that worsen it - by then it is circulating
              * through the copy that feeds the next frame. */
-            const char* from = getenv("MGS_TRACE_DRAWCOLOUR");
-            unsigned f0 = (from && *from) ? (unsigned)strtoul(from, NULL, 0)
-                                          : 0u;
+            unsigned f0 = r->trace_drawcolour_from;
             unsigned fr = (unsigned)r->efb->copies;
             /* With MGS_TRACE_DRAWH naming one kind of draw, report every
              * one of them: the question is then what that draw does, not
              * which draw to look at. */
-            if ((getenv("MGS_TRACE_DRAWH")
+            if ((r->trace_drawh_set
                  || (f0 && fr >= f0 && fr < f0 + 400u)
                  || (!f0 && now - was > 12))
                 && said < 400u) {
@@ -1579,11 +1597,11 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                  * colour means said the picture was purple; they cannot say
                  * that it is purple in a band with a hard edge, which is a
                  * geometry fault and not an arithmetic one. */
-                if (getenv("MGS_DUMP_DRAWSEQ")) {
+                if (r->dump_drawseq) {
                     char path[512];
                     FILE* f;
                     snprintf(path, sizeof path, "%s/draw_%02u.ppm",
-                             getenv("MGS_DUMP_DRAWSEQ"), said);
+                             r->dump_drawseq, said);
                     f = fopen(path, "wb");
                     if (f) {
                         unsigned yy2, xx4;
