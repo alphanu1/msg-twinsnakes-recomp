@@ -11140,3 +11140,66 @@ request, and the comment above it says why.
 WAITING. It does mean the game no longer dies at random a few million steps
 in, which is the difference between a port that can be tested and one that
 cannot.
+
+
+### F265 — the movie stall is ONE MISSING EVENT, and the console sits in our "stalled" state for 35 seconds first
+
+The whole stall reduces to a single word. `mpeg_movie_task` in state 1 does
+nothing but poll; `mpeg_poll_stream_events` does not generate a wake, it
+**copies `ctx+0x40` into `ctx+0x3C`** and resets `+0x40` to -1:
+
+    lwz   r0, 0x40(r4)
+    cmpwi r0, -1
+    beq   skip              ; nothing pending
+    stw   r0, 0x3C(r4)
+
+and the task leaves state 1 only when `+0x3C` is NON-ZERO. `+0x40` is filled
+by the event handler at `0x7F151E70`, which reads `payload[0]` as a code:
+
+    code == 1  ->  +0x40 = 1     the task wakes
+    code == 0  ->  +0x40 = 0     nothing happens
+
+**The entire wake-up history of a 200M-step run is five writes:** the
+start kick (`+0x3C = 1`), its consumption, one **code-0** event, and the
+poll resetting `+0x40`. No code-1 event ever arrives.
+
+**The oracle shows what should happen, and it is not what I assumed.**
+Walking Dolphin's movie ring over 140 s:
+
+    30.1s   321 records   0xE:321            <- IDENTICAL to our stalled state
+    65.2s   292 records   0x0:1  0xE:291     <- consumption starts
+    75.2s   127 records   0xE:126  0x8E:1    <- records claimed (0x80|0x0E)
+
+and its movie context at the same moments:
+
+    25.2s  +0x3C = 1      movie start
+    25.3s  +0x40 = 0      a code-0 event    <- we get this one too
+    64.2s  +0x40 = 1      a CODE-1 EVENT    <- we never get this
+    64.2s  +0x3C = 1      the task wakes
+
+**So the console spends about 35 seconds in exactly the state we are stuck
+in** - 321 tag-0xE records queued, task waiting, ring full - and then one
+code-1 event releases it. Our port waits ~190 s of guest time and never gets
+it.
+
+**Two readings corrected along the way, both mine, both from this session:**
+
+- *"Ring 1 is stuck and ring 0 is the live one."* Ring 1 looks stuck on the
+  console too, for 35 seconds. A full ring of unconsumed records is the
+  NORMAL pre-roll state, not evidence of starvation.
+- *"State 1 is the normal playing state, the stream does the work."* No: the
+  ring is not consumed at all during state 1. State 2 is where the records
+  are claimed and freed.
+
+**And one dead end, recorded so it is not walked again.** `ring+0x30` is 1 on
+the console and 0 here, and it gates the stream reaching its state 2 - but
+that word is set when the producer meets a record tagged `0xF0`,
+end-of-stream, and the stream's state 2 is an ENDING state. Dolphin reads 1
+there because its intro movie has finished by 150 s. It is a difference of
+*when*, not of behaviour. **Do not chase `ring+0x30`.**
+
+**Next: what posts a code-1 event for key `0x006647BA`.** Events are posted
+through `0x7F0FD204`, 65 times in a run, every one of them from
+`0x7F011DF0` - inside `fn_1_9CB0`, a script opcode handler with no `bl`
+callers (F253). So the question is what the script is waiting for, roughly
+35 seconds of console time after the movie opens.
