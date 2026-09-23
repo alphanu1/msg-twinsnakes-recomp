@@ -235,6 +235,7 @@ static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
 static uint64_t s_vol_zero, s_mix_zero;
 static uint64_t s_loop_has_data, s_loop_empty;
 static int      s_peak;
+static uint64_t s_clipped, s_out_samples;
 static int      s_trace = -1;
 static unsigned s_traced, s_ovr_logged;
 
@@ -464,8 +465,17 @@ void mgs_ax_dsp_frame(void* cpu)
         if (m || n) { ++s_nonzero_frames; break; }
     }
 
+    /* HOW MUCH IS CLIPPED, not just how loud the loudest sample was.
+     *
+     * A peak above full scale says the mix clipped SOMEWHERE; it cannot say
+     * whether that was one sample in a run or one in three, and those are a
+     * tuning note and a bug respectively. The peak read 200% as soon as most
+     * frames stopped being silent (F268), so the count decides which. */
     for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
         int32_t l = acc_l[i], r = acc_r[i];
+        ++s_out_samples;
+        if (l > 32767 || l < -32768) ++s_clipped;
+        if (r > 32767 || r < -32768) ++s_clipped;
         if (l > 32767) l = 32767; if (l < -32768) l = -32768;
         if (r > 32767) r = 32767; if (r < -32768) r = -32768;
         out[i * 2u] = (int16_t)l;
@@ -512,4 +522,8 @@ void mgs_ax_dsp_report(void)
            "%llu underruns\n",
            (unsigned long long)pushed, (unsigned long long)dropped,
            (unsigned long long)under);
+    printf("  clipping: %llu of %llu output samples clipped (%.2f%%)\n",
+           (unsigned long long)s_clipped, (unsigned long long)s_out_samples,
+           s_out_samples ? 100.0 * (double)s_clipped / (double)s_out_samples
+                         : 0.0);
 }

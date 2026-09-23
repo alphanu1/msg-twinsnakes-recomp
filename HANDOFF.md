@@ -11356,7 +11356,18 @@ its proper rate.** Every conclusion in F257, F262 and F265 that rests on
 "the ring is full and nothing consumes it" is a measurement taken before the
 game had had the steps to consume it, and should be read that way.
 
-**What it exposes:** the mix now clips hard - `peak 65532 of 32767`, 200% of
-full scale, where the peak is tracked before the clamp. With most frames
-silent that was invisible; with 65% of them audible it will be audible too.
-Next thing to chase on the audio side.
+**What it exposes:** the mix now clips - `peak 65532 of 32767`, 200% of full
+scale, where the peak is tracked before the clamp. With most frames silent
+that was invisible; with 65% of them audible it is not.
+
+**Measured before acting on it**, because a peak says the mix clipped
+somewhere and cannot say whether that is one sample in a run or one in
+three - a tuning note and a bug respectively. A clipped-sample count now
+sits beside the peak, and over 600M steps it reads:
+
+    clipping: 11,256 of 3,719,680 output samples (0.30%)
+
+So it is the tuning note: rare peaks in busy moments, audible as occasional
+crackle, not gross distortion. Left as a measured figure rather than
+"fixed" by a guessed master volume - AX does apply an output volume we do
+not model, and that is the right place to look if 0.3% turns out to matter.
