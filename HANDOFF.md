@@ -11142,7 +11142,7 @@ in, which is the difference between a port that can be tested and one that
 cannot.
 
 
-### F265 — RETIRED by F268: the event was not missing, it was not due yet
+### F265 — the movie stall is ONE MISSING EVENT (RETIREMENT WITHDRAWN - see F270)
 
 The whole stall reduces to a single word. `mpeg_movie_task` in state 1 does
 nothing but poll; `mpeg_poll_stream_events` does not generate a wake, it
@@ -11347,14 +11347,10 @@ chunk. Thirty-two would be nearly four hundred, which is not.
     rate  8   movie.dat 73 reads in  395 s                  (4.6x the rate)
     rate  8   11 files read, against 9
 
-**And it retires F265.** That finding concluded the movie stall was "one
-missing code-1 event", from a 200M-step run. It was not missing, it was not
-due yet: at 2B steps the movie streams 73 chunks, the context is created and
-torn down normally, and the engine moves on to `shared/audio/stream/0058L`
-and `0058R`. **The movie was never stalled - it was being run at a sixth of
-its proper rate.** Every conclusion in F257, F262 and F265 that rests on
-"the ring is full and nothing consumes it" is a measurement taken before the
-game had had the steps to consume it, and should be read that way.
+**It does NOT retire F265, and the claim here that it did was wrong (see
+F270).** What 2B steps showed was `movie.dat` being READ - the producer
+filling the ring - and that was mistaken for the movie playing. The consumer
+is a different thing and is still stalled.
 
 **What it exposes:** the mix now clips - `peak 65532 of 32767`, 200% of full
 scale, where the peak is tracked before the clamp. With most frames silent
@@ -11422,3 +11418,52 @@ the new `end`, and which of the four queues the time is spent in.
 waiting. The data is not there yet by construction - the game fills then
 extends - so that reads unwritten ARAM, which is the behaviour already
 recorded and rejected in the comment above this code.
+
+
+### F270 — the movie DECODES CORRECTLY and is still stalled; I retired F265 on the wrong measurement
+
+The user reported it exactly: "no movie frames advance", a wash of colour
+that clears, and "movie time continues". All three are now accounted for.
+
+**The decode works.** The movie's planes are sampled every frame, with no
+refusals, and they are what they should be - YUV 4:2:0, double-buffered, at
+the movie's own 512x320:
+
+    0x8120A0C0  I8  512x320   luma      0x811CE0C0  I8  512x320
+    0x812320C0  I8  256x160   chroma U  0x811F60C0  I8  256x160
+    0x8123C0C0  I8  256x160   chroma V  0x812000C0  I8  256x160
+
+and they hold a real picture: luma 0x23/0x25, chroma 0x88/0x77 - a dark
+frame with near-neutral chroma. Converting that by hand gives RGB(22,39,49),
+and the composited surface reads RGB(0,30,39). **So the decoder, the planes
+and the TEV composite are all working.** The flat wash on screen is one
+correctly-decoded dark frame, held.
+
+**It is held because the consumer runs twice in a 900M-step run:**
+
+    ring 1 write cursor advances  1272     (records produced)
+    ring 1 read  cursor advances    48     (records consumed)
+    movie task state changes         4     (0->2, 2->1, 1->2, 2->1)
+
+`mpeg_movie_task` decodes only in state 2, it enters state 2 twice, and about
+24 records go through on each visit. That is roughly 0.2 frames a second
+against the 15-30 it should run at, which is "no frames advance" precisely,
+while the clock - slaved to the sound position - carries on.
+
+**So F265 was right and I retired it on a bad inference.** F268 saw
+`movie.dat` reach 73 reads at 2B steps and concluded the movie was streaming
+and therefore never stalled. `movie.dat` reads are the PRODUCER filling the
+ring. The consumer is `mpeg_movie_task`, and it was stalled the whole time.
+Producer throughput is not playback, and the ring's own cursors say so in
+one line: 1272 in, 48 out.
+
+**What F268 did fix stands** - the guest clock was four times too fast, the
+game rendered at 6 fps, and audible audio went from 2% of frames to 65%.
+That is real and separate. Only the claim about the movie was wrong.
+
+**So the open question is the one F265 named**: what posts an event with
+`payload[0] == 1` for key `0x006647BA`. Established so far: every one of the
+65 events a run posts carries code 0, all from the script opcode handler at
+`0x7F011DF0`; the console gets a code-1 at 64.2 s and the task wakes; and
+the broadcast subsystem that would post code 1 is instantiated on neither
+side (F267).
