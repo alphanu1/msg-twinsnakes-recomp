@@ -584,6 +584,30 @@ void mgs_ax_dsp_frame(void* cpu)
         out[i * 2u] = (int16_t)l;
         out[i * 2u + 1u] = (int16_t)r;
     }
+    /* MGS_AUDIO_WAV=<path>: the mixed output, so it can be JUDGED.
+     *
+     * Every audio measurement in this file until now has been a count -
+     * frames, voice-mixes, starves - and a count cannot say whether the
+     * result sounds right. The faults actually reported (words breaking
+     * into pieces, a soundtrack drifting slower) were audible long before
+     * any counter noticed them, and one of them could not be seen headless
+     * at all (F284).
+     *
+     * A file can be measured: silence runs, sample-to-sample discontinuities
+     * and clipping are exactly the artefacts those faults produce, and
+     * tools/check-audio.py reports them. Raw 16-bit stereo; the header is
+     * written by the checker, so a truncated run still leaves a readable
+     * file. */
+    {
+        static FILE* wav = NULL;
+        static int tried = 0;
+        if (!tried) {
+            const char* path = getenv("MGS_AUDIO_WAV");
+            tried = 1;
+            if (path && *path) wav = fopen(path, "wb");
+        }
+        if (wav) fwrite(out, sizeof(int16_t) * 2u, AX_FRAME_SAMPLES, wav);
+    }
     mgs_audio_push(out, AX_FRAME_SAMPLES);
 }
 
