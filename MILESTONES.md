@@ -593,6 +593,23 @@ This is the project. ~200 functions and the widest error bars in the plan.
       and a second copy issued before the hook replaced the first: **2,464 of
       9,350 copies dropped**. They now run where the command sits in the
       stream.
+- [x] **The texture cache went blind, and the video had frozen** (F291). Its
+      content hash sampled on a stride of `bytes / 4096`, which at 512x448
+      RGBA8 is 224 - a multiple of the 64-byte tile - so the walk only ever
+      read the alpha and green of texel 0 of the tiles it touched, and the
+      alpha was constant. The hash sat at one value for hundreds of lookups
+      while a plain sum of the same memory moved; one decode was served for
+      the whole scene. An odd stride is coprime with every power of two.
+      Decodes of that buffer **1 -> 946**. `tests/test_texture.c` covers it
+      and fails on 62 of 64 tile offsets with the old stride.
+- [x] **A texture built by an EFB copy is validated by which copy made it**
+      (F292, F293). The game copies its frame both to a texture and to the
+      framebuffer through one buffer, which is legal because the graphics
+      processor serves textures from its own memory - so main memory holds
+      YUV 4:2:2 while the texture still reads as texels. Reading main memory
+      at each bind gave smooth PURPLE, which every roughness-based metric
+      called fine. Frames measurably purple **33% -> 10%**; the rest is not
+      yet explained.
 - [x] **Dynamically updated textures** (F156). The cache keyed on address and
       never looked at the contents, and nothing invalidated it, so a texture
       rewritten in place was served stale for the life of the run — which

@@ -31,6 +31,7 @@
 
 typedef struct MgsTexture {
     uint64_t hash;           /* of the encoded bytes: contents, not address */
+    uint32_t efb_serial;     /* the EFB copy that produced these texels, or 0 */
     uint32_t addr;            /* guest address the texels came from */
     uint32_t format;
     uint16_t width, height;
@@ -82,6 +83,14 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
  * 0 clamp, 1 repeat, 2 mirror. */
 uint32_t mgs_tex_sample(const MgsTexture* t, float u, float v,
                         unsigned wrap_s, unsigned wrap_t, int bilinear);
+
+/* An EFB copy has deposited texels at this address.
+ *
+ * The graphics processor serves textures out of its own memory, and a copy
+ * to the framebuffer does not disturb them. Only another copy to the same
+ * place does. Saying so here is what lets the cache keep serving texels that
+ * main memory no longer holds - which is what the hardware does. */
+void mgs_tex_note_efb_copy(uint32_t addr);
 
 extern uint64_t mgs_gx_seq;
 

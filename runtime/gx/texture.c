@@ -241,6 +241,54 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
  * read as one sequence. Diagnostic only; nothing branches on it. */
 uint64_t mgs_gx_seq;
 
+/* WHICH ADDRESSES HOLD TEXELS AN EFB COPY PUT THERE.
+ *
+ * The content hash asks "have these bytes changed", and for a texture the
+ * game builds with an EFB copy that is the wrong question. The game copies
+ * the finished frame BOTH to a texture and to the framebuffer, and it uses
+ * the same memory for both - which is legal, because on hardware the texture
+ * unit reads its own memory and a copy to the framebuffer does not reach it.
+ * Main memory ends up holding YUV 4:2:2 while the texture still reads as
+ * texels.
+ *
+ * Reading main memory at every bind instead, we saw the YUV: decoded as
+ * RGBA8 it is smooth and PURPLE, which is what the whole frame turned. The
+ * measured sequence for one buffer ends
+ *
+ *     ... F T T D F T T D F D T T D F D T T D F D ...
+ *              (F = framebuffer copy, T = texture copy, D = decode)
+ *
+ * and those `F D` pairs - a framebuffer copy and then a bind, with no
+ * texture copy between - are the corrupted frames.
+ *
+ * So a texture whose texels came from an EFB copy is validated by WHICH
+ * COPY made it, not by what main memory says now. A serial per address,
+ * bumped by each copy there; ordinary textures keep the content hash,
+ * because those really are changed by writing to them. */
+static struct { uint32_t addr, serial; } s_efb_copy[32];
+static unsigned s_efb_copy_n;
+
+void mgs_tex_note_efb_copy(uint32_t addr)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr) { ++s_efb_copy[i].serial; return; }
+    if (s_efb_copy_n < 32u) {
+        s_efb_copy[s_efb_copy_n].addr = addr;
+        s_efb_copy[s_efb_copy_n].serial = 1u;
+        ++s_efb_copy_n;
+    }
+}
+
+static uint32_t efb_serial(uint32_t addr)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr) return s_efb_copy[i].serial;
+    return 0u;
+}
+
+
 /* ---- the cache --------------------------------------------------------- */
 
 void mgs_tex_cache_init(MgsTexCache* c)
@@ -349,6 +397,7 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     uint16_t* palette = NULL;
     uint16_t palette_copy[16384];
     uint64_t hash;
+    uint32_t serial;
     MgsTexture* reuse = NULL;
 
     /* FIVE DIFFERENT REFUSALS SHARED ONE COUNTER, which made "2,964 refused"
@@ -365,7 +414,13 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         ++c->refused; ++c->refused_texels; return NULL;
     }
 
-    {
+    serial = efb_serial(addr);
+    if (serial) {
+        /* Validated by the copy that made it. Hashing main memory here
+         * would not just be wasted - it would be asking the wrong
+         * question, and getting a wrong answer every frame. */
+        hash = 0u;
+    } else {
         unsigned nbytes = texture_bytes(format, width, height);
         const uint8_t* src = nbytes ? guest_ptr(mem, addr, nbytes) : NULL;
         hash = src ? content_hash(src, nbytes) : 0u;
@@ -404,7 +459,7 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         if (e->valid && e->addr == addr && e->format == format &&
             e->width == width && e->height == height &&
             e->tlut_addr == tlut_addr && e->tlut_format == tlut_format) {
-            if (e->hash == hash) {
+            if (serial ? (e->efb_serial == serial) : (e->hash == hash)) {
                 e->generation = ++c->clock;
                 ++c->hits;
                 {   /* A hit on a watched buffer is as interesting as a miss:
@@ -658,6 +713,7 @@ no_dump:
         }
     }
     t->hash = hash;
+    t->efb_serial = serial;
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;
     t->tlut_addr = tlut_addr; t->tlut_format = tlut_format;

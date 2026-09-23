@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include "efb.h"
 
+#include "texture.h"
+
 #include <string.h>
 
 void mgs_efb_init(MgsEfb* efb)
@@ -285,6 +287,11 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
      * test one can write.
      *
      * Recorded here and tested on the framebuffer side, reported once. */
+    /* Tell the texture cache this copy happened. What it deposited here is
+     * what the graphics processor will serve until another copy replaces it,
+     * whatever else writes this memory in the meantime. */
+    mgs_tex_note_efb_copy(efb->copy_dest);
+
     mgs_efb_note_tex_range(efb->copy_dest,
                            efb->copy_dest +
                            ((height + th - 1u) / th) *

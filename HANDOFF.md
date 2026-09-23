@@ -12424,3 +12424,44 @@ exactly, giving 917,504 bytes for a 512x448 RGBA8 copy and 458,752 for the
 display copy. On that reading the game aims both at 0x80066480, and the
 second destroys the first. Hardware would do the same, so something in this
 reading is still wrong.
+
+### F293 — a texture built by an EFB copy is validated by WHICH COPY made it, not by what memory says now
+
+This is the answer to F292's open question, and it is about hardware, not
+about our arithmetic: the sizes and addresses were right all along.
+
+The game copies its finished frame BOTH to a texture and to the framebuffer,
+through the same memory. That is legal on a GameCube, because the graphics
+processor serves textures out of its own memory and a copy to the
+framebuffer does not reach it. Main memory ends up holding YUV 4:2:2 while
+the texture unit still reads texels.
+
+Reading main memory at every bind, we saw the YUV - and decoded as RGBA8 it
+is SMOOTH and PURPLE, which is why every metric based on roughness said the
+picture was fine. The measured event sequence for one buffer ends:
+
+    ... F T T D  F T T D  F D T T D  F D T T D  F D ...
+         (F = framebuffer copy, T = texture copy, D = decode)
+
+Early on every decode follows a texture copy and is correct. Later the `F D`
+pairs appear - a framebuffer copy and then a bind, with no texture copy
+between - and those are the corrupted frames. The pattern is the fault,
+stated in one line.
+
+So the cache now validates such a texture by a SERIAL bumped on each EFB
+copy to that address, and keeps the content hash for ordinary textures,
+which really are changed by writing to them.
+
+    frames measurably purple (R+B > 2G+20):   33%  ->  10%
+
+**Not finished.** One in ten frames is still purple. The remaining ones are
+not explained yet, and there is a loose end worth following: the game binds
+a CMPR texture at 0x800EA680, which is 0x200 INTO the 0x800EA480 surface an
+EFB copy writes 917,504 bytes to. Either those are two uses of one buffer
+separated in time, or a copy is landing where an art asset lives.
+
+**What not to re-propose:** making the content hash cover this case. It
+cannot: the question "have these bytes changed" has the answer "yes" every
+frame, and the right answer is "that does not matter". This is what the hash
+was blind to by accident before F291 fixed its stride, which is why the
+picture looked better while the video was frozen - two faults cancelling.

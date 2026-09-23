@@ -308,7 +308,20 @@ static void run_copy(uint32_t cmd)
                                   : 0u;
                 if (watch == -1) { const char* e = getenv("MGS_TRACE_BUF");
                                    watch = e ? (long)strtoul(e, NULL, 0) : 0; }
-                if (watch && (uint32_t)watch == d)
+                /* Any copy that TOUCHES the watched buffer, not only one
+                 * that starts at it. The two framebuffers and the two
+                 * texture surfaces have different bases and overlapping
+                 * extents, so "same address" misses exactly the collision
+                 * worth seeing. 0xE0000 is a 512x448 RGBA8 surface. */
+                if (watch && d && d < (uint32_t)watch + 0xE0000u &&
+                    (uint32_t)watch < d + (copy_h * (stride << 5)))
+                    fprintf(stderr, "[buf] %6llu  %s overlaps 0x%08X: "
+                            "0x%08X..0x%08X\n",
+                            (unsigned long long)++mgs_gx_seq,
+                            (cmd & COPY_TO_XFB) ? "framebuffer" : "texture   ",
+                            (uint32_t)watch, d,
+                            d + copy_h * (stride << 5));
+                else if (watch && (uint32_t)watch == d)
                     fprintf(stderr, "[buf] %6llu  COPY   0x%08X %ux%u "
                             "fmt 0x%X  %s\n",
                             (unsigned long long)++mgs_gx_seq, d,
