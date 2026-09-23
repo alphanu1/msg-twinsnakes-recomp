@@ -11723,7 +11723,7 @@ parked), and the mixer's overrun handling (two variants tried, both measured,
 both reverted, F274).
 
 
-### F276 — PARTLY WRONG (see F279): 25 fps was not the target; the console renders 13
+### F276 — SUPERSEDED by F281: there was no rate dependence, only two scheduling bugs
 
 Measured over the SAME 178 s of guest video each time (the step budget is
 scaled so the guest clock covers the same span):
@@ -11797,7 +11797,7 @@ in the game, which needs the two compared at EQUAL guest time - the
 comparison that was running when this was written.
 
 
-### F278 — at the correct frame rate the game never starts the demo, and the two runs are identical until it does
+### F278 — SUPERSEDED by F281: the demo failure was a thrown-away DSP resume, not a frame-counted race
 
 Comparing `MGS_TICK_RATE=8` and `=4` at **equal guest time** (355 s each, the
 step budget scaled so the guest clock covers the same span):
@@ -11932,3 +11932,56 @@ never a modulus, because the modulus silently becomes `lcm(k, N)`.
 **It does not fix rates 4 and 2**, which still collapse to 952 and 636
 voice-mixes with correct offer counts (219,566). So there is a second,
 independent cause there, and it is not the hook scheduling.
+
+
+### F281 — a DSP resume the guest could not take was thrown away, and that was the whole "it breaks when the CPU is fast"
+
+One resume is one AX frame, gated one per audio-DMA interrupt by a
+`seen_sends` credit. That credit was spent - and the AX frame mixed - BEFORE
+the interrupt was raised:
+
+    if (aid == seen_sends) { ++s_dsp_no_frame; return 0; }
+    seen_sends = aid;            <- spent here
+    ... mgs_ax_dsp_frame(cpu);
+    post mail; if (!raise) { withdraw; ++undelivered; return 0; }
+
+So a resume the guest could not take - interrupts masked, which is ordinary
+and frequent - was gone for good. The next offer saw `aid == seen_sends`,
+declined, and that audio block never got its frame.
+
+**How much it costs depends on how much of its time the guest spends with
+MSR[EE] clear**, which is why it presented as a tick-rate problem and had me
+chasing frame rates for two rounds:
+
+    rate 7    4,079 of 219,546 offers undelivered   sound runs
+    rate 4   21,052 undelivered                     sound collapses
+             __AXServiceVPB 550 calls against 57,286, because
+             __AXOutDspReady is set only by a resume that ARRIVES
+
+The credit is now spent, and the frame mixed, only after the raise succeeds.
+A refused offer changes nothing and is simply made again - the same
+principle as F256, which stopped destroying undelivered interrupts, applied
+to the thing the interrupt was carrying.
+
+**Measured after, all three rates streaming:**
+
+    rate 8   11.5 fps   voice-mixes 72,274   demo 285   movie 63
+    rate 4   24.1 fps   voice-mixes 68,862   demo 280   movie 62
+    rate 2   26.7 fps   voice-mixes 73,650   demo 306   movie 62
+
+against rate 4 previously managing 952 voice-mixes, 14 demo reads and 8
+movie reads. Note rate 8 improved too, 60,538 to 72,274: the loss was always
+there, it was only catastrophic when the guest got faster.
+
+**So the CPU cap is gone.** The default tick rate is now 4 - a step budget
+per unit of guest time, so a lower number is a faster guest - and
+presentation is paced separately at the disc's field rate. The engine renders
+24.1 fps where the console manages 13.1, because the console is CPU-bound in
+this scene and a modern host is not.
+
+**What this retires:** F276's "the movie's behaviour depends on the tick
+rate", F278's "something the game counts in frames is racing something paced
+in guest time", and the whole line of reasoning that the port had a race
+only visible at speed. There was no race. There were two scheduling bugs -
+this one and the modulus of F280 - both of which happened to bite harder the
+more CPU the guest had.

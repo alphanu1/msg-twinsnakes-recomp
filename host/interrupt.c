@@ -478,6 +478,7 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
          * our engine already raises AID every 20 blocks, which is 5 ms of
          * guest time (F187). That is the period AX is written around.
          */
+        int ax_frame_due = 0;
         if (resume_mail && phase != 0) {
             uint64_t aid = mgs_interrupt_aid_raised();
 
@@ -501,21 +502,30 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
                 ++s_dsp_no_task; return 0;
             }
             if (aid == seen_sends) { ++s_dsp_no_frame; return 0; }
-            seen_sends = (uint32_t)aid;
 
-            /* ONE RESUME IS ONE AX FRAME, so this is the point at which the
-             * DSP would have mixed one - and the only thing the game can
-             * observe it doing is moving each voice's playback position.
-             * Modelling that here rather than in a mixer is deliberate; see
-             * the header of host/ax_dsp.c. */
-            {
-                static int on = -1;
-                if (on < 0) {
-                    const char* e = getenv("MGS_AX_MODEL");
-                    on = !(e && e[0] == '0');
-                }
-                if (on) mgs_ax_dsp_frame(cpu);
-            }
+            /* THE CREDIT IS SPENT WHEN THE RESUME IS DELIVERED, NOT WHEN IT
+             * IS OFFERED - and this used to spend it here.
+             *
+             * One resume is one AX frame, gated on one per audio-DMA
+             * interrupt. Consuming `seen_sends` before the raise meant that
+             * a resume the guest could not take - interrupts masked, which
+             * is ordinary and frequent - was gone for good: the next offer
+             * saw `aid == seen_sends` and declined, so that audio block
+             * never got its frame. The mail was withdrawn and the block
+             * silently skipped.
+             *
+             * How much that costs depends on how much of its time the guest
+             * spends with MSR[EE] clear, which is why it looked like a tick
+             * rate problem. At rate 7, 4,079 of 219,546 offers went
+             * undelivered and the sound ran; at rate 4, 21,052 did and it
+             * collapsed - 550 calls to `__AXServiceVPB` against 57,286,
+             * because `__AXOutDspReady` is set only by a resume that
+             * actually arrives (F281).
+             *
+             * So the credit is spent, and the frame mixed, only after the
+             * raise succeeds. A refused offer changes nothing and is simply
+             * made again. */
+            ax_frame_due = 1;
         }
 
         mgs_mmio_dsp_post_mail(m, mail);
@@ -530,6 +540,18 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
             mgs_mmio_dsp_clear_mail(m);
             ++s_dsp_undelivered;
             return 0;
+        }
+        /* Delivered. NOW the audio block is spoken for, and now the DSP
+         * has mixed it - the guest is about to enter its handler and read
+         * the voice positions this moves. */
+        if (ax_frame_due) {
+            static int on = -1;
+            if (on < 0) {
+                const char* e = getenv("MGS_AX_MODEL");
+                on = !(e && e[0] == '0');
+            }
+            seen_sends = (uint32_t)mgs_interrupt_aid_raised();
+            if (on) mgs_ax_dsp_frame(cpu);
         }
         if (mail == 0xDCD10000u) { phase = 1; return 1; }
         /* A resume leaves the task alive, so the cycle stays in phase 1 and

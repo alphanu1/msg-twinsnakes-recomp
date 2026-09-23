@@ -897,13 +897,31 @@ static unsigned long long mgs_retrace_period(void)
  *
  * because voices were being faded and retired on a clock running ahead of
  * the code that feeds them (F268).
+ *
+ * NOW 4, NOT 8, BECAUSE THE CPU NO LONGER NEEDS CAPPING (F281). This is a
+ * step budget per unit of guest time, so a LOW number is a fast guest: at 4
+ * the engine renders 24.1 fps against the console's own 13.1, because the
+ * console is CPU-bound in this scene and a modern host is not. It used to
+ * be held at 8 because everything below it collapsed the sound - and that
+ * turned out to be two bugs in this file and the run loop, not a real
+ * constraint. With them fixed, 8, 4 and 2 all stream the demo and the movie
+ * and differ only in speed:
+ *
+ *     rate 8   11.5 fps   voice-mixes 72,274   demo 285   movie 63
+ *     rate 4   24.1 fps   voice-mixes 68,862   demo 280   movie 62
+ *     rate 2   26.7 fps   voice-mixes 73,650   demo 306   movie 62
+ *
+ * The game caps itself near one frame per two fields, so below 4 there is
+ * little left to win and each halving doubles the host work spent spinning
+ * in the guest's own retrace wait. Presentation is paced separately, at the
+ * disc's field rate - see mgs_display_set_fps_cap in host/main.c.
  */
 static unsigned mgs_tick_rate(void)
 {
     static unsigned rate;
     if (!rate) {
         const char* e = getenv("MGS_TICK_RATE");
-        rate = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 8u;
+        rate = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 4u;
         if (!rate) rate = 1u;
     }
     return rate;
