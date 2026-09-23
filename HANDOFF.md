@@ -11142,7 +11142,7 @@ in, which is the difference between a port that can be tested and one that
 cannot.
 
 
-### F265 — the movie stall is ONE MISSING EVENT (RETIREMENT WITHDRAWN - see F270)
+### F265 — the movie stall is a RARE wake-up event (overstated as "missing"; see F272)
 
 The whole stall reduces to a single word. `mpeg_movie_task` in state 1 does
 nothing but poll; `mpeg_poll_stream_events` does not generate a wake, it
@@ -11469,7 +11469,7 @@ the broadcast subsystem that would post code 1 is instantiated on neither
 side (F267).
 
 
-### F271 — waking the movie is NOT enough: there is a second fault, and it is the clock going backwards
+### F271 — PARTLY WRONG (see F272): waking the movie IS enough; the "second fault" was my metric
 
 `MGS_MOVIE_KICK=1` writes 1 to `ctx+0x40` when the movie task is parked -
 exactly what the missing code-1 event would do. It is an experiment, not a
@@ -11479,10 +11479,13 @@ time hunting the event:
     movie task state changes    4  ->  180      (2 visits to state 2 -> 90)
     ring 1 read cursor advances 48  ->   49
 
-**The task wakes and cycles properly, and still consumes nothing.** So
-finding the real event would not have fixed the movie. There is a second
-fault behind it, and the earlier plan - chase the event source - would have
-ended in the same place with more time spent.
+**That conclusion was WRONG, and the error was in the metric.** The ring's
+read cursor is written once per RECLAIM PASS, not once per record, and a
+single pass reclaims many - so counting writes to it measures how often the
+reclaimer ran, not how much was consumed. Tracing the record-due test
+directly gives the real figure: with the kick it returns a record **1,262
+times** against 32 refusals, and the luma plane changes 894 times against 16
+without it. The movie plays when it is woken. See F272.
 
 **Why the parking happens at all**, now understood exactly. The state-1
 handler reads `ctx+0x3C` into a register BEFORE calling the poll, so the
@@ -11531,3 +11534,63 @@ tried: 99% of overruns do have data there (3,176 against 34), and it changed
 nothing - ring 1 consumption 48 -> 41, task state changes 4 -> 4 - while
 being less faithful than stopping, because hardware does not read past
 `endAddr`. Reverted.
+
+
+### F272 — the movie plays when it is woken; it parks because the CLOCK STALLS, and each wake buys one burst
+
+Three measurements settle what the movie needs, and correct two of my own
+conclusions along the way.
+
+**1. Waking it is sufficient.** `MGS_MOVIE_KICK=1` (write 1 to `ctx+0x40`
+when parked) against the same run with it unset:
+
+    luma plane changes        16  ->  894
+    record-due test returns        1,262 records against 32 refusals
+    movie task state changes   4  ->  180
+
+and the luma plane goes from a flat held frame to real picture data:
+
+    no kick    23232323 25252525 25252525 23232323
+    with kick  0004001E 1E1E0026 00150006 0012005C
+
+**F271's "waking is not enough" was wrong, and the error was the metric.**
+The ring's read cursor is written once per RECLAIM PASS, not once per
+record, and one pass reclaims many - so counting writes to it measures how
+often the reclaimer ran. It read 48 with the kick and 48 without, and I took
+that for "consumes nothing".
+
+**2. The event is not missing - it is rare.** Over 2.5B steps the port posts
+480 events, 191 of them code 1, and two of those carry the movie's key:
+
+    step  100M   movie key, code 0
+    step  300M   movie key, code 1
+    step  600M   movie key, code 0
+    step 2100M   movie key, code 1
+
+So F265's "one missing event" is also too strong. They arrive; there are
+just two of them in two and a half billion steps, and each buys a single
+burst: without the kick, 2.5B steps gives 9 task state changes and 40 luma
+changes against the kick's 180 and 894.
+
+**3. Why one event only buys one burst.** State 2 ends at its own record
+test:
+
+    bl   0x7F1503E8       ; is a record due?
+    mr.  r26, r3
+    beq  -> back to state 1
+
+so the moment no record is due the task drops to state 1 and needs another
+event to return. On the console it stays in state 2 for **forty seconds** -
+code 1 at 64.2 s, back to state 1 at 104.9 s - because its clock advances
+smoothly and a record is always due. Ours falls out almost at once.
+
+**So the target is the clock, and the clock is the sound position**
+(`timestamp <= clock + 6`, clock = sound position * 300 / 1000). Our
+streaming voices stand still on 8.7% of voice-mixes, and a voice that does
+not advance is a clock that does not advance. That is the one thing left
+between here and a movie that plays by itself.
+
+**Not the voice positions themselves**, which were checked and are sound:
+over 6,135 transitions a streaming voice's `currAddr` goes backwards 41
+times and 40 of those are the ring wrap (~32,548 on a 0x8000 ring). The
+regression seen in the CLOCK is not a regression in the position.
