@@ -11467,3 +11467,67 @@ That is real and separate. Only the claim about the movie was wrong.
 `0x7F011DF0`; the console gets a code-1 at 64.2 s and the task wakes; and
 the broadcast subsystem that would post code 1 is instantiated on neither
 side (F267).
+
+
+### F271 — waking the movie is NOT enough: there is a second fault, and it is the clock going backwards
+
+`MGS_MOVIE_KICK=1` writes 1 to `ctx+0x40` when the movie task is parked -
+exactly what the missing code-1 event would do. It is an experiment, not a
+fix, and it answers the question that was worth knowing before spending more
+time hunting the event:
+
+    movie task state changes    4  ->  180      (2 visits to state 2 -> 90)
+    ring 1 read cursor advances 48  ->   49
+
+**The task wakes and cycles properly, and still consumes nothing.** So
+finding the real event would not have fixed the movie. There is a second
+fault behind it, and the earlier plan - chase the event source - would have
+ended in the same place with more time spent.
+
+**Why the parking happens at all**, now understood exactly. The state-1
+handler reads `ctx+0x3C` into a register BEFORE calling the poll, so the
+flag the movie-start path sets survives one extra pass: that is the two
+visits to state 2. The single code-0 event that does arrive then clears the
+flag through the poll (`+0x40` is copied to `+0x3C` whenever it is not -1,
+and 0 is a perfectly good value to copy), and nothing sets it again.
+
+**What blocks it in state 2** is the record-due test:
+
+    lwz   r4, -8(r31)      ; the record's timestamp
+    lwz   r3, 0x08(r5)     ; stream->0x08, the clock
+    addi  r0, r3, 6
+    cmpw  r4, r0
+    bngt  decode           ; only if timestamp <= clock + 6
+
+and state 2 computes that clock as `(sound position * 300 / 1000) - base`.
+Watching it with the kick on, it advances - 0x2C4C, 0x2DAE, 0x2F3C, 0x30BC,
+0x3185 - **but it goes backwards constantly**:
+
+    0x0000308C -> 0x00002F3C     back 336
+    0x00003194 -> 0x00003185
+    0x000030C8 -> 0x000030BC
+    0x0000000C -> 0xFFFFFFFF     negative early on
+
+A clock that regresses makes records that were due un-due again, and a
+negative one makes every record un-due. So the movie's pacing signal is not
+merely slow, it is **non-monotonic**, and that is the thing to fix.
+
+**Where that comes from is the next question**, and the candidates are
+measurable: the sound position is read out of the game's own sound system,
+which reads it from the AX voice positions this port writes. Our streaming
+voices starve on 8.7% of voice-mixes and stand still for those frames, and
+they wrap a ring of eight 0x1000-sample blocks (F269) - a wrap the game has
+to account for, and a stalled voice is a position that does not move when
+the game expects it to.
+
+**Corrected here too:** the note in F270 that the movie stall and the audio
+starvation are "the same bug" was too strong. They are connected - the clock
+is the sound position - but the movie also needs a wake-up it never gets,
+and fixing the audio alone leaves it parked. Both are needed.
+
+**What not to re-propose:** relaxing the mixer's end check so a starved voice
+plays on into the block the game has filled but not yet declared. It was
+tried: 99% of overruns do have data there (3,176 against 34), and it changed
+nothing - ring 1 consumption 48 -> 41, task state changes 4 -> 4 - while
+being less faithful than stopping, because hardware does not read past
+`endAddr`. Reverted.

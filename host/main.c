@@ -77,9 +77,52 @@ static void task_mask_watch(void* cpu)
     fflush(stdout);
 }
 
+/* MGS_MOVIE_KICK=1: hand the movie the wake-up it never receives.
+ *
+ * THIS IS AN EXPERIMENT, NOT A FIX, and it must never become one. The movie
+ * task leaves its WAITING state only when `ctx+0x3C` is non-zero, which
+ * `mpeg_poll_stream_events` copies there from `ctx+0x40`, which the event
+ * handler sets to 1 for an event whose `payload[0]` is 1. Every event this
+ * port posts carries code 0 (F265), so the flag is set once by the
+ * movie-start path, survives one extra pass - the state-1 handler reads it
+ * BEFORE polling - and is then cleared by the one code-0 event that does
+ * arrive. Two visits to state 2, then parked, which is exactly what is
+ * measured.
+ *
+ * Writing 1 to `ctx+0x40` here is what the missing event would have done.
+ * It answers one question and only one: once woken, does the movie decode
+ * and advance? If it does, the remaining work is finding the event's real
+ * source; if it does not, there is a second fault behind this one and
+ * finding the event would not have helped. Neither answer is worth guessing
+ * at when the write costs four lines. */
+static void movie_kick(void* cpu)
+{
+    static int on = -1;
+    static unsigned quiet;
+    uint32_t ctx, node;
+
+    if (on < 0) on = getenv("MGS_MOVIE_KICK") != NULL;
+    if (!on || !s_engine_bss) return;
+
+    ctx  = mgs_module_guest_read32(cpu, s_engine_bss + 0x55EA4u);
+    node = mgs_module_guest_read32(cpu, s_engine_bss + 0x55EA8u);
+    if (!ctx || !node) return;
+    /* Only while it is actually parked: state 1, nothing already pending. */
+    if (mgs_module_guest_read32(cpu, node + 0x44u) != 1u) { quiet = 0; return; }
+    if (mgs_module_guest_read32(cpu, ctx + 0x3Cu)) { quiet = 0; return; }
+    if (mgs_module_guest_read32(cpu, ctx + 0x40u) != 0xFFFFFFFFu) return;
+
+    /* Give it a few passes first, so a task merely between records is not
+     * kicked out of a state it would have left by itself. */
+    if (++quiet < 8u) return;
+    quiet = 0;
+    mgs_module_guest_write32(cpu, ctx + 0x40u, 1u);
+}
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     task_mask_watch(cpu);
+    movie_kick(cpu);
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
     /* The card's mount completion rides the same pump: both are completions
      * the guest is waiting for, and both may only be delivered from here. */
