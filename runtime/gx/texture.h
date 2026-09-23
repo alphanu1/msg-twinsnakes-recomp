@@ -83,4 +83,6 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
 uint32_t mgs_tex_sample(const MgsTexture* t, float u, float v,
                         unsigned wrap_s, unsigned wrap_t, int bilinear);
 
+extern uint64_t mgs_gx_seq;
+
 #endif

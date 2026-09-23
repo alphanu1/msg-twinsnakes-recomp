@@ -570,6 +570,29 @@ This is the project. ~200 functions and the widest error bars in the plan.
       executed for real from the pixel engine's copy registers, BT.601
       conversion to YUV 4:2:2 at the address the game programmed, and
       scan-out from the video interface's own register (`tests/test_efb.c`).
+- [x] **The video garbage was alpha read as red** (F286). `tev_register`
+      took the TEV colour registers' alpha from bits 0-10 and red from
+      12-22, and it is the other way round - Dolphin's `TevReg::RA` and
+      libogc's `GX_SetTevColor` agree, and the game's own writes settle it a
+      third time (0xE2's high field ramps 0,4,9,14,19 across frames, which is
+      a fade). The movie's last pass blends the previous frame by its own
+      alpha; returning 255 made it opaque, so it painted a buffer nothing had
+      written yet - uninitialised heap - over the picture at full strength,
+      and then fed on its own output. **Noisy frames 33 -> 1**, and reverting
+      just this change puts all 33 back. The movie's planes were never at
+      fault: they measure 2.9 on mean neighbour difference against 83.8 for
+      random bytes (`tools/check-planes.py`). Fixed alongside: konst was
+      hard-coded to 255 for every stage (KSEL now read), 0xE0-0xE7 now route
+      to the colour or konst register by bit 23 as the hardware does, and the
+      second drifted copy of the stage loop is gone. **Colour is still wrong**
+      - the picture is legible but too purple - and the TEV swap tables stay
+      unimplemented because the two references contradict each other (F288).
+- [x] **Copies ran late, and one in five never ran** (F287). The parser held
+      the copy command in a single slot for a periodic hook to execute, while
+      draws run inline - so every draw in a frame preceded every copy in it,
+      and a second copy issued before the hook replaced the first: **2,464 of
+      9,350 copies dropped**. They now run where the command sits in the
+      stream.
 - [x] **Dynamically updated textures** (F156). The cache keyed on address and
       never looked at the contents, and nothing invalidated it, so a texture
       rewritten in place was served stale for the life of the run — which

@@ -201,7 +201,13 @@ typedef struct MgsGx {
     uint32_t teximg[32];         /* distinct TX_SETIMAGE3 values written */
     unsigned teximg_n;
     int      trace_teximg;       /* MGS_TRACE_TEXIMG */
+    /* Run the copy WHERE IT IS READ, not later. Without this the command
+     * waits in copy_pending until something drains it, and a second copy
+     * overwrites the first. See run_copy() in host/display.c. */
+    void (*copy_exec)(void* user, uint32_t cmd);
+    void*  copy_user;
     uint32_t copy_pending;       /* BP 0x52, the command, or 0 */
+    uint64_t copies_dropped;     /* issued while one was still pending */
 
     uint64_t commands, primitives, vertices, triangles, desyncs;
     uint8_t  recent[512];    /* the bytes just parsed, for desync reports */

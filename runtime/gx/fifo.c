@@ -376,6 +376,19 @@ static void bp_side_effect(MgsGx* gx, uint8_t reg, uint32_t val)
         return;
     }
     if (reg == BP_COPY_EXECUTE) {
+        /* ONE SLOT. A second copy issued before the first is drained
+         * REPLACES it, and the first never happens at all.
+         *
+         * The hardware executes a copy where the command sits in the
+         * stream, between the draws around it. Here the copy is deferred to
+         * whenever the display hook next runs, so a frame that copies the
+         * embedded buffer to a texture, draws with that texture, and then
+         * copies to the framebuffer collapses: the draws all happen first
+         * and only the last copy survives. Counted, so the cost is a number
+         * rather than a suspicion. */
+        if (gx->copy_exec) { gx->copy_exec(gx->copy_user, val & 0x00FFFFFFu);
+                             return; }
+        if (gx->copy_pending & 0x80000000u) ++gx->copies_dropped;
         gx->copy_pending = val | 0x80000000u;
         return;
     }

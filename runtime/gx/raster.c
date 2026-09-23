@@ -1221,6 +1221,42 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                 }
             }
 
+            /* WHICH DRAW TURNS THE BUFFER NOISY?
+             *
+             * Every trace so far scores the buffer once a frame and the
+             * texture at bind time, and both said the same thing: the
+             * texture is clean and the buffer is noise. Neither can name the
+             * draw BETWEEN them. This scores the embedded buffer either side
+             * of one draw, so the draw that does it says so itself.
+             *
+             * Only full-screen draws - the movie composite is one - because
+             * scoring the buffer around every primitive costs more than the
+             * frame. */
+            if (tex && tex->width >= 256u && getenv("MGS_TRACE_DRAWNOISE")) {
+                static unsigned said;
+                unsigned yy, xx2, cnt = 0u, before = 0u;
+                for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
+                    for (xx2 = 1u; xx2 < MGS_EFB_WIDTH; xx2 += 8u) {
+                        uint32_t a1 = r->efb->pixels[yy * MGS_EFB_WIDTH + xx2 - 1u];
+                        uint32_t b1 = r->efb->pixels[yy * MGS_EFB_WIDTH + xx2];
+                        int va = (int)(((a1 >> 16) & 0xFF) + ((a1 >> 8) & 0xFF)
+                                       + (a1 & 0xFF)) / 3;
+                        int vb = (int)(((b1 >> 16) & 0xFF) + ((b1 >> 8) & 0xFF)
+                                       + (b1 & 0xFF)) / 3;
+                        before += (unsigned)(va > vb ? va - vb : vb - va);
+                        ++cnt;
+                    }
+                r->noise_before = cnt ? before / cnt : 0u;
+                r->noise_tex_addr = tex->addr;
+                r->noise_tex_fmt = tex->format;
+                r->noise_tex_w = (uint16_t)tex->width;
+                r->noise_tex_h = (uint16_t)tex->height;
+                r->noise_armed = said < 12u ? 1 : 0;
+                r->noise_said = &said;
+            } else {
+                r->noise_armed = 0;
+            }
+
             if (tex && r->trace_noisy && tex->width >= 256u) {
                 unsigned yy, cnt = 0u, rough = 0u;
                 for (yy = 0; yy < tex->height; yy += 8u) {
@@ -1298,5 +1334,58 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         sp.dw1dx = -(sy[0] - sy[2]) * sp.inv_area;
         sp.x0 = x0; sp.x1 = x1;
         raster_dispatch(r, &sp, y0, y1);
+    }
+
+    /* ...and the buffer again, now that this draw has run. */
+    if (r->noise_armed) {
+        unsigned yy, xx2, cnt = 0u, after = 0u;
+        for (yy = 0; yy < MGS_EFB_HEIGHT; yy += 16u)
+            for (xx2 = 1u; xx2 < MGS_EFB_WIDTH; xx2 += 8u) {
+                uint32_t a1 = r->efb->pixels[yy * MGS_EFB_WIDTH + xx2 - 1u];
+                uint32_t b1 = r->efb->pixels[yy * MGS_EFB_WIDTH + xx2];
+                int va = (int)(((a1 >> 16) & 0xFF) + ((a1 >> 8) & 0xFF)
+                               + (a1 & 0xFF)) / 3;
+                int vb = (int)(((b1 >> 16) & 0xFF) + ((b1 >> 8) & 0xFF)
+                               + (b1 & 0xFF)) / 3;
+                after += (unsigned)(va > vb ? va - vb : vb - va);
+                ++cnt;
+            }
+        after = cnt ? after / cnt : 0u;
+        if (after > 20u && r->noise_before <= 20u && r->noise_said) {
+            ++*r->noise_said;
+            fprintf(stderr, "[drawnoise] buffer %u -> %u  texture %ux%u "
+                    "fmt 0x%X at 0x%08X  %u extra stages, %u TEV stages, "
+                    "blend %s (src %u dst %u%s), alpha test %s, "
+                    "colour update %s\n",
+                    r->noise_before, after, r->noise_tex_w, r->noise_tex_h,
+                    r->noise_tex_fmt, r->noise_tex_addr, stage_n,
+                    mgs_tev_stage_count(&gx->bp),
+                    (r->blend_enable && !r->blend_noop) ? "ON" : "off",
+                    r->blend_src, r->blend_dst,
+                    r->blend_sub ? ", subtract" : "",
+                    alpha_always ? "always passes" : "active",
+                    r->color_update ? "on" : "off");
+            {   /* The alpha is what decides whether this draw is visible at
+                 * all: the blend is src*a + dst*(1-a). Print the combiner's
+                 * alpha register, the texture's own alpha, and what the
+                 * combiner actually produces for that texel - the three
+                 * disagreeing is the whole question. */
+                MgsTevInput ti;
+                unsigned k, n2 = 0; unsigned long suma = 0, sumt = 0;
+                for (k = 0; tex && k < tex->width * tex->height; k += 997u) {
+                    sumt += (tex->texels[k] >> 24) & 0xFFu;
+                    ti.texture = tex->texels[k];
+                    ti.raster = 0xFFFFFFFFu;
+                    suma += (mgs_tev_run_compiled(&tev, &ti) >> 24) & 0xFFu;
+                    ++n2;
+                }
+                if (n2)
+                    fprintf(stderr, "[drawnoise]   alpha env 0x%08X  "
+                            "texture alpha mean %lu  combiner alpha mean "
+                            "%lu (of 255)\n",
+                            tev.ae[0], sumt / n2, suma / n2);
+            }
+        }
+        r->noise_armed = 0;
     }
 }

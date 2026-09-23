@@ -84,6 +84,8 @@ static uint16_t encode_texel(unsigned fmt, uint32_t argb)
     }
 }
 
+void mgs_efb_note_tex_range(uint32_t lo, uint32_t hi);
+
 void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
                       unsigned sx, unsigned sy,
                       unsigned width, unsigned height, unsigned fmt)
@@ -117,9 +119,10 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
                     ++cnt;
                 }
             }
-            fprintf(stderr, "[copysrc] %ux%u at (%u,%u) -> 0x%08X  "
-                    "EFB roughness %u  lit %u%%\n",
-                    width, height, sx, sy, efb->copy_dest,
+            fprintf(stderr, "[copysrc] %ux%u at (%u,%u) fmt 0x%X stride %u "
+                    "-> 0x%08X  EFB roughness %u  lit %u%%\n",
+                    width, height, sx, sy, fmt, efb->copy_stride,
+                    efb->copy_dest,
                     cnt ? rough / cnt : 0u, cnt ? lit * 100u / cnt : 0u);
         }
     }
@@ -271,7 +274,44 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
         }
     }
 
+    /* WHO ELSE WRITES THIS MEMORY?
+     *
+     * A texture copy and a framebuffer copy both land in guest RAM through
+     * the same BP destination register, and nothing here has ever checked
+     * that the two do not overlap. If they do, the framebuffer's YUV 4:2:2
+     * lines are written over a texture the game is about to sample, and the
+     * sample comes back as noise through an encoder and a decoder that are
+     * both correct - which is the failure that survives every round-trip
+     * test one can write.
+     *
+     * Recorded here and tested on the framebuffer side, reported once. */
+    mgs_efb_note_tex_range(efb->copy_dest,
+                           efb->copy_dest +
+                           ((height + th - 1u) / th) *
+                           (efb->copy_stride ? efb->copy_stride
+                                             : tiles_x * (tw * th * bpp / 8u)));
+
     ++efb->tex_copies;
+}
+
+/* The last few texture-copy destinations, as [lo, hi) guest ranges. Small
+ * and fixed: the question is whether an overlap happens at all, not how
+ * many, and a fixed array cannot itself become a leak. */
+static struct { uint32_t lo, hi; } s_tex_range[8];
+static unsigned s_tex_range_n;
+
+void mgs_efb_note_tex_range(uint32_t lo, uint32_t hi);
+void mgs_efb_note_tex_range(uint32_t lo, uint32_t hi)
+{
+    unsigned i;
+    if (hi <= lo) return;
+    for (i = 0; i < s_tex_range_n; ++i)
+        if (s_tex_range[i].lo == lo) { s_tex_range[i].hi = hi; return; }
+    if (s_tex_range_n < 8u) {
+        s_tex_range[s_tex_range_n].lo = lo;
+        s_tex_range[s_tex_range_n].hi = hi;
+        ++s_tex_range_n;
+    }
 }
 
 void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
@@ -294,6 +334,41 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
          * mistake. */
         efb->copy_width = width;
         efb->copy_height = height;
+
+        {   /* Does this framebuffer write land on a texture? */
+            static int said;
+            uint32_t lo = efb->copy_dest;
+            uint32_t hi = efb->copy_dest + height * (efb->copy_stride
+                              ? efb->copy_stride : width * 2u);
+            unsigned i;
+            for (i = 0; i < s_tex_range_n; ++i) {
+                if (lo < s_tex_range[i].hi && s_tex_range[i].lo < hi) {
+                    /* THE EXPERIMENT. Skipping the write leaves nothing on
+                     * the screen, so this is a measurement and not a fix:
+                     * if the embedded buffer stops being noise with the
+                     * framebuffer write suppressed, the write is what
+                     * destroys the texture. */
+                    if (getenv("MGS_NO_FB_OVER_TEX")) return;
+                    if (said) continue;
+                    said = 1;
+                    fprintf(stderr,
+                            "[overlap] the framebuffer copy 0x%08X-0x%08X "
+                            "lands on a texture copy 0x%08X-0x%08X "
+                            "(%u bytes): YUV 4:2:2 is being written over "
+                            "texels the game samples\n",
+                            lo, hi, s_tex_range[i].lo, s_tex_range[i].hi,
+                            (lo > s_tex_range[i].lo ? s_tex_range[i].hi - lo
+                                                    : hi - s_tex_range[i].lo));
+                }
+            }
+            if (getenv("MGS_TRACE_RANGES")) {
+                static unsigned n;
+                if (n++ < 8u)
+                    fprintf(stderr, "[range] framebuffer 0x%08X-0x%08X "
+                            "(%ux%u stride %u)\n", lo, hi, width, height,
+                            efb->copy_stride);
+            }
+        }
 
         for (line = 0; line < height; ++line) {
             const uint32_t* src = &efb->pixels[line * MGS_EFB_WIDTH];

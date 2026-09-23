@@ -233,6 +233,14 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
     return 1;
 }
 
+/* ONE TIMELINE FOR COPIES AND DECODES.
+ *
+ * "The texture decodes as noise" and "the copy wrote it correctly" are both
+ * true readings of separate traces, and separate traces cannot say which
+ * came FIRST. This counter is shared with the copy path so the two can be
+ * read as one sequence. Diagnostic only; nothing branches on it. */
+uint64_t mgs_gx_seq;
+
 /* ---- the cache --------------------------------------------------------- */
 
 void mgs_tex_cache_init(MgsTexCache* c)
@@ -564,6 +572,29 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         }
     }
 
+    {   /* MGS_TRACE_BUF=<addr>: every decode of one buffer, with the
+         * roughness of what came out. */
+        static long watch = -1;
+        if (watch == -1) { const char* e = getenv("MGS_TRACE_BUF");
+                           watch = e ? (long)strtoul(e, NULL, 0) : 0; }
+        if (watch && (uint32_t)watch == addr) {
+            unsigned yy, cnt = 0u, rough = 0u;
+            for (yy = 0; yy < height; yy += 8u)
+                for (i = 1u; i < width; i += 4u) {
+                    uint32_t a1 = t->texels[yy * width + i - 1u];
+                    uint32_t b1 = t->texels[yy * width + i];
+                    int va = (int)(((a1 >> 16) & 0xFF) + ((a1 >> 8) & 0xFF)
+                                   + (a1 & 0xFF)) / 3;
+                    int vb = (int)(((b1 >> 16) & 0xFF) + ((b1 >> 8) & 0xFF)
+                                   + (b1 & 0xFF)) / 3;
+                    rough += (unsigned)(va > vb ? va - vb : vb - va);
+                    ++cnt;
+                }
+            fprintf(stderr, "[buf] %6llu  DECODE 0x%08X %ux%u fmt 0x%X  "
+                    "roughness %u\n", (unsigned long long)++mgs_gx_seq,
+                    addr, width, height, format, cnt ? rough / cnt : 0u);
+        }
+    }
     t->hash = hash;
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;

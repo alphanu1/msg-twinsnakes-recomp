@@ -1751,9 +1751,13 @@ int main(int argc, char** argv)
                                        ? mgs_display_efb()->copies : 0u),
                                    (unsigned long long)mgs_display_frames());
                             printf("display: %llu EFB copies (%llu with clear), "
+                                   "%llu texture copies, %llu DROPPED, "
                                    "%llu frames presented, XFB 0x%08X\n",
                                    (unsigned long long)e->copies,
                                    (unsigned long long)e->clears,
+                                   (unsigned long long)e->tex_copies,
+                                   (unsigned long long)(mgs_display_gx()
+                                       ? mgs_display_gx()->copies_dropped : 0u),
                                    (unsigned long long)mgs_display_frames(),
                                    mgs_mmio_xfb_address(mgs_host_mmio()));
                         }
@@ -2313,6 +2317,71 @@ int main(int argc, char** argv)
                                         }
                                         printf("  %u of %lu bytes non-zero\n", nz, n);
                                     }
+                                }
+                            }
+                            {   /* MGS_DUMP_MEM=<addr>:<len>:<path>[,...]
+                                 * writes guest bytes to a FILE. MGS_DUMP
+                                 * prints hex and is capped at 0x1000 bytes,
+                                 * which is fine for a structure and useless
+                                 * for a 512x320 image - and an image is
+                                 * exactly what has to be looked at to tell a
+                                 * decode fault from a composite fault. The
+                                 * bytes are written in guest order, so what
+                                 * lands in the file is what the GPU would
+                                 * sample. Rule 8: these are game assets and
+                                 * go to the scratchpad, never the tree. */
+                                const char* mv = getenv("MGS_DUMP_MEM");
+                                while (mv && *mv) {
+                                    char* e2 = NULL;
+                                    char path[512];
+                                    uint32_t at = (uint32_t)strtoul(mv, &e2, 0);
+                                    unsigned long n = 0;
+                                    size_t pl = 0;
+                                    if (!e2 || *e2 != ':') break;
+                                    n = strtoul(e2 + 1, &e2, 0);
+                                    if (!e2 || *e2 != ':') break;
+                                    ++e2;
+                                    while (e2[pl] && e2[pl] != ',' &&
+                                           pl + 1 < sizeof path) {
+                                        path[pl] = e2[pl];
+                                        ++pl;
+                                    }
+                                    path[pl] = 0;
+                                    e2 += pl;
+                                    if (at && n) {
+                                        FILE* f = fopen(path, "wb");
+                                        if (!f) {
+                                            printf("dump-mem 0x%08X: cannot "
+                                                   "write %s\n", at, path);
+                                        } else {
+                                            unsigned long i;
+                                            uint32_t nz = 0;
+                                            for (i = 0; i < n; i += 4u) {
+                                                uint32_t v =
+                                                    mgs_module_guest_read32(
+                                                        cpu, at + (uint32_t)i);
+                                                uint8_t b[4];
+                                                unsigned long k, w = n - i;
+                                                b[0] = (uint8_t)(v >> 24);
+                                                b[1] = (uint8_t)(v >> 16);
+                                                b[2] = (uint8_t)(v >> 8);
+                                                b[3] = (uint8_t)v;
+                                                if (w > 4u) w = 4u;
+                                                for (k = 0; k < w; ++k)
+                                                    if (b[k]) ++nz;
+                                                fwrite(b, 1, w, f);
+                                            }
+                                            fclose(f);
+                                            printf("dump-mem 0x%08X %lu bytes "
+                                                   "-> %s (%u non-zero, "
+                                                   "%.1f%%)\n",
+                                                   at, n, path, nz,
+                                                   n ? 100.0 * (double)nz /
+                                                       (double)n : 0.0);
+                                        }
+                                    }
+                                    if (!*e2) break;
+                                    mv = (*e2 == ',') ? e2 + 1 : e2;
                                 }
                             }
                             const char* env = getenv("MGS_DUMP");

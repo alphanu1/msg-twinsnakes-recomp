@@ -12143,3 +12143,137 @@ with a quieter mix.
 **Also eliminated, by measurement:** the suggestion that the verbose output is
 stalling the guest. A run prints 782 lines over 175.5 s - **4.5 lines a
 second**. It is not a factor, and it is not worth silencing.
+
+### F286 — the video garbage was ALPHA READ AS RED in the TEV colour registers
+
+The user reported it three times - "video still grbabe", green and magenta
+striping over most of the screen, flashing on and off. It is one bug, in six
+lines, and it had nothing to do with the movie decoder.
+
+**The chain, measured end to end.** `tools/check-planes.py` and
+`MGS_DUMP_MEM` say the movie's own data is perfect: the luma plane scores
+**2.9** on mean neighbour difference and the chroma planes **0.3**, against
+**83.8** for random bytes - and the picture is legible, the intro's
+medical-scan screen. De-tiling measurably wins over reading the bytes
+linearly, so the 8x4 geometry is confirmed rather than assumed. The texture
+sampler's own decode of that plane is equally clean. So the decoder, the
+tiling and the sampler were all right, and every earlier "the movie decodes
+correctly" was true.
+
+`MGS_TRACE_DRAWNOISE` then scores the embedded buffer either side of one
+full-screen draw, which is the measurement none of the older traces could
+make - they scored the buffer once a frame and the texture at bind time, and
+both only said "texture clean, buffer noise". It named the draw at once:
+
+    buffer 11 -> 22   texture 512x448 fmt 0x6 at 0x806BC7C0
+                      blend ON (src 4 dst 5)    <- src alpha, 1 - src alpha
+                      alpha env 0x0008FF90      <- a=b=c=ZERO, d=A0
+                      texture alpha mean 119, COMBINER ALPHA MEAN 255
+
+The last movie pass draws the previous frame over the new one, blended by
+its own alpha. The alpha comes from TEV register 1. We were returning 255 -
+fully opaque - so it painted at full strength, and `MGS_TRACE_BUF` shows
+what it painted: the FIRST event on `0x806BC7C0` is a DECODE, before any
+copy ever wrote it. Uninitialised heap, at full opacity, over the picture.
+After that it fed on its own output, which is why the noise was stable and
+why it flashed - the two framebuffers alternate.
+
+**The bug.** `tev_register` read alpha from bits 0-10 and red from 12-22.
+It is the other way round. Two independent references agree:
+
+    Dolphin  TevReg::RA   BitField<0,11,s32> red;  BitField<12,11,s32> alpha;
+    libogc   GX_SetTevColor   _SHIFTL(color.a,12,8) | (color.r & 0xff)
+
+and the game's own writes settle it a third time: 0xE2's high field ramps
+0x000, 0x004, 0x009, 0x00E, 0x013 across consecutive frames. That is a fade,
+so the high field is alpha. Read the old way it was a red ramp with alpha
+pinned at 255 - a fade that changes colour instead of fading.
+
+Blue and green were already right (BG: blue low, green high). The fields are
+also SIGNED 11-bit and were masked unsigned.
+
+    noisy frames in a 1.8B-step run:   33  ->  1
+    reverting just this change:              33   (so this is the fix)
+
+**Two more things the same reading uncovered, both fixed here:**
+
+- *Konst was hard-coded to 255 for every stage.* KSEL (0xF6-0xFD) chooses
+  each stage's constant, and a selector can splat ONE channel of a konst
+  register across all three - which is how a game passes a scalar
+  coefficient. Now read, with Dolphin's `tev_ksel_table_c`/`_a` as the
+  tables. It changes nothing measurable on this frame (identical channel
+  means) because this game selects the 1/4 fraction, but it was wrong.
+- *The same eight registers hold two different things.* 0xE0-0xE7 write
+  either a colour register or a konst register, chosen by bit 23. Keeping
+  one value per BP address lost whichever was written first; `mgs_bp_write`
+  now routes each write the way the hardware does. (Measured: this game
+  writes bit 23 clear every time, so it has no konst registers of its own -
+  but the routing is what makes that a fact rather than an assumption.)
+- *Two copies of the stage loop had drifted.* `mgs_tev_run` was a second
+  implementation that never got per-stage textures or any of the above. It
+  now compiles and runs the one path.
+
+**What not to re-propose:** the framebuffer copy overwriting the texture.
+It is REAL - `[overlap]` reports 458,752 bytes of YUV 4:2:2 written over a
+texture copy at the same base address, every frame - and it is NOT the
+cause. Suppressing that write entirely (`MGS_NO_FB_OVER_TEX`) left the noise
+exactly where it was. The game copies the finished frame to a texture and to
+the framebuffer through the same buffer, in that order, which is legal.
+
+**Also not the cause, each checked and eliminated:** the encoder (a flat
+buffer in gives flat bytes out); the decoder (no de-tiling variant makes the
+bytes smooth - they ARE noise, not misread structure); the texture cache
+(it hashes contents); and the tile geometry.
+
+### F287 — copies ran late and one in five never ran at all
+
+Found while chasing F286 and fixed on the way, but it is a separate fault
+and did NOT cause the striping.
+
+The parser stored the copy command in a single slot and the run loop's
+display hook executed it later. Drawing is synchronous here - "a command is
+executed by the parser the moment it is written" - so deferring only the
+copies meant every draw in a frame happened before every copy in it. And a
+second copy issued before the hook ran REPLACED the first:
+
+    2,390 framebuffer copies + 6,960 texture copies, and 2,464 DROPPED
+
+21% of the game's copies never happened. Copies now run where the command
+sits in the stream. The drop counter stays in the exit report.
+
+**What not to re-propose:** deferring copies to a periodic hook to batch
+them. The single slot is not the only problem - the ordering against draws
+is, and that cannot be recovered by making the queue deeper.
+
+### F288 — the TEV swap tables are NOT implemented, and the two references disagree
+
+Recorded as an open question rather than a guess, because guessing cost a
+whole colour channel.
+
+KSEL also holds four channel-swap tables, two registers each. The references
+contradict each other on which half is which:
+
+    libogc   GX_SetTevSwapModeTable writes r,g to the EVEN register
+             (regA = swapid*2) and b,a to the ODD one
+    Dolphin  TevKSel: "Odd ksel number: red; even: blue" - the opposite
+
+Implementing Dolphin's reading emptied the green channel across the whole
+frame - green non-zero in **6,197 of 229,376 pixels** against red and blue
+at 121 everywhere, a magenta screen - because this game writes all eight
+KSEL registers with the swap bits ZERO, which under either reading means
+every channel reads red. Removing it took green's mean from **2.4 to 28.2**.
+
+Zero is also what `GXInit` cannot produce: it sets table 0 to identity and
+1-3 to R,R,R,A / G,G,G,A / B,B,B,A, none of which encodes as zero. So either
+those writes never reach the parser, or the field layout is a third thing.
+Until that is settled the identity is used, and a counter records when a
+non-zero swap is programmed so the gap is a number.
+
+This does not affect the movie either way: its planes are I8, whose texels
+have all four channels equal, so no swap can change what those stages read.
+
+**Still open after all this: the colour is wrong.** The noise is gone and
+the picture is legible, but the frame reads R 67.6 G 28.2 B 74.5 where it
+should be a dark blue-grey - too purple, green too low. That is the next
+thing, and it is now a colour problem on a correct picture rather than a
+correct picture under noise.

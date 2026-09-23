@@ -33,6 +33,25 @@
 #define COPY_CLEAR      (1u << 11)
 #define COPY_TO_XFB     (1u << 14)
 
+/* THE COPY'S PIXEL FORMAT IS BITS 3-6, AND IT IS NOT THE TEXTURE FORMAT.
+ *
+ * The field the hardware reads is four bits at 3, and the texture format it
+ * names is that value rotated: the low bit becomes the high one. Dolphin
+ * spells it `target_pixel_format / 2 + (target_pixel_format & 1) * 8`, and
+ * the hardware's behaviour is the reference here (rule 12).
+ *
+ * What was here read bits 4-7 and did no rotation. The two agree only when
+ * bit 3 and bit 7 happen to be equal, which they are for the copies this
+ * game has been observed to make - so it was not WRONG on anything measured,
+ * and would have become wrong silently on the first copy that differed. The
+ * trace beside it already printed bits 3-6, so the code disagreed with its
+ * own diagnostic. */
+static unsigned copy_tex_format(uint32_t cmd)
+{
+    unsigned tpf = (cmd >> 3) & 0xFu;
+    return (tpf >> 1) | ((tpf & 1u) << 3);
+}
+
 static MgsEfb s_efb;
 static MgsGx  s_gx;
 static MgsGxRaster s_raster;
@@ -90,6 +109,8 @@ static uint64_t s_recorded;
 
 uint64_t mgs_display_recorded(void);
 uint64_t mgs_display_recorded(void) { return s_recorded; }
+
+static void copy_exec_cb(void* user, uint32_t cmd);
 
 static void fifo_sink(void* user, uint32_t value, unsigned size)
 {
@@ -159,6 +180,9 @@ void mgs_display_init(GuestMemory* mem);
 void mgs_display_init(GuestMemory* mem)
 {
     s_mem = mem;
+    /* Copies run inside the parse, in stream order. */
+    s_gx.copy_exec = copy_exec_cb;
+    s_gx.copy_user = NULL;
     mgs_efb_init(&s_efb);
     mgs_gx_init(&s_gx, mem);
     mgs_raster_init(&s_raster, &s_efb);
@@ -211,21 +235,34 @@ unsigned mgs_display_best_h(void) { return s_best_h; }
 void mgs_display_set_best_path(const char* p);
 void mgs_display_set_best_path(const char* p) { s_best_path = p; }
 
-/* Run any copy the game has asked for since the last call. Cheap when there
- * is none, which is most of the time. */
-void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height);
-void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
+/* RUN ONE COPY, WHERE THE COMMAND SITS IN THE STREAM.
+ *
+ * This used to be deferred: the parser stored the command in a single slot
+ * and the run loop's display hook ran it later. Two things follow from that,
+ * and both were happening.
+ *
+ * A second copy issued before the hook ran REPLACED the first, which then
+ * never happened - 2,464 of 9,350 copies in one run, 21% of them, silently.
+ *
+ * And the copies that did run were reordered against the draws. Drawing is
+ * synchronous here ("a command is executed by the parser the moment it is
+ * written", above), so deferring only the copies puts every draw in a frame
+ * before every copy in it. The movie's frame is drawn, copied to a texture,
+ * drawn again sampling that texture, and copied to the framebuffer - and
+ * the texture and the framebuffer are THE SAME BUFFER, which the game is
+ * entitled to do because on hardware the texture is finished with before the
+ * framebuffer copy overwrites it. Flattened, the framebuffer's YUV 4:2:2
+ * landed on the texture before the draw that samples it, so the draw read
+ * luma and chroma bytes as RGBA8 texels: noise, fed back through the next
+ * copy, into the next frame.
+ *
+ * Every value here comes from the PARSER's register state, not from a scan
+ * of the byte stream. The stream cannot be read without knowing where
+ * commands begin, and a destination address taken from a false match writes
+ * 600 KB of framebuffer over whatever it points at. */
+static void run_copy(uint32_t cmd)
 {
-    uint32_t cmd;
-
-    (void)mmio;
-    (void)height;
-
-    /* Every value here comes from the PARSER's register state, not from a
-     * scan of the byte stream. The stream cannot be read without knowing
-     * where commands begin, and a destination address taken from a false
-     * match writes 600 KB of framebuffer over whatever it points at. */
-    while (mgs_gx_take_copy(&s_gx, &cmd)) {
+    {
         uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);
         uint32_t gb = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_GB);
         uint32_t dest = mgs_bp_get(&s_gx.bp, BP_EFB_ADDR);
@@ -250,12 +287,49 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
         mgs_efb_set_dest(&s_efb,
                          dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
                          stride << 5);
+        {   /* EVERY copy, in the order the parser reads them, with the
+             * one bit that says which kind it is. Copies run inside the
+             * parse now, so this sequence is the real one - which is what
+             * makes it worth printing at all. */
+            static int on = -1; static unsigned n, armed;
+            if (on < 0) on = getenv("MGS_TRACE_COPYSEQ") != NULL;
+            ++n;
+            /* Arm on the first LARGE texture copy - the one whose
+             * destination is a framebuffer - and print the window around
+             * it. The small caption copies run thousands of times and would
+             * bury it. */
+            if (on && !armed && !(cmd & COPY_TO_XFB) && copy_w > 256u)
+                armed = n;
+            {   /* MGS_TRACE_BUF=<addr>: this copy, on the same timeline as
+                 * the decodes, so "written correctly" and "decoded as noise"
+                 * can be put in order against each other. */
+                static long watch = -1;
+                uint32_t d = dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu))
+                                  : 0u;
+                if (watch == -1) { const char* e = getenv("MGS_TRACE_BUF");
+                                   watch = e ? (long)strtoul(e, NULL, 0) : 0; }
+                if (watch && (uint32_t)watch == d)
+                    fprintf(stderr, "[buf] %6llu  COPY   0x%08X %ux%u "
+                            "fmt 0x%X  %s\n",
+                            (unsigned long long)++mgs_gx_seq, d,
+                            copy_w, copy_h, copy_tex_format(cmd),
+                            (cmd & COPY_TO_XFB) ? "-> framebuffer (YUV)"
+                                                : "-> texture (tiled)");
+            }
+            if (armed && n >= armed && n < armed + 40u) {
+                fprintf(stderr, "[copyseq] %2u  %-3s dest 0x%08X  %ux%u  "
+                        "fmt 0x%X  stride %u\n", n,
+                        (cmd & COPY_TO_XFB) ? "XFB" : "tex",
+                        dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
+                        copy_w, copy_h, copy_tex_format(cmd), stride << 5);
+            }
+        }
         if (getenv("MGS_TRACE_GX"))
             fprintf(stderr, "[gx] copy cmd=0x%06X dest=0x%08X stride=%u "
                             "%ux%u xfb=%d clear=%d fmt=0x%X\n",
                     cmd, s_efb.copy_dest, s_efb.copy_stride, copy_w, copy_h,
                     (cmd & COPY_TO_XFB) != 0, (cmd & COPY_CLEAR) != 0,
-                    (cmd >> 3) & 0xFu);
+                    copy_tex_format(cmd));
         /* KEEP THE BEST FRAME THE RUN EVER PRODUCES, not whatever happens
          * to be in the buffer when the step limit hits.
          *
@@ -461,7 +535,7 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
              * buffer, often the scratch strip to the right of the visible
              * area, not the origin. */
             if (cmd & COPY_TO_XFB) {
-                mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 1,
+                mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
             } else if (!getenv("MGS_NO_RTT")) {
                 /* A TEXTURE COPY, BUT NOT OVER THE SCREEN.
@@ -480,11 +554,11 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
                  * the code did before render-to-texture existed, and the
                  * screen was better for it. */
                 uint32_t tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
-                mgs_efb_copy_tex(&s_efb, mem, tl & 0x3FFu,
+                mgs_efb_copy_tex(&s_efb, s_mem, tl & 0x3FFu,
                                  (tl >> 10) & 0x3FFu,
-                                 copy_w, copy_h, (cmd >> 4) & 0xFu);
+                                 copy_w, copy_h, copy_tex_format(cmd));
                 if (cmd & COPY_CLEAR)
-                    mgs_efb_copy(&s_efb, mem, copy_w, copy_h, 0, 1);
+                    mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 0, 1);
             }
         }
 
@@ -494,6 +568,28 @@ void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
          * used to be. */
         if (cmd & COPY_CLEAR) mgs_raster_reset_depth(&s_raster);
     }
+}
+
+/* The parser calls this the instant it reads the copy command. */
+static void copy_exec_cb(void* user, uint32_t cmd)
+{
+    (void)user;
+    run_copy(cmd);
+}
+
+/* Drain anything still pending. With the callback installed nothing should
+ * be, but a copy issued before display init would otherwise sit there
+ * forever, and the loop costs one predictable branch. */
+void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height);
+void mgs_display_service(MgsMmio* mmio, GuestMemory* mem, unsigned height)
+{
+    uint32_t cmd;
+
+    (void)mmio;
+    (void)mem;
+    (void)height;
+
+    while (mgs_gx_take_copy(&s_gx, &cmd)) run_copy(cmd);
 }
 
 /* Write the last presented frame out as a portable pixmap.

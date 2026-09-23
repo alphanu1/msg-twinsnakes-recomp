@@ -69,6 +69,18 @@ typedef struct MgsTevCompiled {
     uint32_t ce[16], ae[16];   /* each stage's colour and alpha environment */
     unsigned stages;
     int      configured;       /* GEN_MODE written: false means the default */
+
+    /* THE KONST EACH STAGE SELECTED, resolved once here rather than per
+     * pixel. Every stage picks its constant independently through KSEL, and
+     * the colour selectors can splat one channel across all three - which is
+     * how a game supplies a scalar coefficient. Held per stage because that
+     * is how the hardware holds it. */
+    int      kc[16][3], ka[16];
+
+    /* The four channel-swap tables, as source channel indices in r,g,b,a
+     * order. Identity when the game has not written KSEL. */
+    unsigned swap[4][4];
+    int      swap_set;
 } MgsTevCompiled;
 
 void     mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out);

@@ -1,6 +1,8 @@
 #include <string.h>
 #include "tev.h"
 
+#include <stdlib.h>
+
 /* How many stages the general-mode register says are active. */
 static unsigned stage_count(const MgsGxBp* bp)
 {
@@ -18,19 +20,44 @@ static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 /* One colour channel of a TEV register, as the game set it. The registers are
  * written as pairs: 0xE0+2n carries red and alpha, 0xE1+2n green and blue,
  * each as an 11-bit signed value. */
+
+/* RED IS THE LOW HALF AND ALPHA IS THE HIGH HALF, and they were the wrong
+ * way round.
+ *
+ * Dolphin's `TevReg::RA` is the reference (rule 12): `BitField<0, 11, s32>
+ * red` and `BitField<12, 11, s32> alpha`. This read alpha from bits 0-10 and
+ * red from 12-22, so every TEV constant register returned its red as its
+ * alpha and its alpha as its red.
+ *
+ * What that costs is not subtle, because the alpha is what the blend uses.
+ * The movie's last pass draws a full-screen quad of the previous frame with
+ * `src*a + dst*(1-a)`, and its alpha comes from a register whose red the
+ * game had set to full: the quad came out opaque instead of a faint overlay,
+ * so the first frame - sampling a buffer nothing had written yet - painted
+ * uninitialised memory over the whole picture at full strength, and every
+ * frame after it fed on its own output. That is the green and magenta
+ * striping, and it is why the movie's planes could decode perfectly while
+ * the screen showed noise.
+ *
+ * Bit 23 selects whether the write sets the register or its konst; it is not
+ * read here yet, and the konst path is selected separately by KSEL. */
 static void tev_register(const MgsGxBp* bp, unsigned index, int* out)
 {
-    uint32_t lo = mgs_bp_get(bp, (uint8_t)(BP_TEV_REGISTER_L + index * 2u));
-    uint32_t hi = mgs_bp_get(bp, (uint8_t)(BP_TEV_REGISTER_L + index * 2u + 1u));
-    out[3] = (int)(lo & 0x7FFu);           /* alpha */
-    out[0] = (int)((lo >> 12) & 0x7FFu);   /* red */
-    out[2] = (int)(hi & 0x7FFu);           /* blue */
-    out[1] = (int)((hi >> 12) & 0x7FFu);   /* green */
+    /* Read the ROUTED value, not the register's last raw word.
+     *
+     * 0xE0-0xE7 carry both the colour registers and the konst registers,
+     * selected by bit 23, and `mgs_bp_write` now routes each write to the
+     * right one. Re-deriving the colour here from the raw word would read a
+     * konst as a colour whenever the konst was written second. */
+    out[0] = bp->tevreg[index][0];
+    out[1] = bp->tevreg[index][1];
+    out[2] = bp->tevreg[index][2];
+    out[3] = bp->tevreg[index][3];
 }
 
 /* Colour input selectors, as the colour-environment register encodes them. */
 static void color_input(unsigned sel, const int reg[4][4], const MgsTevInput* in,
-                        int konst, int* out)
+                        const int* konst, int* out)
 {
     unsigned i;
     switch (sel) {
@@ -60,7 +87,7 @@ static void color_input(unsigned sel, const int reg[4][4], const MgsTevInput* in
             return;
         case 12: for (i = 0; i < 3u; ++i) out[i] = 255; return;        /* one */
         case 13: for (i = 0; i < 3u; ++i) out[i] = 128; return;        /* half */
-        case 14: for (i = 0; i < 3u; ++i) out[i] = konst; return;      /* konst */
+        case 14: for (i = 0; i < 3u; ++i) out[i] = konst[i]; return;   /* konst */
         default: for (i = 0; i < 3u; ++i) out[i] = 0; return;          /* zero */
     }
 }
@@ -120,6 +147,49 @@ static inline int combine(int a, int b, int c, int d, unsigned op, unsigned bias
 }
 
 
+/* KONST, WHICH WAS 255 FOR EVERY STAGE.
+ *
+ * The constant a stage uses is chosen by KSEL (0xF6-0xFD), and it is NOT one
+ * value: a selector can pick a whole konst register's rgb, or splat one of
+ * its channels across all three. Splatting is how a game passes a scalar,
+ * and a YUV composite passes its matrix coefficients exactly that way - so
+ * pinning konst at 255 turns every coefficient into 1.0 and the colours come
+ * out as a wash.
+ *
+ * The tables are Dolphin's `tev_ksel_table_c` and `tev_ksel_table_a`
+ * (rule 12): eight fractions of one, four invalid selectors that read zero,
+ * then the konst registers whole and by channel. Alpha has no "whole
+ * register" form, so 12-15 are invalid there too. */
+static void konst_color(const MgsGxBp* bp, unsigned sel, int* out)
+{
+    static const int frac[8] = { 255, 223, 191, 159, 128, 96, 64, 32 };
+    unsigned i, k = (sel - 12u) & 3u;
+    if (sel < 8u) { for (i = 0; i < 3u; ++i) out[i] = frac[sel]; return; }
+    if (sel < 12u) { for (i = 0; i < 3u; ++i) out[i] = 0; return; }
+    if (sel < 16u) {                                   /* K<n>.rgb */
+        for (i = 0; i < 3u; ++i) out[i] = bp->konst[k][i];
+        return;
+    }
+    /* 16-31: one channel of K<n>, splatted. 16 = red, 20 = green,
+     * 24 = blue, 28 = alpha. */
+    {
+        unsigned ch = (sel - 16u) >> 2;
+        int v = bp->konst[(sel - 16u) & 3u][ch == 3u ? 3 : (int)ch];
+        for (i = 0; i < 3u; ++i) out[i] = v;
+    }
+}
+
+static int konst_alpha(const MgsGxBp* bp, unsigned sel)
+{
+    static const int frac[8] = { 255, 223, 191, 159, 128, 96, 64, 32 };
+    if (sel < 8u) return frac[sel];
+    if (sel < 16u) return 0;              /* 8-15 invalid for alpha */
+    {
+        unsigned ch = (sel - 16u) >> 2;
+        return bp->konst[(sel - 16u) & 3u][ch == 3u ? 3 : (int)ch];
+    }
+}
+
 void mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out)
 {
     unsigned i, s;
@@ -128,9 +198,63 @@ void mgs_tev_compile(const MgsGxBp* bp, MgsTevCompiled* out)
     out->configured = bp->written[BP_GEN_MODE] != 0;
     for (i = 0; i < 4u; ++i) tev_register(bp, i, out->reg[i]);
     for (s = 0; s < out->stages; ++s) {
+        unsigned ks = (unsigned)mgs_bp_get(bp,
+                          (uint8_t)(BP_TEV_KSEL + (s >> 1)));
         out->ce[s] = mgs_bp_get(bp, (uint8_t)(BP_TEV_COLOR_ENV + s * 2u));
         out->ae[s] = mgs_bp_get(bp, (uint8_t)(BP_TEV_ALPHA_ENV + s * 2u));
+        konst_color(bp, (s & 1u) ? ((ks >> 14) & 0x1Fu) : ((ks >> 4) & 0x1Fu),
+                    out->kc[s]);
+        out->ka[s] = konst_alpha(bp,
+                         (s & 1u) ? ((ks >> 19) & 0x1Fu)
+                                  : ((ks >> 9) & 0x1Fu));
     }
+
+    /* THE FOUR SWAP TABLES ARE NOT APPLIED, AND THAT IS DELIBERATE.
+     *
+     * They live in KSEL too, two registers per table, and the two references
+     * available here DISAGREE about which register half holds which channel:
+     *
+     *   libogc `GX_SetTevSwapModeTable` writes r,g to the EVEN register
+     *     (regA = swapid*2) and b,a to the ODD one;
+     *   Dolphin's `TevKSel` says the opposite - "Odd ksel number: red;
+     *     even: blue", "Odd: green; even: alpha".
+     *
+     * Implementing either reading was tried. This game writes all eight KSEL
+     * registers with the swap bits ZERO, which under both readings means
+     * every channel reads RED - so applying them emptied the green channel
+     * across the whole frame (green non-zero in 6,197 of 229,376 pixels,
+     * against red and blue at 121 everywhere). The screen went magenta.
+     *
+     * Zero is also what GXInit's four tables CANNOT be: it sets table 0 to
+     * identity and 1-3 to R,R,R,A / G,G,G,A / B,B,B,A, none of which encodes
+     * as zero. So either those writes do not reach us, or the field layout
+     * is a third thing again. Until that is settled the identity is used,
+     * which is what the code did before and what every observed draw wants:
+     * the movie's planes are I8, whose texels have all four channels equal,
+     * so a swap cannot change what those stages read anyway.
+     *
+     * Counted so the gap is a number rather than a silence. */
+    out->swap_set = 0;
+    for (i = 0; i < 8u; ++i)
+        if (bp->written[BP_TEV_KSEL + i] &&
+            (mgs_bp_get(bp, (uint8_t)(BP_TEV_KSEL + i)) & 0xFu) != 0u)
+            out->swap_set = 1;
+    for (i = 0; i < 4u; ++i) {
+        out->swap[i][0] = 0; out->swap[i][1] = 1;
+        out->swap[i][2] = 2; out->swap[i][3] = 3;
+    }
+}
+
+/* Reorder one ARGB colour through a swap table. */
+static uint32_t swap_argb(uint32_t c, const unsigned* tab)
+{
+    int ch[4];
+    ch[0] = (int)((c >> 16) & 0xFFu);   /* red   */
+    ch[1] = (int)((c >> 8) & 0xFFu);    /* green */
+    ch[2] = (int)(c & 0xFFu);           /* blue  */
+    ch[3] = (int)((c >> 24) & 0xFFu);   /* alpha */
+    return ((uint32_t)ch[tab[3]] << 24) | ((uint32_t)ch[tab[0]] << 16) |
+           ((uint32_t)ch[tab[1]] << 8)  | (uint32_t)ch[tab[2]];
 }
 
 uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
@@ -158,7 +282,8 @@ uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
         int a[3], b[3], c[3], d[3];
         int out[4];
         unsigned dst_c = (ce >> 22) & 3u, dst_a = (ae >> 22) & 3u;
-        int konst_c = 255, konst_a = 255;
+        const int* konst_c = t->kc[s];
+        int konst_a = t->ka[s];
         /* This stage's own texel, where the stages differ. The copy is made
          * only when they do; with one shared texture `cur` is `in` and this
          * costs a predictable branch. */
@@ -170,6 +295,20 @@ uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
             sv.texture     = in->stage_tex[s];
             sv.has_texture = in->stage_has[s];
             cur = &sv;
+        }
+
+        /* The swap tables reorder this stage's inputs. Skipped entirely when
+         * both are the identity, which is the overwhelmingly common case and
+         * the one that must not pay for this. */
+        {
+            const unsigned* ts = t->swap[(ae >> 2) & 3u];
+            const unsigned* rs = t->swap[ae & 3u];
+            if (ts[0] != 0u || ts[1] != 1u || ts[2] != 2u || ts[3] != 3u ||
+                rs[0] != 0u || rs[1] != 1u || rs[2] != 2u || rs[3] != 3u) {
+                if (cur != &sv) { sv = *in; cur = &sv; }
+                sv.texture = swap_argb(sv.texture, ts);
+                sv.raster  = swap_argb(sv.raster, rs);
+            }
         }
 
         color_input((ce >> 12) & 0xFu, reg, cur, konst_c, a);
@@ -202,70 +341,19 @@ uint32_t mgs_tev_run_compiled(const MgsTevCompiled* t, const MgsTevInput* in)
            (uint32_t)clamp255(reg[0][2]);
 }
 
+/* ONE IMPLEMENTATION, NOT TWO.
+ *
+ * This was a second copy of the stage loop that read its registers straight
+ * from the BP state. Two copies of the same arithmetic drift: the compiled
+ * one gained per-stage textures and the konst and swap work, and this one
+ * silently did not - so a caller that used it got a combiner a generation
+ * behind. It now compiles and runs the same path. Nothing calls it on a
+ * per-pixel route; the rasteriser compiles once per draw. */
 uint32_t mgs_tev_run(const MgsGxBp* bp, const MgsTevInput* in)
 {
-    int reg[4][4];                 /* prev, c0, c1, c2 - rgb then alpha */
-    unsigned n = stage_count(bp), s, i;
-
-    /* Register 0 is "prev" and starts undefined on hardware; the SDK always
-     * writes it before use. Starting from the rasterised colour rather than
-     * from zero means a game that relies on that write still looks right if
-     * we miss the write, which would hide a bug - so it starts at the
-     * register the game set. */
-    for (i = 0; i < 4u; ++i) tev_register(bp, i, reg[i]);
-
-    if (!bp->written[BP_GEN_MODE]) {
-        /* Nothing configured yet: the rasterised colour, modulated by the
-         * texture if there is one. This is the state before the game's first
-         * GXSetTevOp, and it is the only guess in this file. */
-        if (!in->has_texture) return in->raster;
-        {
-            uint32_t out = 0;
-            for (i = 0; i < 4u; ++i) {
-                int t = (int)((in->texture >> (i * 8)) & 0xFFu);
-                int r = (int)((in->raster >> (i * 8)) & 0xFFu);
-                out |= (uint32_t)clamp255(t * r / 255) << (i * 8);
-            }
-            return out;
-        }
-    }
-
-    for (s = 0; s < n; ++s) {
-        uint32_t ce = mgs_bp_get(bp, (uint8_t)(BP_TEV_COLOR_ENV + s * 2u));
-        uint32_t ae = mgs_bp_get(bp, (uint8_t)(BP_TEV_ALPHA_ENV + s * 2u));
-        int a[3], b[3], c[3], d[3];
-        int out[4];
-        unsigned dst_c = (ce >> 22) & 3u, dst_a = (ae >> 22) & 3u;
-        int konst_c = 255, konst_a = 255;
-
-        color_input((ce >> 12) & 0xFu, reg, in, konst_c, a);
-        color_input((ce >> 8)  & 0xFu, reg, in, konst_c, b);
-        color_input((ce >> 4)  & 0xFu, reg, in, konst_c, c);
-        color_input((ce >> 0)  & 0xFu, reg, in, konst_c, d);
-
-        for (i = 0; i < 3u; ++i)
-            out[i] = combine(a[i], b[i], c[i], d[i],
-                             (ce >> 18) & 1u, (ce >> 16) & 3u,
-                             (ce >> 20) & 3u, (ce >> 19) & 1u);
-
-        {
-            int aa = alpha_input((ae >> 13) & 7u, reg, in, konst_a);
-            int ab = alpha_input((ae >> 10) & 7u, reg, in, konst_a);
-            int ac = alpha_input((ae >> 7)  & 7u, reg, in, konst_a);
-            int ad = alpha_input((ae >> 4)  & 7u, reg, in, konst_a);
-            out[3] = combine(aa, ab, ac, ad,
-                             (ae >> 18) & 1u, (ae >> 16) & 3u,
-                             (ae >> 20) & 3u, (ae >> 19) & 1u);
-        }
-
-        for (i = 0; i < 3u; ++i) reg[dst_c][i] = out[i];
-        reg[dst_a][3] = out[3];
-    }
-
-    return ((uint32_t)clamp255(reg[0][3]) << 24) |
-           ((uint32_t)clamp255(reg[0][0]) << 16) |
-           ((uint32_t)clamp255(reg[0][1]) << 8) |
-           (uint32_t)clamp255(reg[0][2]);
+    MgsTevCompiled t;
+    mgs_tev_compile(bp, &t);
+    return mgs_tev_run_compiled(&t, in);
 }
 
 /* Can this alpha configuration reject anything at all?

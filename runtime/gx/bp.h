@@ -88,6 +88,19 @@ typedef struct MgsGxBp {
     uint32_t reg[256];        /* every register's last written value */
     uint8_t  written[256];    /* whether the game has set it at all */
 
+    /* THE SAME EIGHT REGISTERS HOLD TWO DIFFERENT THINGS.
+     *
+     * 0xE0-0xE7 write either a TEV colour register or a TEV KONST register,
+     * chosen by bit 23 of the value (Dolphin: `TevReg::RA::type`). Keeping
+     * only the last value written to each address loses whichever kind was
+     * written first, so both are kept here, routed at write time the way the
+     * hardware routes them.
+     *
+     * Order is r, g, b, a. Colour registers are signed 11-bit; konst is used
+     * as an unsigned 0-255 colour. */
+    int32_t tevreg[4][4];
+    int32_t konst[4][4];
+
     /* Texture memory, as the game loads it. The hardware's is 1 MB of on-die
      * memory addressed in 32-byte lines; the palette area is separate. Both
      * are held as flat arrays because nothing here benefits from modelling

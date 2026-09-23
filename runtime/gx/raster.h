@@ -77,6 +77,14 @@ typedef struct MgsGxRaster {
     uint16_t drawlog_w[64], drawlog_h[64];
     uint8_t  drawlog_fmt[64], drawlog_rough[64];
     unsigned drawlog_at;
+
+    /* Which draw turns the embedded buffer noisy: the score either side of
+     * one full-screen draw, and what it had bound. Diagnostic only. */
+    unsigned  noise_before, noise_armed;
+    unsigned* noise_said;
+    uint32_t  noise_tex_addr;
+    uint8_t   noise_tex_fmt;
+    uint16_t  noise_tex_w, noise_tex_h;
     uint32_t cmode_key[16]; uint64_t cmode_hit[16]; unsigned cmode_n;
     uint64_t black_over_lit;       /* black pixels drawn over lit ones */
     uint64_t black_over_lit_x[20]; /* ...by column, 32px buckets */
