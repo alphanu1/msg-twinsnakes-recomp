@@ -11371,3 +11371,54 @@ So it is the tuning note: rare peaks in busy moments, audible as occasional
 crackle, not gross distortion. Left as a measured figure rather than
 "fixed" by a guessed master volume - AX does apply an output volume we do
 not model, and that is the right place to look if 0.3% turns out to matter.
+
+
+### F269 — the streamed voice ring, and where the "voices cut out" actually comes from
+
+Watching a streaming voice's parameter block (voice 62, PB `0x801F9918`)
+shows the geometry exactly. The game writes `loopAddr` and `endAddr`
+together, always one apart, walking a ring of eight blocks of 0x1000
+samples:
+
+    loop 0x8000 / end 0x7FFF
+    loop 0x9000 / end 0x8FFF
+    loop 0x2000 / end 0x9FFF     <- the wrap: loop < end
+    loop 0x3000 / end 0x2FFF
+
+So `loop == end + 1` is "the next block starts here", and the ring runs
+0x2000..0x9FFF. **The console holds the same geometry** - a Dolphin snapshot
+reads voice 60 as loop 0x0000D000, end 0x0000CFFF, loopFlag 1 - so it is the
+game's real streaming hand-off, not something we are misreading.
+
+Two consequences, and they are different problems:
+
+**One, now fixed.** The mixer set `curr = loop` on overrun and carried on.
+With `loop > end` that re-entered the same branch for every remaining sample
+of the frame, so the voice stuck at one position repeating a sample:
+388,532 overruns against 36,720 voice-mixes, about seventeen a frame where a
+block boundary can only happen once. Stopping the voice for the frame
+instead drops that to 3,210 - one per seven frames - and removes 6.6% of
+"contributed" PCM samples that were the repeats. The non-zero proportion is
+unchanged at 99.06%, so no real audio went with them.
+
+**Two, still open, and it is the rest of the symptom.** The game extends
+`end` only once it has FILLED the block at `loop`, so a voice that reaches
+the end genuinely has nothing to play until the refill lands. Ours waits a
+long time for it:
+
+    322 refills, 3,210 starved frames  ->  about ten frames of silence per block
+    a block is 0x1000 samples, about nineteen frames at 220 samples a frame
+
+so the voice is dry roughly a third of the time. The console keeps `curr`
+well inside the block (voice 60 sat 0xA95 samples - twelve frames - ahead of
+`end`), so the refill there arrives long before it is needed.
+
+**That latency is in the refill path, not the mixer.** It is the same
+four-thread sound pipeline as F257/F262, now running. Worth measuring next:
+how many frames pass between the mixer reaching `end` and the game writing
+the new `end`, and which of the four queues the time is spent in.
+
+**What not to re-propose:** running on past `end` into `loop` without
+waiting. The data is not there yet by construction - the game fills then
+extends - so that reads unwritten ARAM, which is the behaviour already
+recorded and rejected in the comment above this code.
