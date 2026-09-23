@@ -11760,3 +11760,38 @@ should render at 25 fps AND the movie should stream, and at present no
 single value does both. What that points at is something still paced by step
 count rather than by guest time - the same class of fault as F268, one level
 down.
+
+
+### F277 — the run loop's periodic hooks ran on STEPS, so the tick rate was a behaviour knob
+
+Seven hooks in the run loop were scheduled as `r.steps % N`: the draw-done
+poll (64), the DSP task offer (4099), the three interrupt re-offers (211,
+127, 89), the DVD service (512) and the framebuffer copy (256).
+
+A step is not a unit of guest time - `ticks = steps * MGS_TICK_RATE` - so
+halving the tick rate **halved every one of those periods in guest time**.
+The modelled GPU handed back its draw-done twice as fast, the DSP offered
+twice as often, the DVD was serviced twice as often. The tick rate was not a
+performance knob, it was a knob that changed how fast the hardware appeared
+to the game.
+
+They are now scheduled on a guest-tick clock, with periods of the old step
+counts times eight, so at `MGS_TICK_RATE=8` - the rate they were tuned at -
+each fires where it used to, and at any other rate it fires at the same
+point in GUEST time. Verified: rate 8 gives 11.6 fps and 63 movie reads
+against 12.3 and 65 before, the difference being a one-step phase shift from
+the tick counter incrementing before its first use.
+
+**It did not fix what it was aimed at.** The hope was that this was why the
+movie streams at rate 8 and stops at rate 4 (F276). It is not: at rate 4
+the engine still renders 25.3 fps and `movie.dat` still stops at 8 reads.
+Kept anyway, because a tick rate that silently retimes the hardware makes
+every future measurement at a different rate untrustworthy, and that is
+worth removing on its own.
+
+**Still open:** the movie's behaviour depends on the tick rate through some
+other path. At rate 4 over 356 s of guest video the game posts 65 events,
+all code 0; at rate 8 over 494 s it posts 480, of which 191 are code 1. The
+next question is whether that is a rate effect or simply a different point
+in the game, which needs the two compared at EQUAL guest time - the
+comparison that was running when this was written.

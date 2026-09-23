@@ -1160,6 +1160,7 @@ void mgs_module_profile_dump(FILE* out, unsigned top)
 MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 {
     MgsRunResult r;
+    uint64_t gt = 0;   /* guest ticks, for the periodic hooks */
     uint32_t last_pc = 0u;
     uint64_t same_pc = 0u;
     uint64_t trace_steps = 0u;
@@ -1263,6 +1264,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * MGS_TICK_RATE overrides it while that is being measured; the
          * calibrated figure for 60 Hz is 675000/2000 = 337 or 338. */
         mgs_runtime_advance_ticks(mgs_runtime_from(NULL), mgs_tick_rate());
+        /* THE PERIODIC HOOKS BELOW RUN ON GUEST TIME, NOT ON STEPS.
+         *
+         * They used to be `r.steps % N`, which makes every modelled device
+         * faster or slower in GUEST time whenever the tick rate changes -
+         * the poll that hands the guest its draw-done, the DSP task offer,
+         * the DVD service. So the tick rate was not a performance knob, it
+         * was a behaviour knob: at 8 the movie streams 65 chunks and the
+         * engine renders 12 fps, and at 4 the engine renders 25 fps and the
+         * movie stops at 8 chunks (F276).
+         *
+         * `gt` is that same schedule expressed in guest ticks. The periods
+         * are the old step counts times 8, so at MGS_TICK_RATE=8 - what
+         * they were tuned at - every hook fires on exactly the step it used
+         * to, and at any other rate it fires at the same point in GUEST
+         * TIME instead of the same step. */
+        gt += mgs_tick_rate();
         /* The audio interface's sample counter comes off the same clock,
          * because __AI_SRC_INIT times one against the other. */
         mgs_mmio_advance_ticks(mgs_host_mmio(), mgs_tick_rate());
@@ -1295,7 +1312,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * than retrace: the game blocks on it inside a frame, so answering it
          * only at the next retrace would halve the frame rate for no reason.
          * Raising it moves the pc, so it belongs here with the others. */
-        else if ((r.steps % 64ull) == 0ull)
+        else if ((gt % 512ull) == 0ull)
             mgs_interrupt_pe_finish(mod, cpu);
 
         /* Submitted DSP tasks report themselves finished.
@@ -1309,7 +1326,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * The interval is prime for the same reason the profiler's is: the
          * run loop is full of periodic work, and anything sharing a factor
          * with it samples a fraction of the program. */
-        if ((r.steps % 4099ull) == 0ull)
+        if ((gt % 32792ull) == 0ull)
             mgs_interrupt_dsp_task(mod, cpu);
 
         /* Anything left asserted is offered again.
@@ -1325,19 +1342,19 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * and anything sharing a factor with them samples a fraction of the
          * program. This must not be one of them, because the case it exists
          * to catch is precisely the one where two of those coincide. */
-        if ((r.steps % 211ull) == 0ull)
+        if ((gt % 1688ull) == 0ull)
             mgs_interrupt_pending(mod, cpu);
 
         /* Far more often than a task: a transfer finishes as soon as it is
          * started here, and the audio manager waits on each one. */
-        if ((r.steps % 127ull) == 0ull)
+        if ((gt % 1016ull) == 0ull)
             mgs_interrupt_aram(mod, cpu);
 
         /* And the audio DMA's, which is what asks for the next buffer of
          * sound. Offered often, on a period sharing no factor with the
          * others in this loop: the engine queues a completion every 10,125
          * guest ticks, and one that waits is one the stream waits on. */
-        if ((r.steps % 89ull) == 0ull)
+        if ((gt % 712ull) == 0ull)
             mgs_interrupt_aid(mod, cpu);
 
         /* MGS_WATCH=<guest address>: who writes that word?
@@ -1386,13 +1403,13 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */
-        if ((r.steps % 512ull) == 0ull && s_pump)
+        if ((gt % 4096ull) == 0ull && s_pump)
             s_pump(mod, cpu, s_pump_user);
 
         /* Execute any framebuffer copy the game has put in the command
          * stream. Checked often: the copy is what makes a frame exist, and
          * deferring it to the next retrace would show every frame late. */
-        if ((r.steps % 256ull) == 0ull && s_display)
+        if ((gt % 2048ull) == 0ull && s_display)
             s_display();
 
         pc = mgs_module_pc(cpu);
