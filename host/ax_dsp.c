@@ -574,15 +574,63 @@ void mgs_ax_dsp_frame(void* cpu)
      * whether that was one sample in a run or one in three, and those are a
      * tuning note and a bug respectively. The peak read 200% as soon as most
      * frames stopped being silent (F268), so the count decides which. */
-    for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
-        int32_t l = acc_l[i], r = acc_r[i];
-        ++s_out_samples;
-        if (l > 32767 || l < -32768) ++s_clipped;
-        if (r > 32767 || r < -32768) ++s_clipped;
-        if (l > 32767) l = 32767; if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767; if (r < -32768) r = -32768;
-        out[i * 2u] = (int16_t)l;
-        out[i * 2u + 1u] = (int16_t)r;
+    /* LIMIT, DO NOT CLIP.
+     *
+     * Two voices at full into both channels sum past full scale, and
+     * hard-clamping them is what the mixed output showed: 139,044 samples
+     * at the rails, 1.24% of them, and 57,514 sample-to-sample jumps of
+     * more than a quarter of full scale - 328 a second. A clamp IS a
+     * discontinuity, and 328 a second is heard as constant crackle. That
+     * matches the user's report exactly, and their guess that the clipping
+     * was causing it.
+     *
+     * The real machine does not clip here: AX runs a COMPRESSOR. Dolphin
+     * implements it (`AXUCode::RunCompressor`) - a threshold test over the
+     * frame, then an attack or release ramp whose coefficients come from a
+     * table the GAME supplies through a DSP command. We do not parse the
+     * DSP command list, so that table and its threshold are not available
+     * to us, and this is not a model of it.
+     *
+     * What it is: a limiter with the same purpose, so the output stops
+     * being spliced. The gain is derived from the frame's own peak, moves
+     * quickly downwards and slowly back up, and is INTERPOLATED ACROSS THE
+     * FRAME - a gain that jumped at frame boundaries would only replace one
+     * discontinuity with another every 5 ms.
+     *
+     * The clipped-sample counter stays: with a real compressor in place it
+     * should read zero, and if it starts reading anything again that is the
+     * signal that something upstream has changed. */
+    {
+        static int32_t gain = 1 << 16;          /* 16.16, 1.0 = unity */
+        int32_t peak = 0, want, g0 = gain;
+        for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+            int32_t a = acc_l[i] < 0 ? -acc_l[i] : acc_l[i];
+            int32_t b = acc_r[i] < 0 ? -acc_r[i] : acc_r[i];
+            if (a > peak) peak = a;
+            if (b > peak) peak = b;
+        }
+        /* The gain that would just fit this frame under full scale. */
+        want = peak > 32767
+             ? (int32_t)(((int64_t)32767 << 16) / peak)
+             : (1 << 16);
+        if (want < gain) gain = want;                       /* attack at once */
+        else gain += (want - gain) >> 6;                    /* release slowly */
+
+        for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+            /* Ramp from the previous frame's gain to this one's, so the
+             * correction itself never makes a step. */
+            int32_t g = g0 + (int32_t)(((int64_t)(gain - g0) * (int32_t)i)
+                                       / (int32_t)AX_FRAME_SAMPLES);
+            int32_t l = (int32_t)(((int64_t)acc_l[i] * g) >> 16);
+            int32_t r = (int32_t)(((int64_t)acc_r[i] * g) >> 16);
+            ++s_out_samples;
+            if (l > 32767 || l < -32768) ++s_clipped;
+            if (r > 32767 || r < -32768) ++s_clipped;
+            if (l > 32767) l = 32767; if (l < -32768) l = -32768;
+            if (r > 32767) r = 32767; if (r < -32768) r = -32768;
+            out[i * 2u] = (int16_t)l;
+            out[i * 2u + 1u] = (int16_t)r;
+        }
     }
     /* MGS_AUDIO_WAV=<path>: the mixed output, so it can be JUDGED.
      *

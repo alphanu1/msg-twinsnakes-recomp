@@ -61,10 +61,22 @@ def main():
                     gaps.append(run)
                 run = 0
 
-    # A discontinuity: neighbouring samples differing by more than a quarter
-    # of full scale. Real audio at 32 kHz does not step that far in 31 us.
-    jump = 32768 // 4
-    disc = sum(1 for i in range(1, n) if abs(left[i] - left[i - 1]) > jump)
+    # DISCONTINUITIES, BY SIZE - because one threshold cannot tell a splice
+    # from a cymbal. At 32 kHz a full-scale 4 kHz tone steps about 25,000
+    # between neighbouring samples, so "more than a quarter of full scale"
+    # flags ordinary treble: it read 189 a second on audio whose genuinely
+    # impossible jumps had already been fixed, and would have sent anyone
+    # reading it hunting a fault that was not there.
+    #
+    # A step larger than full scale itself cannot come from a waveform at
+    # all - it is a splice, a clamp, or a decode fault - so that is what the
+    # verdict is based on.
+    tiers = []
+    for frac in (0.25, 0.5, 0.9, 1.5):
+        t = int(32768 * frac)
+        tiers.append((frac, sum(1 for i in range(1, n)
+                                if abs(left[i] - left[i - 1]) > t)))
+    disc = tiers[3][1]
 
     print(f"  {n} frames, {secs:.1f}s at {rate} Hz")
     print(f"  level:          peak {peak} ({100.0*peak/32767:.0f}% FS), "
@@ -73,10 +85,13 @@ def main():
     print(f"  gaps >=1ms:     {len(gaps)}"
           + (f", total {sum(gaps)/float(rate)*1000:.0f} ms, "
              f"longest {max(gaps)/float(rate)*1000:.0f} ms" if gaps else ""))
-    print(f"  discontinuities: {disc} ({disc/secs:.1f} per second)")
+    print("  jumps between neighbouring samples:")
+    for frac, c in tiers:
+        note = "  <- impossible in real audio" if frac >= 1.5 else ""
+        print(f"     > {int(frac*100):3d}% FS: {c:8d}  ({c/secs:7.1f}/s){note}")
     bad = []
     if len(gaps) > secs:            bad.append("gaps")
-    if disc / max(secs, 1) > 20:    bad.append("discontinuities")
+    if disc / max(secs, 1) > 1:     bad.append("splices")
     if clipped * 200 > n:           bad.append("clipping")
     print("  VERDICT: " + ("clean" if not bad else "PROBLEMS: " + ", ".join(bad)))
     return 0
