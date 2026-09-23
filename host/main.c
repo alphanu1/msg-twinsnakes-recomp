@@ -155,11 +155,56 @@ static void movie_clock_trace(void* cpu)
             (int)stamp <= (int)clock + 6 ? "YES" : "no");
 }
 
+/* MGS_TRACE_MOVIESTATE=1: the movie task's state, resolved and VALIDATED.
+ *
+ * A previous count of "state changes" watched the task node's state field at
+ * a fixed address for hundreds of millions of steps and reported 180 of
+ * them. The node had been freed and its allocation reused, so most of those
+ * were float bit patterns and pixel bytes written by whatever owns the
+ * memory now (F273).
+ *
+ * So this resolves the node through `.bss` every time rather than trusting
+ * an address, and REFUSES ANYTHING THAT IS NOT A LEGAL STATE. The state
+ * machine has five: 0 opens, 1 waits, 2 plays, 3 and 4 end. A field holding
+ * anything else is not a state, it is a different object, and saying so is
+ * the whole point. */
+static void movie_state_trace(void* cpu)
+{
+    static int on = -1;
+    static uint32_t last = 0xFFFFFFFFu;
+    static uint64_t ticks, entered;
+    uint32_t node, st;
+
+    if (on < 0) on = getenv("MGS_TRACE_MOVIESTATE") != NULL;
+    if (!on || !s_engine_bss) return;
+    ++ticks;
+
+    node = mgs_module_guest_read32(cpu, s_engine_bss + 0x55EA8u);
+    if (!node) return;
+    st = mgs_module_guest_read32(cpu, node + 0x44u);
+    if (st > 4u) {                       /* not a state: stale object */
+        if (last != 0xFFFFFFFEu) {
+            fprintf(stderr, "[mstate] node 0x%08X no longer holds a state "
+                            "(reads 0x%08X) - freed and reused\n", node, st);
+            last = 0xFFFFFFFEu;
+        }
+        return;
+    }
+    if (st == last) return;
+    if (last <= 4u)
+        fprintf(stderr, "[mstate] %u -> %u  after %llu ticks\n",
+                last, st, (unsigned long long)(ticks - entered));
+    else
+        fprintf(stderr, "[mstate] -> %u\n", st);
+    last = st; entered = ticks;
+}
+
 static void dvd_pump(const MgsModule* mod, void* cpu, void* user)
 {
     task_mask_watch(cpu);
     movie_kick(cpu);
     movie_clock_trace(cpu);
+    movie_state_trace(cpu);
     mgs_dvd_service(mod, cpu, (MgsDvd*)user);
     /* The card's mount completion rides the same pump: both are completions
      * the guest is waiting for, and both may only be delivered from here. */

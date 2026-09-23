@@ -11667,3 +11667,57 @@ clock and the head record's timestamp from the same place the guest does:
 The clock runs well AHEAD of the timestamps, so records are due and the
 record test is not what parks the movie. That removes the last few messages'
 working theory: it is the wake-up, and only the wake-up.
+
+
+### F275 — the movie is NOT stalled on a wake-up. It is SUPPLY-LIMITED, and runs at 1.7 fps
+
+Measured with the guest's own return values rather than an address that
+might have been recycled (F273), over identical 900M-step runs:
+
+    no kick    1,231 records decoded of 1,262 calls to the record test
+    with kick  1,262 records decoded of 1,294
+
+**The kick makes almost no difference.** The movie decodes either way. Every
+conclusion built on "the task is parked and decodes nothing" - F265, F270,
+F272 - was measuring the wrong thing, and this supersedes all three.
+
+**A validated state trace** (`MGS_TRACE_MOVIESTATE=1`, which resolves the
+node through `.bss` every tick and refuses any value that is not a legal
+state) shows the task does not flick in and out of playing at all:
+
+    no kick    0 -> 2 after 247,  2 -> 1 after 961,  1 -> 2 after 425405,  2 -> 1 after 514272
+    with kick  0 -> 2 after 247,  2 -> 1 after 961,  1 -> 2 after    151,  2 -> 3 after 523502
+
+It sits in state 2 for about half a million ticks in BOTH runs. The kick only
+makes the second play start sooner, and with it the movie reaches state 3 -
+ending normally - instead of dropping back to 1.
+
+**What is actually wrong is the data rate.** 1,231 frames across 711 s of
+guest video is **1.7 frames a second**, which is exactly "no movie frames
+advance" to the eye, and it is not the decoder's fault:
+
+    shared/movie.dat   65 reads, 1,814,528 bytes, in 711 s of guest time
+                       = about 2.9 KB/s
+
+A 95 MB movie needs hundreds of KB/s. The producer wrote 1,272 records and
+the consumer took 1,231 of them, so **the consumer is keeping up with the
+supply and the supply is roughly a hundred times too slow.**
+
+**Where to look next, with what is already known.** The one
+`gcn_stream_fill_task` in the table (node `0x8109D740`) serves **ring 0 with
+tag 7**, not the movie's ring 1 tag 0x0E, and its own gate is satisfied:
+
+    +0x38 ring 0x7F4EF794   +0x3C tag 7   +0x40 threshold 0x2000
+    +0xB0 pending 0         +0xB8 head 0x10000   +0xBC tail 0xA000
+    head - tail = 0x6000, comfortably over the threshold
+
+So the movie's records come from a different producer - the one seen writing
+them at `pc 0x80040B4C lr 0x7F11C268`, filling ring 1 - and that is the
+thing to measure: what paces IT, and why it delivers 65 disc reads where the
+console delivers hundreds.
+
+**Do not re-run these:** the wake-up hunt (the event arrives, and the task
+plays for half a million ticks without it), the clock (it runs AHEAD of the
+record timestamps - `clock 29378, stamp 11630, due YES` - while the task is
+parked), and the mixer's overrun handling (two variants tried, both measured,
+both reverted, F274).
