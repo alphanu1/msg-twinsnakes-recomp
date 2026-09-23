@@ -12454,11 +12454,36 @@ which really are changed by writing to them.
 
     frames measurably purple (R+B > 2G+20):   33%  ->  10%
 
-**Not finished.** One in ten frames is still purple. The remaining ones are
-not explained yet, and there is a loose end worth following: the game binds
-a CMPR texture at 0x800EA680, which is 0x200 INTO the 0x800EA480 surface an
-EFB copy writes 917,504 bytes to. Either those are two uses of one buffer
-separated in time, or a copy is landing where an art asset lives.
+**Bumping a serial was not enough, and the reason is worth keeping.** The
+serial changes when the COPY runs, but the decode happens later, when the
+texture is next bound - and a framebuffer copy in between rewrites the same
+memory, so the decode still read YUV. For one buffer: **445 decodes against
+1,086 texture copies**, each of them a chance to read the wrong thing. The
+window is small, which is exactly why it left one frame in ten wrong instead
+of all of them.
+
+So the bytes the copy deposited are now KEPT, and the decode reads those.
+That is the graphics processor's own memory modelled as what it is - a copy
+of the texels taken when they were written, which later writes to main
+memory do not touch. Dolphin does the same from the other end, building its
+cache entry straight from the embedded buffer and never going through main
+memory at all.
+
+    frames measurably purple (R+B > 2G+20):   33%  ->  10%  ->  0%
+
+and the frame that was worst - f_0222, R 53.8 G 20.1 B 58.6, in hard
+horizontal bands - is now a correct dark blue-black with clean letterboxing.
+
+**A loose end, not chased:** the game binds a CMPR texture at 0x800EA680,
+which is 0x200 INTO the 0x800EA480 surface an EFB copy writes 917,504 bytes
+to. Either those are two uses of one buffer separated in time, or a copy is
+landing where an art asset lives. It is not causing a visible fault now.
+
+**What not to re-propose:** validating these textures by anything that reads
+main memory at bind time. The serial alone, the content hash alone, and a
+hash computed at copy time all fail the same way - the memory is genuinely
+different by the time the bind happens, and the right answer is that the
+bind should not be looking there.
 
 **What not to re-propose:** making the content hash cover this case. It
 cannot: the question "have these bytes changed" has the answer "yes" every

@@ -608,8 +608,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       processor serves textures from its own memory - so main memory holds
       YUV 4:2:2 while the texture still reads as texels. Reading main memory
       at each bind gave smooth PURPLE, which every roughness-based metric
-      called fine. Frames measurably purple **33% -> 10%**; the rest is not
-      yet explained.
+      called fine. A serial per copy was not enough on its own - the decode
+      happens at BIND time, and a framebuffer copy in between still rewrote
+      the memory first (445 decodes against 1,086 copies for one buffer) -
+      so the bytes each copy deposits are kept and decoded from. Frames
+      measurably purple **33% -> 10% -> 0%**.
 - [x] **Dynamically updated textures** (F156). The cache keyed on address and
       never looked at the contents, and nothing invalidated it, so a texture
       rewritten in place was served stale for the life of the run — which

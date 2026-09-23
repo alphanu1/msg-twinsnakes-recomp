@@ -291,6 +291,13 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
      * what the graphics processor will serve until another copy replaces it,
      * whatever else writes this memory in the meantime. */
     mgs_tex_note_efb_copy(efb->copy_dest);
+    {
+        unsigned rows = (height + th - 1u) / th;
+        unsigned span = rows * (efb->copy_stride ? efb->copy_stride
+                                                 : tiles_x * (tw * th * bpp / 8u));
+        const uint8_t* wrote = guest_ptr(mem, efb->copy_dest, span);
+        if (wrote) mgs_tex_snapshot_efb_copy(efb->copy_dest, wrote, span);
+    }
 
     mgs_efb_note_tex_range(efb->copy_dest,
                            efb->copy_dest +

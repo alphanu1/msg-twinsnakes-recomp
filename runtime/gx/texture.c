@@ -125,6 +125,8 @@ static void decode_cmpr_block(const uint8_t* src, uint32_t* out, unsigned stride
     }
 }
 
+static const uint8_t* efb_snapshot(uint32_t addr, unsigned need);
+
 int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
                    unsigned width, unsigned height,
                    const uint16_t* tlut, uint32_t tlut_format,
@@ -138,7 +140,10 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
 
     bytes = texture_bytes(format, width, height);
     if (!bytes) return 0;
-    base = guest_ptr(mem, addr, bytes);
+    /* If an EFB copy put texels here, decode THOSE - not whatever main
+     * memory holds now. See mgs_tex_snapshot_efb_copy. */
+    base = efb_snapshot(addr, bytes);
+    if (!base) base = guest_ptr(mem, addr, bytes);
     if (!base) return 0;
 
     {
@@ -278,6 +283,55 @@ void mgs_tex_note_efb_copy(uint32_t addr)
         s_efb_copy[s_efb_copy_n].serial = 1u;
         ++s_efb_copy_n;
     }
+}
+
+/* AND WHAT THE COPY PUT THERE.
+ *
+ * Bumping a serial is not enough on its own. The serial changes when the
+ * copy runs, but the DECODE happens later, when the texture is next bound -
+ * and a copy to the framebuffer in between rewrites the same memory, so the
+ * decode still reads YUV. Measured: 445 decodes against 1,086 texture
+ * copies for one buffer, each of them a chance to read the wrong thing.
+ *
+ * So the bytes the copy deposited are kept. This is the graphics
+ * processor's own memory, modelled as what it is: a copy of the texels,
+ * taken when they were written, which later writes to main memory do not
+ * touch. Dolphin does the same thing from the other end, building its cache
+ * entry from the embedded buffer and never going through main memory at
+ * all. */
+static struct { uint32_t addr; uint8_t* bytes; unsigned n; } s_efb_snap[8];
+static unsigned s_efb_snap_n;
+
+void mgs_tex_snapshot_efb_copy(uint32_t addr, const uint8_t* src, unsigned n);
+void mgs_tex_snapshot_efb_copy(uint32_t addr, const uint8_t* src, unsigned n)
+{
+    unsigned i;
+    if (!src || !n) return;
+    for (i = 0; i < s_efb_snap_n; ++i)
+        if (s_efb_snap[i].addr == addr) break;
+    if (i == s_efb_snap_n) {
+        if (s_efb_snap_n >= 8u) return;      /* eight is every surface seen */
+        s_efb_snap[i].addr = addr;
+        s_efb_snap[i].bytes = NULL;
+        s_efb_snap[i].n = 0;
+        ++s_efb_snap_n;
+    }
+    if (s_efb_snap[i].n < n) {
+        uint8_t* p = (uint8_t*)realloc(s_efb_snap[i].bytes, n);
+        if (!p) return;
+        s_efb_snap[i].bytes = p;
+        s_efb_snap[i].n = n;
+    }
+    memcpy(s_efb_snap[i].bytes, src, n);
+}
+
+static const uint8_t* efb_snapshot(uint32_t addr, unsigned need)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_snap_n; ++i)
+        if (s_efb_snap[i].addr == addr && s_efb_snap[i].n >= need)
+            return s_efb_snap[i].bytes;
+    return NULL;
 }
 
 static uint32_t efb_serial(uint32_t addr)

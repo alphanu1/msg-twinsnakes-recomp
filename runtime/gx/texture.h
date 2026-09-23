@@ -92,6 +92,11 @@ uint32_t mgs_tex_sample(const MgsTexture* t, float u, float v,
  * main memory no longer holds - which is what the hardware does. */
 void mgs_tex_note_efb_copy(uint32_t addr);
 
+/* ...and keep the bytes it deposited, because the decode happens later, at
+ * bind time, and a copy to the framebuffer in between rewrites the same
+ * memory. */
+void mgs_tex_snapshot_efb_copy(uint32_t addr, const uint8_t* src, unsigned n);
+
 extern uint64_t mgs_gx_seq;
 
 #endif
