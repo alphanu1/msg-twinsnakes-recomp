@@ -1659,13 +1659,27 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
                 {
                 uint64_t now_t = mgs_wall_ticks();
                 delta = now_t > gt_wall ? now_t - gt_wall : 0ull;
-                /* A host that falls behind must not deliver an hour of
-                 * guest time in one step: the interrupts it owes would
-                 * arrive in a burst the guest has no way to service. Catch
-                 * up at a bounded rate instead, which is what a frame that
-                 * overruns does on the console too. */
-                if (delta > 81000ull) delta = 81000ull;    /* 2 ms */
-                gt_wall += delta;
+                /* CLAMP AND DISCARD THE EXCESS. NEVER ACCUMULATE DEBT.
+                 *
+                 * The first version clamped the step and then carried the
+                 * shortfall forward, so once the host fell behind at all it
+                 * stayed behind: `delta` pinned at the clamp for ever, and
+                 * guest time ran at up to 250 times real time. That starves
+                 * the game of CPU per field by exactly the mechanism that
+                 * made MGS_SPEED=0 produce no frames - fields arrive before
+                 * the game has finished drawing - and Ben's build froze
+                 * part way through the video because of it.
+                 *
+                 * A frame that overruns is a frame that overruns. Take the
+                 * clamped step and resynchronise to now, which is what
+                 * every game loop that has ever worked does with a long
+                 * frame: drop the time, do not try to replay it. */
+                if (delta > 81000ull) {
+                    delta = 81000ull;                      /* 2 ms */
+                    gt_wall = now_t;                       /* drop the debt */
+                } else {
+                    gt_wall += delta;
+                }
                 gt += delta;
                 mgs_runtime_advance_ticks(rt, delta);
                 mgs_mmio_advance_ticks(mmio_p, (uint32_t)delta);

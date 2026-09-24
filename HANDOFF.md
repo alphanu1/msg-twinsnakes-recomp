@@ -14280,6 +14280,35 @@ Real time is the answer: a field every 20 ms of wall clock, and the guest
 getting every cycle the host can give it in between. `MGS_SPEED` now refuses
 zero. Uncapping the PRESENTATION is a separate and real knob, `MGS_FPS_CAP=0`.
 
+### F330 — the freeze was time DEBT: clamping a long frame and then replaying it
+
+Ben, on the delta-time build: "not good. froze part of the way through the
+video."
+
+The clamp was right and keeping the shortfall was wrong. The loop took
+`delta = now - gt_wall`, clamped it to 2 ms so a stalled host could not
+deliver an hour of guest time in one go, and then advanced `gt_wall` by the
+CLAMPED amount - so the unserved time stayed owed. Once the host fell behind
+by more than 2 ms even once, `delta` pinned at the clamp for ever and guest
+time ran at up to **250 times real time**.
+
+That starves the game by the exact mechanism that made `MGS_SPEED=0` produce
+no frames: video fields arrive faster than the game can draw, so it never
+finishes one. Two symptoms, one cause, found within an hour of each other
+and neither recognised as the other until the second one was explained.
+
+The fix is what every working game loop does with a long frame: take the
+clamped step and **resynchronise to now**. Drop the time, do not replay it.
+A frame that overruns is a frame that overruns.
+
+    400 s headless run, 71 samples, no stall
+    min 11.3   median 23.9   max 50.2 fps
+
+**What this does not prove.** Ben's freeze was windowed and interactive and
+mine is neither, so this is "the bug that produces that symptom, found and
+fixed", not "his freeze is fixed". `MGS_GUEST_CLOCK=steps` is the immediate
+fallback if it recurs.
+
 ### F329 — after the texture hash, there is no hotspot left: it is the recompiled code
 
 With `mgs_tex_get`'s per-triangle hashing gone (F327), a fresh profile of
