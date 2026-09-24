@@ -13642,3 +13642,73 @@ change it.
 **This is a decision made on Ben's behalf and it is reversible in one
 environment variable.** If he wants it opt-in again, the change is the `if`
 in `host/main.c` around `mgs_gpu_init`.
+
+### F319 — a common clock with Dolphin, and the first oracle measurement: 67.5% of the live memory agrees
+
+Phase 3's exit criterion is a frame comparison against Dolphin, and stage 9
+of `docs/decompilation-process.md` says how: compare guest-memory checksums
+**at fixed frames**. Both halves of that exist now, and they trigger on the
+same clock.
+
+**The clock is one the GAME keeps**, because it is the only one both sides
+can read: the SDK's retrace count, which `__VIRetraceHandler` increments and
+`VIGetRetraceCount` reads. Its address is not hard-coded. That function is
+one instruction and a return -
+
+    0x8002BF34  806D83EC  lwz  r3,-31764(r13)
+    0x8002BF38  4E800020  blr
+
+- so the port decodes the displacement from the instruction and adds r13 as
+the run actually holds it, arriving at **0x8027DD6C**. It checks the opcode
+and the register field first, so a moved map fails loudly instead of reading
+the wrong word quietly.
+
+    port      MGS_MEM_DUMP=<prefix> MGS_MEM_AT=60,200,1500
+    Dolphin   DOLPHIN_FRAME_DUMP=<prefix> DOLPHIN_FRAME_AT=60,200,1500
+              tools/dolphin-watch.py <disc.iso>
+    compare   tools/compare-mem.py a.mem b.mem [--top N]
+              tools/compare-mem.py a.mem b.mem --xfb <addr>:512x448 --ppm out
+
+**The first measurement, at frame 1500 of a boot with no input:**
+
+    pages of 4 KB                     6,144
+      empty on both sides             1,631  (26.5%)
+      byte-identical                  3,048  (49.6%)
+      differing                       1,465  (23.8%)
+    of the 4,513 pages that hold anything on either side,
+                                      67.5% are byte-identical
+
+That is a real number for the recompiled CPU code and the shims together,
+and it is the first time this project has had one. The largest differing
+runs are the two framebuffers and two heap regions.
+
+**THE SAME FIELD NUMBER IS NOT THE SAME POINT IN THE GAME**, and that is the
+finding that matters most for using this. At frame 200 our run had already
+drawn a picture and Dolphin had not; at frame 600 Dolphin still had no
+framebuffer anywhere in MEM1; by 1500 both did. The port does not model
+disc latency, so it gets further per field than the console does. A field
+number is a valid common TRIGGER and not yet a valid common STATE - the
+anchor for a real comparison has to be something the game does, not
+something the video clock does.
+
+**Four traps, recorded because each cost a run:**
+
+1. `pkill -f dolphin-emu` matches the shell that invoked it - exit 144, the
+   same trap already recorded for `pkill -f twin-snakes`. Use `pkill -x`.
+2. A 50 ms poll on the counter lands up to three PAL fields late, and duly
+   reported "retrace 62 (asked 60)". It polls at 200 Hz now and lands on the
+   field asked for.
+3. **"Not ready" is not "never".** r13 reads 0 for the first few hundred
+   fields, because the SDK's start-up has not loaded the small-data base
+   yet. Treating that as a permanent failure disarmed the snapshots on the
+   very first field, silently, and the run produced nothing at all.
+4. A 64 KB-granular scan for a framebuffer finds nothing: these are not 64
+   KB aligned. At 16 KB they appear at once.
+
+**Not yet done, and the next step is specific.** The framebuffer comparison
+runs and writes PPMs, but the ADDRESS is being guessed from the page diff
+rather than read, and at frame 1500 the address that holds our picture holds
+something else in Dolphin. Read the framebuffer address from the video
+interface's own register on both sides - ours from MMIO, Dolphin's from its
+VI state - instead of inferring it. Until that is done the `--xfb` numbers
+are comparing two different things and should not be quoted.

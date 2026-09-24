@@ -296,6 +296,73 @@ def main():
         # directly. A snapshot is searched offline for the CODE, whose
         # relocated `lis/addi` immediates give the real guest address of a
         # global - exact, rather than guessed.
+        # SNAPSHOTS ANCHORED ON THE GAME'S OWN FRAME NUMBER.
+        #
+        # Phase 3's exit criterion is a frame comparison against this
+        # emulator, and the design document says how: compare guest-memory
+        # checksums at FIXED FRAMES. A wall-clock trigger cannot do that -
+        # the two runs do not take the same time to reach the same frame,
+        # and they are not meant to.
+        #
+        # The clock both sides can read is one the GAME keeps: the SDK's
+        # retrace count, which `VIGetRetraceCount` reads out of the small
+        # data area. The port resolves its address from r13 at run time and
+        # prints it ("[frame] retrace count at 0x..."); pass the same
+        # address here. The default is this build's.
+        #
+        #   DOLPHIN_FRAME_DUMP=<prefix>  DOLPHIN_FRAME_AT=60,200,800
+        #   DOLPHIN_FRAME_ADDR=0x8027DD6C   (optional)
+        #
+        # writes <prefix>_<n>.mem, the whole of MEM1, the first time the
+        # counter reads each n - which is what the port's MGS_MEM_DUMP and
+        # MGS_MEM_AT write on the other side. tools/compare-mem.py puts a
+        # pair side by side.
+        frame_prefix = os.environ.get('DOLPHIN_FRAME_DUMP')
+        frame_at = [int(x, 0) for x in
+                    os.environ.get('DOLPHIN_FRAME_AT', '').split(',')
+                    if x.strip()]
+        frame_addr = int(os.environ.get('DOLPHIN_FRAME_ADDR', '0x8027DD6C'), 0)
+        if frame_prefix and frame_at:
+            want = sorted(set(frame_at))
+            print('frame snapshots: %s_<n>.mem at %s, counter 0x%08X'
+                  % (frame_prefix, ','.join(str(n) for n in want), frame_addr))
+            sys.stdout.flush()
+            while want and time.time() - start < seconds:
+                now = int.from_bytes(read(frame_addr), 'big')
+                # A counter that reads as nonsense means the game has not
+                # started it yet, or the address is wrong. Either way there
+                # is nothing to trigger on, so say so rather than dumping at
+                # a moment that means nothing.
+                if now > 0x00FFFFFF:
+                    time.sleep(0.2)
+                    continue
+                while want and now >= want[0]:
+                    n = want.pop(0)
+                    path = '%s_%d.mem' % (frame_prefix, n)
+                    mem.seek(base)
+                    with open(path, 'wb') as out:
+                        remaining = 0x1800000
+                        while remaining:
+                            chunk = mem.read(min(1 << 20, remaining))
+                            if not chunk:
+                                break
+                            out.write(chunk)
+                            remaining -= len(chunk)
+                    print('%7.1fs  retrace %d (asked %d): wrote %s'
+                          % (time.time() - start, now, n, path))
+                    sys.stdout.flush()
+                # A PAL field is 20 ms, so a 50 ms poll lands up to three
+                # fields late and the first run duly reported "retrace 62
+                # (asked 60)". The port catches the exact field because it
+                # checks every one; this has to poll, so it polls often
+                # enough that the answer is the field that was asked for.
+                # Reading four bytes 200 times a second costs nothing.
+                time.sleep(0.005)
+            if want:
+                print('never reached frame %s'
+                      % ','.join(str(n) for n in want))
+                sys.stdout.flush()
+
         taken, trigger_at = [], 0.0
         for path in dumps:
             # WAITING ON A TIME IS GUESSWORK. The first snapshot was taken at

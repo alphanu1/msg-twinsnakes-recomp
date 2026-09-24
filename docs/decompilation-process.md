@@ -2792,6 +2792,52 @@ output between the two.
 
 This harness is built in phase 1 and used for the rest of the project.
 
+### What exists, 2026-09-24 — the clock and the snapshots, not yet the report
+
+The stage stays **PLANNED**: there is no divergence report yet. What has
+been built AND RUN against the target is the half that makes one possible -
+both sides sampling at the same frame, on a clock the game itself keeps.
+
+**The commands, so they can be re-run:**
+
+    # the port, MEM1 at the given fields of the SDK's retrace count
+    MGS_MEM_DUMP=/tmp/port MGS_MEM_AT=60,200,1500 \
+      ./build/runtime/host/twin-snakes --module <module.so> --headless
+
+    # Dolphin, the same fields, the same counter
+    DOLPHIN_FRAME_DUMP=/tmp/dol DOLPHIN_FRAME_AT=60,200,1500 \
+      python3 tools/dolphin-watch.py <disc1.iso>
+
+    # the comparison
+    python3 tools/compare-mem.py /tmp/port_1500.mem /tmp/dol_1500.mem
+
+**The counter's address is derived, not assumed.** `VIGetRetraceCount` at
+0x8002BF34 is `lwz r3,-31764(r13)` followed by `blr`; the port decodes the
+displacement from the instruction and adds r13 as the run holds it, giving
+0x8027DD6C for this build. The opcode and register fields are checked, so a
+moved map fails loudly.
+
+**What it produced.** At frame 1500 of a boot with no input, of 6,144 pages
+of 4 KB: 1,631 empty on both sides, **3,048 byte-identical**, 1,465
+differing - so **67.5% of the pages that hold anything on either side are
+byte-identical** between the port and the emulator.
+
+**How it was checked.** Two independent ways, because a single agreement
+figure could come from comparing a buffer with itself. First, the derived
+counter address 0x8027DD6C matches the one computed by hand from the r13
+that `MGS_REPORT_INTR` prints (0x80285980 - 31764), from a different run and
+a different code path. Second, the comparison run against two snapshots of
+the SAME port run at different frames (60 and 200) reports a far larger
+difference - 25.3% of all pages against 23.8% - which it could not do if the
+tool were comparing a file with itself.
+
+**Why it is not a divergence report yet.** The same field number is not the
+same point in the game: at frame 200 the port had drawn and Dolphin had not,
+and at frame 600 Dolphin still had no framebuffer in MEM1 at all, because
+the port does not model disc latency. A field number is a valid common
+trigger and not yet a valid common state. The next step is an anchor the
+GAME defines rather than one the video clock defines.
+
 ---
 
 ## Provenance ledger

@@ -1039,6 +1039,137 @@ int mgs_module_watch_result(uint32_t* r3, uint32_t* r4)
 void mgs_module_set_display(void (*fn)(void));
 void mgs_module_set_display(void (*fn)(void)) { s_display = fn; }
 
+/* ---- MEM1 snapshots, anchored on the guest's own retrace count ---------
+ *
+ * Phase 3's exit criterion is a frame comparison against Dolphin, and the
+ * design document says how: "Record input in Dolphin, replay in the port,
+ * compare guest-memory checksums at fixed frames." Both halves need to
+ * sample at the SAME frame, and the only clock both sides can read is one
+ * the GAME keeps - the SDK's own retrace count, which `VIGetRetraceCount`
+ * reads and `__VIRetraceHandler` increments.
+ *
+ * Its address is not hard-coded. `VIGetRetraceCount` is one instruction and
+ * a return:
+ *
+ *     lwz  r3, -31764(r13)
+ *     blr
+ *
+ * so the displacement is decoded from the instruction and added to r13 as
+ * the run actually holds it. That keeps working if the map moves, and it
+ * fails loudly rather than silently reading the wrong word.
+ *
+ * MGS_MEM_DUMP=<prefix> with MGS_MEM_AT=<n>[,<n>...] writes <prefix>_<n>.mem
+ * - the whole of MEM1, 24 MB - the first time the counter reads each n.
+ * tools/dolphin-watch.py takes the same snapshot from a Dolphin run with
+ * DOLPHIN_DUMP_ATFRAME, and tools/compare-mem.py puts the two side by side.
+ */
+#define VI_GET_RETRACE_COUNT 0x8002BF34u
+
+/* Set only when the instruction is not the one expected - a permanent
+ * failure, as against "r13 is not loaded yet", which is every field until
+ * the SDK's start-up gets there and must not disarm anything. Conflating
+ * the two killed the snapshots on the very first field. */
+static int s_no_retrace_count;
+
+static uint32_t retrace_count_addr(void* cpu)
+{
+    static uint32_t cached = 0xFFFFFFFFu;
+    if (s_no_retrace_count) return 0u;
+    if (cached == 0xFFFFFFFFu) {
+        uint32_t insn = mgs_module_guest_read32(cpu, VI_GET_RETRACE_COUNT);
+        cached = 0u;
+        /* lwz rD, d(r13): primary opcode 32, rA = 13. Checked rather than
+         * assumed - a wrong address here would make every comparison a
+         * comparison of nothing. */
+        if ((insn >> 26) == 32u && ((insn >> 16) & 0x1Fu) == 13u) {
+            int32_t d = (int32_t)(int16_t)(insn & 0xFFFFu);
+            uint32_t r13 = mgs_module_gpr(cpu)[13];
+            uint32_t a = (uint32_t)((int32_t)r13 + d);
+            /* R13 IS ZERO UNTIL THE GUEST SETS IT. The first retrace
+             * happens during the SDK's own start-up, long before `__start`
+             * has loaded the small-data base, and taking the address then
+             * gives 0xFFFF83EC - an address in nothing. Do not cache an
+             * answer that is not in MEM1; ask again next field. */
+            if (a >= 0x80000000u && a < 0x80000000u + GUEST_RAM_SIZE) {
+                cached = a;
+                fprintf(stderr, "[frame] retrace count at 0x%08X "
+                                "(r13 0x%08X %+d)\n", cached, r13, d);
+            } else {
+                cached = 0xFFFFFFFFu;     /* not yet: try again next field */
+                return 0u;
+            }
+        } else {
+            fprintf(stderr, "[frame] 0x%08X is not `lwz rD,d(r13)` (0x%08X); "
+                            "no snapshots\n", VI_GET_RETRACE_COUNT, insn);
+            s_no_retrace_count = 1;
+            return 0u;
+        }
+    }
+    return cached;
+}
+
+static void frame_snapshot(void* cpu)
+{
+    static int checked;
+    static const char* prefix;
+    static uint32_t want[16];
+    static unsigned want_n, taken;
+    uint32_t addr, now;
+    unsigned i;
+
+    if (!checked) {
+        const char* at = getenv("MGS_MEM_AT");
+        checked = 1;
+        prefix = getenv("MGS_MEM_DUMP");
+        if (prefix && at) {
+            const char* p = at;
+            while (*p && want_n < 16u) {
+                want[want_n++] = (uint32_t)strtoul(p, (char**)&p, 0);
+                while (*p == ',' || *p == ' ') ++p;
+            }
+        }
+        if (prefix && !want_n) {
+            fprintf(stderr, "[frame] MGS_MEM_DUMP is set but MGS_MEM_AT "
+                            "gave no frame numbers; no snapshots\n");
+            prefix = NULL;
+        }
+        if (prefix)
+            fprintf(stderr, "[frame] snapshots to %s_<n>.mem at %u frames\n",
+                    prefix, want_n);
+    }
+    if (!prefix || taken >= want_n) return;
+
+    addr = retrace_count_addr(cpu);
+    if (!addr) {
+        /* Not ready yet is the normal case for the first few hundred
+         * fields; only a decode failure is fatal. */
+        if (s_no_retrace_count) prefix = NULL;
+        return;
+    }
+    now = mgs_module_guest_read32(cpu, addr);
+
+    for (i = 0; i < want_n; ++i) {
+        char path[512];
+        FILE* f;
+        MgsRuntime* rt;
+        if (want[i] == 0xFFFFFFFFu || now < want[i]) continue;
+        rt = mgs_runtime_from(NULL);
+        if (!rt || !rt->mem.ram) { want[i] = 0xFFFFFFFFu; ++taken; continue; }
+        snprintf(path, sizeof path, "%s_%u.mem", prefix, (unsigned)want[i]);
+        f = fopen(path, "wb");
+        if (f) {
+            size_t wrote = fwrite(rt->mem.ram, 1u, GUEST_RAM_SIZE, f);
+            fclose(f);
+            fprintf(stderr, "[frame] retrace %u (asked %u): wrote %s, "
+                            "%zu bytes\n", now, want[i], path, wrote);
+        } else {
+            fprintf(stderr, "[frame] cannot write %s\n", path);
+        }
+        want[i] = 0xFFFFFFFFu;
+        ++taken;
+    }
+}
+
 /* Called once per retrace, to put the external framebuffer on the screen. */
 void mgs_module_set_frame(void (*fn)(void));
 void mgs_module_set_frame(void (*fn)(void)) { s_frame = fn; }
@@ -1412,6 +1543,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             mgs_mmio_set_pad(mmio_p, mgs_video_pad());
             mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);
+            frame_snapshot(cpu);
             if (s_frame) s_frame();
             ++r.frames;
         }
