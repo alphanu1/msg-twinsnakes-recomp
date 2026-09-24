@@ -82,6 +82,28 @@ typedef struct MgsGpuState {
     unsigned char colour_write;
 } MgsGpuState;
 
+/* THE COMBINER STATE, IN THE LAYOUT THE SHADER READS IT.
+ *
+ * gxtev.frag interprets the TEV combiner rather than having one generated
+ * for it, so the state travels as a uniform block instead of as GLSL. The
+ * field order and the ivec4 padding are std140's, which is why everything
+ * here is a group of four 32-bit words even where only one is used: a
+ * scalar in a uniform array would still occupy sixteen bytes, so saying so
+ * is clearer than relying on the rule.
+ *
+ * Integers in the hardware's own 0-255 range, exactly as runtime/gx/tev.c
+ * holds them, because the point of this path is that the two can be
+ * compared pixel for pixel. */
+typedef struct MgsGpuTev {
+    int32_t  reg[4][4];      /* the TEV registers as the draw starts        */
+    uint32_t env[16][4];     /* [0] colour environment, [1] alpha, 2 unused */
+    int32_t  konst[16][4];   /* xyz the stage's konst colour, w its alpha   */
+    int32_t  swap[4][4];     /* the four swap tables, as channel indices    */
+    int32_t  ctl[4];         /* stages, configured, has_texture, swap_set   */
+    int32_t  atest[4];       /* ref0, ref1, op0, op1                        */
+    int32_t  atest2[4];      /* logic, enabled                              */
+} MgsGpuTev;
+
 /* ---- batching ----------------------------------------------------------
  *
  * A draw call per triangle would be far slower than the software rasteriser
@@ -91,10 +113,15 @@ typedef struct MgsGpuState {
  *
  * `key` identifies the texture's CONTENTS, so the same art bound twice is
  * uploaded once. Zero means untextured. */
+/* `tev` may be NULL, which selects the base shader's fixed "rasterised
+ * colour times the texture" - the same thing the combiner's unconfigured
+ * default does. `tev_key` identifies the state so a change of it can end
+ * the batch without comparing 700 bytes twelve million times a run. */
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
                        const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key, const MgsGpuState* state);
+                       uint64_t key, const MgsGpuState* state,
+                       const MgsGpuTev* tev, uint64_t tev_key);
 
 /* Draw whatever is gathered. Called when the state changes and before the
  * embedded buffer is read. */

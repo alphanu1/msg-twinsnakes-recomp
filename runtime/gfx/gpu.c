@@ -22,6 +22,7 @@ static SDL_GPUBuffer*         s_vbuf;
 static unsigned               s_vbuf_verts;
 static SDL_GPUTexture*        s_white;
 static SDL_GPUTextureFormat   s_depth_format;
+static int                    s_tev_shader;  /* gxtev.frag, not gx.frag */
 
 /* One pipeline per distinct state. There are only a handful in this game -
  * the histogram in the exit report shows two blend configurations and one
@@ -198,11 +199,14 @@ static const Uint32 k_vert_spv[] =
 static const Uint32 k_frag_spv[] =
 #include "gx.frag.inc"
 ;
+static const Uint32 k_tev_spv[] =
+#include "gxtev.frag.inc"
+;
 #endif
 
 static SDL_GPUShader* load_shader(SDL_GPUShaderStage stage,
                                   const Uint32* code, size_t bytes,
-                                  Uint32 samplers)
+                                  Uint32 samplers, Uint32 uniforms)
 {
     SDL_GPUShaderCreateInfo si;
     memset(&si, 0, sizeof si);
@@ -212,6 +216,12 @@ static SDL_GPUShader* load_shader(SDL_GPUShaderStage stage,
     si.format = SDL_GPU_SHADERFORMAT_SPIRV;
     si.stage = stage;
     si.num_samplers = samplers;
+    /* DECLARED, OR THE BLOCK IS NOT THERE. SDL builds the pipeline layout
+     * from these counts, not from the SPIR-V: leave it at zero and the
+     * uniform buffer has nowhere to bind, which is the same quiet failure
+     * as the set-2 sampler mistake - the draw is accepted and every value
+     * in the block reads zero. */
+    si.num_uniform_buffers = uniforms;
     return SDL_CreateGPUShader(s_dev, &si);
 }
 
@@ -263,9 +273,19 @@ static int build_pipeline(void)
 
     if (s_fs) return 1;
     s_vs = load_shader(SDL_GPU_SHADERSTAGE_VERTEX, k_vert_spv,
-                       sizeof k_vert_spv, 0);
-    s_fs = load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_frag_spv,
-                       sizeof k_frag_spv, 1);
+                       sizeof k_vert_spv, 0, 0);
+    /* THE COMBINER, unless it is switched off. MGS_GPU_NOTEV=1 falls back
+     * to the base shader - the rasterised colour times one texture - which
+     * is what this path drew before the combiner existed. It is here to
+     * bisect a fault between "the combiner is wrong" and "everything else
+     * on this path is wrong", which is not a distinction a screenshot
+     * makes. */
+    s_tev_shader = getenv("MGS_GPU_NOTEV") == NULL;
+    s_fs = s_tev_shader
+         ? load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_tev_spv,
+                       sizeof k_tev_spv, 1, 1)
+         : load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_frag_spv,
+                       sizeof k_frag_spv, 1, 0);
     if (!s_vs || !s_fs) {
         fprintf(stderr, "[gpu] shader: %s\n", SDL_GetError());
         return 0;
@@ -505,7 +525,7 @@ static SDL_GPUTexture* cached_texture(SDL_GPUCopyPass* pass,
 static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
                               const uint32_t* tex, unsigned tex_w,
                               unsigned tex_h, uint64_t key,
-                              const MgsGpuState* st)
+                              const MgsGpuState* st, const MgsGpuTev* tv)
 {
     SDL_GPUGraphicsPipeline* pipe;
     SDL_GPUCommandBuffer* cmd;
@@ -600,6 +620,15 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
         tsb.texture = t;
         tsb.sampler = s_sampler;
         SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
+        /* THE COMBINER STATE, pushed on the COMMAND BUFFER rather than
+         * bound in the pass: SDL's uniform data is per-command-buffer and
+         * takes effect for draws issued after it. One push per draw, which
+         * is one push per batch - not per triangle. */
+        if (s_tev_shader) {
+            static const MgsGpuTev k_default;   /* zeroed: unconfigured */
+            SDL_PushGPUFragmentUniformData(cmd, 0, tv ? tv : &k_default,
+                                           (Uint32)sizeof(MgsGpuTev));
+        }
         SDL_DrawGPUPrimitives(pass, count, 1, 0, 0);
         SDL_EndGPURenderPass(pass);
     }
@@ -625,7 +654,7 @@ int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
     memset(&st, 0, sizeof st);
     st.depth_test = 1; st.depth_write = 1; st.depth_func = 3;
     st.colour_write = 1;
-    return mgs_gpu_draw_keyed(verts, count, tex, tex_w, tex_h, 0, &st);
+    return mgs_gpu_draw_keyed(verts, count, tex, tex_w, tex_h, 0, &st, NULL);
 }
 
 /* ---- batching --------------------------------------------------------- */
@@ -640,12 +669,16 @@ static uint64_t      s_batch_key;
 static MgsGpuState   s_batch_state;
 static int           s_batch_has;
 static uint64_t      s_batch_tris, s_batch_flushes;
+static MgsGpuTev     s_batch_tev;
+static uint64_t      s_batch_tev_key;
+static int           s_batch_tev_has;
 
 void mgs_gpu_batch_flush(void)
 {
     if (!s_dev || !s_batch_n) { s_batch_n = 0; s_batch_has = 0; return; }
     mgs_gpu_draw_keyed(s_batch, s_batch_n, s_batch_tex,
-                       s_batch_tw, s_batch_th, s_batch_key, &s_batch_state);
+                       s_batch_tw, s_batch_th, s_batch_key, &s_batch_state,
+                       s_batch_tev_has ? &s_batch_tev : NULL);
     s_batch_tris += s_batch_n / 3u;
     ++s_batch_flushes;
     s_batch_n = 0;
@@ -655,7 +688,8 @@ void mgs_gpu_batch_flush(void)
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
                        const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key, const MgsGpuState* state)
+                       uint64_t key, const MgsGpuState* state,
+                       const MgsGpuTev* tev, uint64_t tev_key)
 {
     if (!s_dev) return;
     if (!s_batch) {
@@ -669,13 +703,23 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
      * this one. The state has to be part of that test: blending and the
      * depth comparison are baked into the pipeline, so carrying triangles
      * across a change of either would draw them with the wrong one. */
+    /* And a different COMBINER ends it too, by its key. Comparing the
+     * block itself would be 700 bytes against twelve million triangles a
+     * run; the key comes from the BP state that produced it, so equal keys
+     * mean equal blocks by construction rather than by luck. */
     if (s_batch_has && (key != s_batch_key ||
                         !state_eq(&s_batch_state, state) ||
+                        tev_key != s_batch_tev_key ||
                         s_batch_n + 3u > BATCH_MAX))
         mgs_gpu_batch_flush();
 
     s_batch_tex = tex; s_batch_tw = tex_w; s_batch_th = tex_h;
     s_batch_key = key; s_batch_state = *state; s_batch_has = 1;
+    if (tev_key != s_batch_tev_key || !s_batch_tev_has) {
+        if (tev) { s_batch_tev = *tev; s_batch_tev_has = 1; }
+        else     { s_batch_tev_has = 0; }
+        s_batch_tev_key = tev_key;
+    }
     s_batch[s_batch_n++] = *a;
     s_batch[s_batch_n++] = *b;
     s_batch[s_batch_n++] = *c;
@@ -762,8 +806,9 @@ int  mgs_gpu_draw(const MgsGpuVertex* v, unsigned n, const uint32_t* t,
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c, const uint32_t* t,
                        unsigned w, unsigned h, uint64_t k,
-                       const MgsGpuState* st)
-{ (void)a; (void)b; (void)c; (void)t; (void)w; (void)h; (void)k; (void)st; }
+                       const MgsGpuState* st, const MgsGpuTev* tv, uint64_t tk)
+{ (void)a; (void)b; (void)c; (void)t; (void)w; (void)h; (void)k; (void)st;
+  (void)tv; (void)tk; }
 void mgs_gpu_batch_flush(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
 

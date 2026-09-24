@@ -20,6 +20,7 @@ void mgs_bp_write(MgsGxBp* bp, uint8_t reg, uint32_t value)
 {
     bp->reg[reg] = value & 0x00FFFFFFu;
     bp->written[reg] = 1u;
+    ++bp->rev;
 
     /* How many times the copy DESTINATION has been set since the last copy.
      * A copy that runs with zero writes since the previous one is reusing

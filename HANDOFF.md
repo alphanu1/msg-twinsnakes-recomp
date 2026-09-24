@@ -13387,3 +13387,66 @@ the next suspect is the missing 4-tap roll-off, not a buffer.
 coefficients. Rule 9. The difference between linear and 4-tap here is a
 gentle treble roll-off, and a windowed-sinc of our own is allowed if it ever
 matters.
+
+### F313 — the TEV combiner runs on the GPU, interpreted from uniforms rather than generated
+
+The GPU path drew `vertex colour x texture` for everything, which is one
+common TEV configuration and not the combiner. Ben: "the shape and colour of
+the objects is wrong."
+
+**The design document called for a generator** - build GLSL from the
+combiner state, compile it with shaderc at runtime, cache it by hash. What
+is built instead is ONE fixed fragment shader,
+`runtime/gfx/shaders/gxtev.frag`, that reads the state out of a uniform
+block and walks it. The document is updated in the same change (rule 12).
+Three reasons, in order of weight:
+
+1. **The state is uniform across a draw**, so every branch in that shader
+   takes the same path for every fragment in it. The divergence a loop and a
+   switch would normally cost is not paid.
+2. It compiles at **build** time with `glslc`, like the other two shaders.
+   No shaderc in the link, no GLSL compiler on the frame path, no cache to
+   get wrong, no stall the first time the game writes a new combination.
+3. It is the **same arithmetic** as `runtime/gx/tev.c` - same integer 0-255
+   range, same truncating divisions, same `c + (c >> 7)`. Phase 3's exit
+   criterion is a frame comparison, and two copies of one arithmetic can be
+   compared pixel for pixel where two implementations of one idea can only
+   be compared approximately.
+
+**Measured against the software rasteriser**, five sampled frames of the
+same boot, `MGS_GPU_NOTEV=1` (the old base shader) against the combiner:
+
+                    base shader          combiner
+    frame 0     0.00% / err   0.00   0.00% / err   0.00
+    frame 1     0.00% / err   0.02   0.00% / err   0.02
+    frame 2     0.00% / err   0.00   0.00% / err   0.00
+    frame 3    71.21% / err 105.30  23.39% / err  14.17
+    frame 4    71.21% / err 105.52  26.63% / err  17.71
+
+("%" is pixels differing by more than 8 counts; "err" is the mean absolute
+channel error over the whole frame.) Frames 0-2 were already identical and
+stay identical; the two scene frames improve **7.4x** in mean error.
+
+**WHERE THE REMAINING DIFFERENCE IS, and it is not diffuse.** Mapping it on
+an 8x8 grid puts every differing cell in the middle four columns and the top
+six rows - the letterboxed 4:3 region - with the black bars and the bottom
+of the screen bit-identical. The GPU is BRIGHTER there (mean level 29.4
+against 19.3), which is what happens when a chroma stage samples luma.
+
+That is the multi-texture gap, and it is now counted rather than guessed:
+this run draws **517,584 three-stage and 411,539 five-stage triangles** out
+of 12.0M. An early boot showed 64 three-stage triangles and that number has
+been quoted since; it was a boot that never reached a cinematic. The GPU
+path binds ONE sampler, so every stage in those draws sees stage zero's
+texel - and stage zero of the movie composite is the luminance plane.
+
+**Cost.** 21,865 batches against 17,164 before, because the combiner state
+now ends a batch as the texture and the blend state already did - 550
+triangles a batch rather than 700. The batch key is a hash of the uniform
+block, not the BP revision: a revision changes when any register is written,
+including a texture address, and keying on it would end the batch for
+changes the shader cannot see.
+
+**Not yet done, in order:** per-stage texture units (above), and the
+`compare` bias mode (bias == 3), which neither this shader nor `tev.c`
+implements - both treat it as bias 0.

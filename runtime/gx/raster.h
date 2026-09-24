@@ -123,6 +123,12 @@ typedef struct MgsGxRaster {
     uint64_t pixels_lit;      /* of `pixels`, how many were not black */
     uint64_t tev_stages[16];  /* triangles by TEV stage count */
     uint64_t tex_on_later_stage; /* stage 0 had none, a later stage did */
+    /* Draws where a LATER stage binds its own texture map. This is the
+     * size of what the GPU path cannot yet do: it binds one sampler, so
+     * every stage there sees stage zero's texel. Counted rather than
+     * assumed - an early boot showed 64 such triangles and a full run
+     * shows rather more. */
+    uint64_t multi_tex_tris;
     /* WHAT THE UNTEXTURED MAJORITY ACTUALLY ASKS THE COMBINER FOR.
      *
      * 514,048 triangles are drawn with no texture and come out black, and no

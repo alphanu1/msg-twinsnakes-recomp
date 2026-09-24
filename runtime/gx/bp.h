@@ -99,6 +99,15 @@ typedef struct MgsGxBp {
      * Order is r, g, b, a. Colour registers are signed 11-bit; konst is used
      * as an unsigned 0-255 colour. */
     uint32_t efb_addr_writes;   /* writes to 0x4B, for the copy trace */
+
+    /* HOW MANY TIMES ANYTHING HERE HAS BEEN WRITTEN.
+     *
+     * Not a debugging counter: the renderer compiles the TEV combiner once
+     * per draw and, on the GPU path, builds a uniform block from it. Both
+     * are pure functions of this state, so they only have to be redone when
+     * it changes - and "has it changed" is one comparison against this
+     * rather than a memcmp of the whole register file. */
+    uint32_t rev;
     int32_t tevreg[4][4];
     int32_t konst[4][4];
 

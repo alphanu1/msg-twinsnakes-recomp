@@ -868,6 +868,74 @@ void mgs_raster_set_jobs(MgsGxRaster* r, void* pool)
     if (r->max_bands == 0u || r->max_bands > avail) r->max_bands = avail;
 }
 
+/* ---- the combiner, in the shape the GPU's fragment shader reads ---------
+ *
+ * gxtev.frag INTERPRETS the TEV state rather than being generated from it,
+ * so what crosses to the GPU is this block rather than GLSL. Building it is
+ * a pure function of the BP registers, which is why it is cached on
+ * `bp->rev`: the combiner changes a few times a frame and the draws between
+ * those changes number in the thousands.
+ *
+ * The batch KEY is a hash of the block, not the revision. A revision
+ * changes when any register is written - a texture address, say - and
+ * keying on that would end the batch for changes the shader cannot see.
+ * Hashing the block means two draws with the same combiner batch together
+ * however they arrived at it.
+ */
+static uint64_t tev_block_hash(const MgsGpuTev* t)
+{
+    const unsigned char* p = (const unsigned char*)t;
+    size_t i, n = sizeof *t;
+    uint64_t h = 1469598103934665603ull;         /* FNV-1a */
+    for (i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+    return h ? h : 1ull;
+}
+
+static void tev_block_build(const MgsGxBp* bp, const MgsTevCompiled* t,
+                            MgsGpuTev* out)
+{
+    unsigned i, s;
+
+    memset(out, 0, sizeof *out);
+    for (i = 0; i < 4u; ++i) {
+        out->reg[i][0] = t->reg[i][0];
+        out->reg[i][1] = t->reg[i][1];
+        out->reg[i][2] = t->reg[i][2];
+        out->reg[i][3] = t->reg[i][3];
+        out->swap[i][0] = (int32_t)t->swap[i][0];
+        out->swap[i][1] = (int32_t)t->swap[i][1];
+        out->swap[i][2] = (int32_t)t->swap[i][2];
+        out->swap[i][3] = (int32_t)t->swap[i][3];
+    }
+    for (s = 0; s < 16u; ++s) {
+        int on = (s < t->stages);
+        out->env[s][0]   = on ? t->ce[s] : 0u;
+        out->env[s][1]   = on ? t->ae[s] : 0u;
+        out->konst[s][0] = on ? t->kc[s][0] : 0;
+        out->konst[s][1] = on ? t->kc[s][1] : 0;
+        out->konst[s][2] = on ? t->kc[s][2] : 0;
+        out->konst[s][3] = on ? t->ka[s] : 0;
+    }
+    out->ctl[0] = (int32_t)t->stages;
+    out->ctl[1] = t->configured;
+    out->ctl[3] = t->swap_set;
+
+    /* The alpha test, which the shader does with `discard`. Whether it
+     * tests at all is decided here for the same reason the CPU path asks:
+     * this game writes ALPHA_COMPARE = 0x3F0000 and kills no pixels in a
+     * whole run, and a discard in the shader would cost the early-depth
+     * rejection for nothing. */
+    if (!mgs_tev_alpha_test_always(bp)) {
+        uint32_t r = mgs_bp_get(bp, BP_ALPHA_COMPARE);
+        out->atest[0]  = (int32_t)(r & 0xFFu);
+        out->atest[1]  = (int32_t)((r >> 8) & 0xFFu);
+        out->atest[2]  = (int32_t)((r >> 16) & 7u);
+        out->atest[3]  = (int32_t)((r >> 19) & 7u);
+        out->atest2[0] = (int32_t)((r >> 22) & 3u);
+        out->atest2[1] = 1;
+    }
+}
+
 void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                          const MgsGxVertex* b, const MgsGxVertex* c)
 {
@@ -1381,7 +1449,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                     }
                 }
                 /* Nothing gained if only stage zero ever binds one. */
-                if (any_extra) stage_n = lim;
+                if (any_extra) { stage_n = lim; ++r->multi_tex_tris; }
             }
         }
 
@@ -1815,6 +1883,27 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * depth mode: fades did not fade and untextured white geometry
              * covered the picture. */
             MgsGpuState st;
+            /* Built once per change of the BP state, not once per triangle.
+             * `has_texture` is the only field that varies per draw with the
+             * combiner unchanged, so it is set after the cache. */
+            static MgsGpuTev  s_tev_block;
+            static uint64_t   s_tev_hash;
+            static uint32_t   s_tev_rev = 0xFFFFFFFFu;
+            static int32_t    s_tev_tex = -1;
+
+            if (s_tev_rev != gx->bp.rev) {
+                tev_block_build(&gx->bp, &tev, &s_tev_block);
+                s_tev_rev = gx->bp.rev;
+                s_tev_tex = -1;
+            }
+            {
+                int32_t has = tex ? 1 : 0;
+                if (has != s_tev_tex) {
+                    s_tev_block.ctl[2] = has;
+                    s_tev_tex = has;
+                    s_tev_hash = tev_block_hash(&s_tev_block);
+                }
+            }
             memset(&st, 0, sizeof st);
             st.blend_enable = (r->blend_enable && !r->blend_noop) ? 1u : 0u;
             st.blend_src = (unsigned char)r->blend_src;
@@ -1827,7 +1916,8 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2],
                               tex ? tex->texels : NULL,
                               tex ? tex->width : 0u, tex ? tex->height : 0u,
-                              tex ? tex->hash : 0ull, &st);
+                              tex ? tex->hash : 0ull, &st,
+                              &s_tev_block, s_tev_hash);
         }
         return;
     }

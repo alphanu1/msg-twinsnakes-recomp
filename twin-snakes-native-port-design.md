@@ -260,7 +260,7 @@ Each phase ends at something you can run. Phase 0 through 2 are a few weeks each
 | 1. Boot in ModernGekko | Run DolRecomp on both `main.dol` files; run under the ModernGekko/RecompCore template so Dolphin provides GX and audio | Title screen renders through recompiled CPU code with no interpreter fallback hits for the boot path | 1–2 weeks |
 | 2. Native OS + DVD + PAD, headless | Replace the Dolphin runtime with your own for OS, DVD (including the virtual two-disc mount), VI stubs, PAD; GX calls log and discard | Game runs its main loop headless, reads assets, responds to input, `OSReport` output matches Dolphin's | 3–4 weeks |
 | **2c. Audio (moved from phase 4, 2026-09-22)** | AX voice mixer, per-voice SRC, mix to SDL output; disc streaming for voice-over and music | Music, codec calls and SFX match Dolphin output within tolerance, **and the movie plays at the right rate** | 3–6 weeks |
-| 3. GX renderer | Vertex converter, TEV shader generator, texture decoder, EFB copies, SDL3 GPU backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
+| 3. GX renderer | Vertex converter, TEV combiner in the fragment shader (interpreted from uniforms — revised 2026-09-24, see below), texture decoder, EFB copies, SDL3 GPU backend | Title screen, the Dock and the Heliport render correctly at native resolution, compared frame-by-frame against Dolphin screenshots | 2–4 months |
 | ~~4. Audio~~ **moved to 2c** | — | — | — |
 | 5. Saves and completeness | CARD emulation including the Psycho Mantis save-file scan, disc-2 swap, every SDK stub replaced with a real implementation, memory-leak and thread audit | Game completable start to finish on both platforms | 1–2 months |
 | 6. Port features | Widescreen (needs game-side patches to culling and UI), 60 fps if logic is not frame-locked, resolution scaling, keyboard/mouse, launcher with ISO picker and hash check | Public release | Ongoing |
@@ -287,9 +287,36 @@ to GGSPA4's exact layout, so another revision would load and then fail in
 ways indistinguishable from our own bugs. Refusing at setup, naming the
 mismatch, is far kinder than that.
 
+**Revised 2026-09-24: the TEV combiner is INTERPRETED, not generated.** The
+plan above says "TEV-to-GLSL shader generator": build GLSL from the combiner
+state, compile it with shaderc at runtime, cache it by hash. What was built
+instead is one fixed fragment shader, `runtime/gfx/shaders/gxtev.frag`, that
+reads the combiner state out of a uniform block and walks it. The reasons are
+specific and the rule-12 order was followed - this section is the document
+being updated in the same change as the work:
+
+- The combiner state is **uniform across a draw**, so every branch in that
+  shader takes the same path for every fragment in it. The divergence a loop
+  and a switch would normally cost is not paid.
+- It compiles at **build** time with `glslc`, like the other two shaders. No
+  shaderc in the link, no GLSL compiler on the frame path, no cache to get
+  wrong, and no stall the first time the game writes a combination never seen
+  before.
+- It is the **same arithmetic** as `runtime/gx/tev.c`, in the same integer
+  0-255 range. That matters because phase 3's exit criterion is a frame
+  comparison: two implementations of the same idea can only be compared
+  approximately, where two copies of the same arithmetic can be compared
+  pixel for pixel - which is how every GX fault so far has actually been
+  found.
+
+Generating is not ruled out. If a profile ever shows the interpretation
+costing real time it can be added, but it would then be an optimisation with
+a measurement behind it rather than a guess made in advance.
+
 **The interim software rasteriser, and why it is not phase 3.** Phase 3 above
-specifies a TEV-to-GLSL shader generator on a Vulkan backend, and that remains
-the plan. But phases 1 and 2 need pixels on screen to be debuggable at all, so
+specified a TEV-to-GLSL shader generator on a Vulkan backend; see the
+revision immediately above for what replaced the generator half of that. The
+backend half stands. But phases 1 and 2 need pixels on screen to be debuggable at all, so
 `runtime/gx/raster.c` fills triangles on the CPU. It was fast enough for menus
 and far too slow for the intro movie — 13.5 Mpx/s, about 320 cycles a pixel.
 
