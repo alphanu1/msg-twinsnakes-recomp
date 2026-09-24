@@ -12663,3 +12663,78 @@ dispatch to cover more code per call, which is a recompiler question.
 from any headless run. The dump is the mixer's output and the device is
 never opened without a window. Use `MGS_TRACE_AUDIOQ`, which compares
 produced sound against real time and works either way.
+
+### F297 — the patch table was the top function in the whole program
+
+`mgs_patch_lookup` maps a guest address to a native SDK shim, over a table
+of **thirty-nine entries**, by binary search. Six iterations looks free.
+
+It was 3.95% of the entire program - ahead of the rasteriser - because of
+how often it is asked. The game calls `OSDisableInterrupts` and
+`OSRestoreInterrupts` **55.8 million times each** in one run; they are the
+SDK's critical section around everything, including the 27 million polls of
+the graphics FIFO that `gp_poll_once` makes while the game waits for its
+next frame. A hundred and eleven million lookups, six data-dependent
+branches each, none predictable.
+
+Open addressing over 256 slots - the table is 15% full, so probes almost
+never collide - makes it one load and one compare.
+
+    production against real time:  -3.1%  ->  +3.6%
+
+That one change is worth more than everything else in F296 combined. The
+lesson is not "hash tables are fast"; it is that a thirty-nine-entry search
+was never worth examining until something said it was the hottest code in
+the program, and only a host profile could say that.
+
+**What not to re-propose:** making the guest poll the FIFO less. It is not
+spinning on a fault - the pointers agree and the GP reports idle - it is
+waiting for its next frame, which is what the game does on hardware too. On
+a 486 MHz console those cycles are free. Here they are not, and the answer
+is to make them cheaper, not to fake the wait away.
+
+### F298 — with the port faster than real time, the queue grows, and the fix goes at AI granularity
+
+Once the guest ran faster than real time the shortfall inverted: the device
+queue grew without bound, measured at **1,500 to 1,800 ms** of buffered
+sound. That is the other half of what the user reported - the sound arriving
+later and later behind the picture.
+
+Pacing is now in `mgs_audio_push`, once per AX frame, 200 times a second -
+which is what F284 concluded after pacing at the framebuffer copy failed,
+because that samples a 5 ms queue every 40 to 80 ms.
+
+**Two things had to be right and the first attempt got both wrong:**
+
+- *Sleep to an absolute DEADLINE, not for a computed duration.* Sleeping by
+  the excess 200 times a second accumulates the scheduler's slack - every
+  sleep overshoots a little and nothing gives it back. Measured: production
+  fell from +2% to **-11.6%** and the device underran **720 times**, worse
+  than not pacing at all. A deadline taken from total frames produced
+  cannot drift, because every sleep is measured from the same origin.
+- *The target has to find its own level.* A fixed 60 ms is right only if
+  the guest keeps up every frame. It does not: it averages a few per cent
+  faster than real time and dips to **-12%** when a scene gets heavy. At a
+  fixed target the queue swung 303 -> 209 -> 51 -> 19 ms and underran on
+  the way down. The target now grows 40 ms on an underrun and gives back
+  10 ms every quiet five seconds, floor 60 ms, ceiling 400.
+
+    with a real device, after settling:
+      queue 113-202 ms, oscillating       new underruns: none
+      instantaneous rate +1.5% to -5%, average at real time
+
+**And a measurement trap that cost the whole night.** The cumulative
+"produced against real" figure carries the startup lag forever: it read
+**-10%** while the last four seconds had produced exactly four seconds of
+sound. A working pacer looked broken. The trace now reports the
+instantaneous rate first.
+
+**What not to re-propose:** judging any of this with SDL's dummy audio
+driver. It does not consume at the device's rate, so the QUEUE readings are
+meaningless with it - though "produced against real time" is fine, because
+that compares against the monotonic clock and never touches the device.
+
+**Still open:** the guest dips to -12% in heavy scenes, and the 669
+underruns during loading are real. Both want more speed, and the structural
+one is that a dispatch call runs 13.5 guest instructions, so the run loop is
+entered every thirteen.

@@ -1436,7 +1436,14 @@ int main(int argc, char** argv)
      * audio now rather than in phase 4: a pacing bug you can hear is found
      * in seconds where a counter at exit takes a run. A headless batch run
      * opens nothing and the mixer still keeps time. */
-    if (!headless) mgs_audio_open(32000u);
+    /* MGS_AUDIO=1 OPENS IT HEADLESS TOO, and that matters more than it
+     * looks. Tying the device to the window meant every headless
+     * measurement of the audio was of a run with no device - the mixer's
+     * output was measured and the thing that is actually heard never was.
+     * Three separate "the audio is clean" conclusions came out of that,
+     * against a user who could hear it juddering. A headless run still
+     * opens nothing by default, so batch runs stay silent. */
+    if (!headless || getenv("MGS_AUDIO")) mgs_audio_open(32000u);
 
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
     overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));

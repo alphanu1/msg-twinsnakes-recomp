@@ -80,15 +80,56 @@ static int unpatched(uint32_t address)
     return 0;
 }
 
+/* A HASH, NOT A SEARCH, BECAUSE OF HOW OFTEN THIS IS ASKED.
+ *
+ * Thirty-nine entries make a binary search look free - six iterations. It
+ * is not free, because it runs on every guest call to a patched address and
+ * the game calls two of them incessantly: `OSDisableInterrupts` and
+ * `OSRestoreInterrupts` are 55.8 MILLION calls each in one run, the SDK's
+ * critical section around everything. A host profile puts this function at
+ * the top of the whole program, 3.95%, ahead of the rasteriser.
+ *
+ * Six data-dependent branches per lookup, a hundred and eleven million
+ * times, none of them predictable. Open addressing over 256 slots makes it
+ * one load and one compare: the table holds 39 entries, so it is 15% full
+ * and probes almost never collide. Guest addresses are four-byte aligned,
+ * so the index takes the bits above that.
+ *
+ * Address zero is not a valid patch target - these are all 0x800xxxxx - so
+ * it doubles as the empty marker. */
+#define PATCH_SLOT_BITS 8u
+#define PATCH_SLOTS (1u << PATCH_SLOT_BITS)
+#define PATCH_MASK (PATCH_SLOTS - 1u)
+
+static uint32_t  s_slot_addr[PATCH_SLOTS];
+static MgsSdkFn  s_slot_fn[PATCH_SLOTS];
+static int       s_slots_built;
+
+static void build_slots(void)
+{
+    uint32_t i;
+    for (i = 0u; i < MGS_PATCH_COUNT; ++i) {
+        uint32_t h = (k_patches[i].address >> 2) & PATCH_MASK;
+        while (s_slot_addr[h]) h = (h + 1u) & PATCH_MASK;
+        s_slot_addr[h] = k_patches[i].address;
+        s_slot_fn[h] = k_patches[i].fn;
+    }
+    s_slots_built = 1;
+}
+
 MgsSdkFn mgs_patch_lookup(uint32_t address)
 {
-    uint32_t lo = 0u, hi = MGS_PATCH_COUNT;
-    if (unpatched(address)) return 0;
-    while (lo < hi) {
-        uint32_t mid = lo + (hi - lo) / 2u;
-        if (k_patches[mid].address == address) return k_patches[mid].fn;
-        if (k_patches[mid].address < address) lo = mid + 1u;
-        else hi = mid;
+    uint32_t h = (address >> 2) & PATCH_MASK;
+
+    if (!s_slots_built) build_slots();
+    for (;;) {
+        uint32_t a = s_slot_addr[h];
+        if (a == address) {
+            /* Checked only on a HIT. A miss returns nothing either way, and
+             * this walks a string when MGS_UNPATCH is set. */
+            return unpatched(address) ? 0 : s_slot_fn[h];
+        }
+        if (!a) return 0;
+        h = (h + 1u) & PATCH_MASK;
     }
-    return 0;
 }

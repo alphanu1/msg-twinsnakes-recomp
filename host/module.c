@@ -960,6 +960,8 @@ static int      s_watch_seen;
  * many times, and in what order", which is what a resource running out
  * needs. */
 static uint32_t s_trace_addr, s_trace_addr2, s_trace_addr3, s_trace_addr4;
+/* The OR of the four, so the per-instruction path tests one thing. */
+static uint32_t s_trace_any;
 static void (*s_trace_fn)(void* cpu, const uint32_t* gpr);
 static void (*s_trace_fn2)(void* cpu, const uint32_t* gpr);
 static void (*s_trace_fn3)(void* cpu, const uint32_t* gpr);
@@ -971,6 +973,7 @@ void mgs_module_trace_calls(uint32_t address,
                             void (*fn)(void* cpu, const uint32_t* gpr))
 {
     s_trace_addr = address; s_trace_fn = fn;
+    s_trace_any = s_trace_addr | s_trace_addr2 | s_trace_addr3 | s_trace_addr4;
 }
 
 void mgs_module_trace_calls2(uint32_t address,
@@ -979,6 +982,7 @@ void mgs_module_trace_calls2(uint32_t address,
                              void (*fn)(void* cpu, const uint32_t* gpr))
 {
     s_trace_addr2 = address; s_trace_fn2 = fn;
+    s_trace_any = s_trace_addr | s_trace_addr2 | s_trace_addr3 | s_trace_addr4;
 }
 
 void mgs_module_trace_calls3(uint32_t address,
@@ -987,6 +991,7 @@ void mgs_module_trace_calls3(uint32_t address,
                              void (*fn)(void* cpu, const uint32_t* gpr))
 {
     s_trace_addr3 = address; s_trace_fn3 = fn;
+    s_trace_any = s_trace_addr | s_trace_addr2 | s_trace_addr3 | s_trace_addr4;
 }
 
 void mgs_module_trace_calls4(uint32_t address,
@@ -995,6 +1000,7 @@ void mgs_module_trace_calls4(uint32_t address,
                              void (*fn)(void* cpu, const uint32_t* gpr))
 {
     s_trace_addr4 = address; s_trace_fn4 = fn;
+    s_trace_any = s_trace_addr | s_trace_addr2 | s_trace_addr3 | s_trace_addr4;
 }
 
 void mgs_module_watch(uint32_t address);
@@ -1569,14 +1575,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * the trace is off in every normal run. */
         if (s_fntrace_n) fntrace_step(cpu, pc);
 
-        if (s_trace_addr && pc == s_trace_addr && s_trace_fn)
-            s_trace_fn(cpu, mgs_module_gpr(cpu));
-        if (s_trace_addr2 && pc == s_trace_addr2 && s_trace_fn2)
-            s_trace_fn2(cpu, mgs_module_gpr(cpu));
-        if (s_trace_addr3 && pc == s_trace_addr3 && s_trace_fn3)
-            s_trace_fn3(cpu, mgs_module_gpr(cpu));
-        if (s_trace_addr4 && pc == s_trace_addr4 && s_trace_fn4)
-            s_trace_fn4(cpu, mgs_module_gpr(cpu));
+        /* ONE BRANCH FOR ALL FOUR, because this is the per-instruction
+         * path. Four independent tests cost four compares and four
+         * predicted-not-taken branches every thirteen guest instructions,
+         * to run something that is set in a diagnostic run and nowhere
+         * else. `s_trace_any` is the OR of the four addresses, computed
+         * where they are set. */
+        if (s_trace_any) {
+            if (s_trace_addr && pc == s_trace_addr && s_trace_fn)
+                s_trace_fn(cpu, mgs_module_gpr(cpu));
+            if (s_trace_addr2 && pc == s_trace_addr2 && s_trace_fn2)
+                s_trace_fn2(cpu, mgs_module_gpr(cpu));
+            if (s_trace_addr3 && pc == s_trace_addr3 && s_trace_fn3)
+                s_trace_fn3(cpu, mgs_module_gpr(cpu));
+            if (s_trace_addr4 && pc == s_trace_addr4 && s_trace_fn4)
+                s_trace_fn4(cpu, mgs_module_gpr(cpu));
+        }
 
         if (s_linked && s_watch_seen && !s_linked_done &&
             pc >= 0x7E000000u && pc < 0x80000000u) {
@@ -1648,7 +1662,10 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * guest needs is to resume at srr0, which is exactly what its own
          * handler would do.
          */
-        {
+        /* The fast path INLINE. An exception vector is below 0x3000 and
+         * page-aligned; every other address - which is every address, in a
+         * normal step - can skip the call entirely. */
+        if (pc < 0x3000u && (pc & 0xFFu) == 0u) {
             int v = service_vector(cpu, pc, &r.syscalls, &r.fp_switches);
             if (v > 0) continue;
             if (v < 0) {

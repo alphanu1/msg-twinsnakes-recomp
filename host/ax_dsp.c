@@ -687,16 +687,28 @@ void mgs_ax_dsp_frame(void* cpu)
             if ((n % 200u) == 0u) {          /* once a second of sound */
                 double real = (double)(now - first_ns) / 1e9;
                 double made = (double)(n * AX_FRAME_SAMPLES) / AX_MIX_RATE;
+                /* THE RATE NOW, not the average since the run began.
+                 *
+                 * The cumulative figure carries the startup lag forever -
+                 * it read -10% while the last four seconds had produced
+                 * exactly four seconds of sound - and that made a working
+                 * pacer look like a broken one. */
+                static uint64_t last_ns; static double last_made;
+                double d_real = last_ns ? (double)(now - last_ns) / 1e9 : 0.0;
+                double d_made = made - last_made;
                 uint64_t pushed = 0, dropped = 0, under = 0;
                 mgs_audio_stats(&pushed, &dropped, &under);
                 fprintf(stderr, "[audioq] %6.1fs real  %6.1fs produced  "
-                        "(%+.2f%%)  queue %5u samples (%.0f ms)  "
-                        "underruns %llu\n",
+                        "(now %+.2f%%, overall %+.2f%%)  "
+                        "queue %5u samples (%.0f ms)  underruns %llu\n",
                         real, made,
+                        d_real > 0.01 ? 100.0 * (d_made - d_real) / d_real
+                                      : 0.0,
                         real > 0.1 ? 100.0 * (made - real) / real : 0.0,
                         mgs_audio_queued(),
                         1000.0 * mgs_audio_queued() / (double)AX_MIX_RATE,
                         (unsigned long long)under);
+                last_ns = now; last_made = made;
             }
         }
     }
