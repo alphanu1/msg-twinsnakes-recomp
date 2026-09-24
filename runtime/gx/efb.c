@@ -334,6 +334,7 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
     unsigned x, line;
 
     ++efb->copies;
+    if (to_xfb) ++efb->xfb_copies;   /* a FRAME; see efb.h */
 
     /* A copy to a texture stays on the graphics side: it never touches the
      * external framebuffer, and writing guest memory for one would corrupt

@@ -1892,7 +1892,25 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * Every 8,192 guest ticks, which is about five times per AX frame:
          * often enough to hold a deadline, rare enough that the check costs
          * nothing. It returns immediately when there is no device. */
-        if ((gt >= due_pace ? (due_pace = gt + 8192ull, 1) : 0) && s_pace)
+        /* AUDIO PACING IS A SECOND BRAKE, AND UNDER THE REAL CLOCK IT IS
+         * ONE TOO MANY.
+         *
+         * `mgs_audio_pace` sleeps the guest thread until the device's
+         * deadline, so the game cannot outrun the sound card. That was
+         * necessary when guest time came from a step budget, because the
+         * guest could and did run 25-30% faster than real time.
+         *
+         * It cannot help now and it can hurt. Guest time IS real time, so
+         * the game already produces sound at exactly the rate the device
+         * consumes it - and the measurement says we are not outrunning the
+         * device, we are 3.4% BEHIND it (106.0 s of sound produced in
+         * 109.8 s of real time). Sleeping a guest that is already behind
+         * can only starve the device further, which is heard as popping.
+         *
+         * So it runs only on the step clock, where the thing it guards
+         * against can actually happen. */
+        if (!wall_clock &&
+            (gt >= due_pace ? (due_pace = gt + 8192ull, 1) : 0) && s_pace)
             s_pace();
 
         if ((gt >= due_pump ? (due_pump = gt + 4096ull, 1) : 0) && s_pump)

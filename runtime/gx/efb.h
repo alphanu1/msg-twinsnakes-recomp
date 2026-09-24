@@ -44,6 +44,16 @@ typedef struct MgsEfb {
     unsigned copy_width;      /* the source rectangle the game last copied */
     unsigned copy_height;
     uint64_t copies, tex_copies;          /* copies to the external framebuffer */
+    /* COPIES TO THE EXTERNAL FRAMEBUFFER ONLY, which is what a FRAME is.
+     *
+     * `copies` counts EVERY EFB copy, the texture path's clear included, so
+     * presentation keyed on it put a half-drawn framebuffer on screen every
+     * time the game rendered to a texture. MangoHud read 49 fps where the
+     * game draws 25 and the picture was green and striped because it was
+     * being shown mid-write. Ben spotted the rate first - "the frame rate is
+     * not dropping to 25 for the video, that's probably the reason" - and it
+     * was. */
+    uint64_t xfb_copies;
     uint64_t clears;          /* copies that also cleared */
 } MgsEfb;
 

@@ -414,7 +414,10 @@ static void frame_pump(void)
      * framebuffer directly and just flips to it, which is how a video
      * decoder can present without GX copying anything. Keying on the copy
      * alone would freeze such a picture. */
-    copies = mgs_display_efb()->copies
+    /* THE FRAMEBUFFER COPIES, NOT EVERY COPY. See the note in efb.h: the
+     * texture path issues a copy too, and presenting on that showed a
+     * framebuffer the game had not finished drawing. */
+    copies = mgs_display_efb()->xfb_copies
            ^ ((uint64_t)mgs_mmio_xfb_address(mgs_host_mmio()) << 32);
     if (copies == shown) return;
     shown = copies;
