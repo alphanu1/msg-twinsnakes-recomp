@@ -2928,6 +2928,14 @@ snapshots, so the port is deterministic and a difference against Dolphin is
 a difference and not noise. Re-run that control whenever this harness is
 used to make a claim.
 
+**Two candidates excluded.** The only disc read covering that region is
+`shared/mgso_pal.rel` (5,737,728 bytes to 0x8054A180), and it happens at
+frame 0 - hundreds of frames before the region changes; it explains the
+OTHER differing run at 0x80450000, which differs from the earliest snapshot
+onwards because Dolphin's OSLink puts the module at its own address. And two
+48-byte probes from the port's copy of the region appear in no file in the
+extracted disc at all, so the content is generated rather than read.
+
 **Why this matters beyond the one bug.** 8.7 MB of wrong content in the
 game's own heap produces no error, no log line and no visible fault until
 something reads it back. No instrument in this project would have found it;

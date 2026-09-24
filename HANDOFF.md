@@ -13857,11 +13857,27 @@ further on one side - it is different content.
 so a difference against Dolphin is a difference and not noise. That control
 should be re-run whenever this harness is used to make a claim.
 
-**Not yet named.** `MGS_TRACE_DEST=<addr>` was added to
-`mgs_dvd_read_abs_async` to print which disc read covers a given guest
-address, because the disc log says what is read and how much but never
-where. The ordinary write watch cannot see this: `host_external_write` only
-covers VMEM, and a fill of this size is a DMA rather than guest stores.
+**Not yet named, and two candidates are already excluded.**
+`MGS_TRACE_DEST=<addr>` was added to `mgs_dvd_read_abs_async` to print which
+disc read covers a given guest address, because the disc log says what is
+read and how much but never where. The ordinary write watch cannot see
+this: `host_external_write` only covers VMEM, and a fill of this size is a
+DMA rather than guest stores.
+
+  1. **It is not the REL load.** The only disc read covering the region is
+     `shared/mgso_pal.rel`, 5,737,728 bytes to 0x8054A180..0x80AC2E80 - and
+     the trace puts it at **frame 0**, hundreds of frames before the region
+     changes. (It does explain the OTHER differing run, 0x80450000, which
+     differs from the earliest snapshot onwards: Dolphin's OSLink puts the
+     module at its own address, which was already known.)
+  2. **It is not any file on the disc.** Two 48-byte probes taken from the
+     port's copy of the region at counter 880 appear in **no file** in the
+     extracted disc. The content is generated - decoded, decompressed or
+     computed - not read.
+
+So the port computes 8.7 MB into the game's heap at a point where the
+console computes nothing there. The next instrument is a write watch that
+covers MEM1 rather than only VMEM, which does not exist yet.
 
 **This is the first thing the Dolphin comparison has caught that no other
 instrument here would have found**, and it is worth saying why: 8.7 MB of
