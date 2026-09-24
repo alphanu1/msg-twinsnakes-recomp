@@ -989,6 +989,45 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
     }
 
     if (!xfb || !fb || !w || !h) return 0;
+
+    /* PRESENT WHEN THE PICTURE CHANGES, NOT WHEN THE CLOCK TICKS.
+     *
+     * The video interface flips its address every field, so keying
+     * presentation on it draws twice per frame during a 25 fps movie -
+     * Ben: "it needs to cap the video at 25", and he is right, but a mode
+     * switch is the wrong way to get there. A movie is 25 fps because its
+     * CONTENT changes 25 times a second, and gameplay is 50 because its
+     * content changes 50 times a second. Asking the picture is therefore
+     * exact where a cap is a guess, and it needs no detection of which we
+     * are in.
+     *
+     * Sampled rather than hashed whole: 458,752 bytes every retrace would
+     * cost more than the conversion it saves, and a few hundred spread
+     * across the frame cannot miss a new frame of video - consecutive
+     * frames of this movie differ in 1-2% of their bytes, which over 1,800
+     * samples is certain.
+     *
+     * It also cannot show a half-written frame twice, which is the one
+     * thing a fixed cap cannot promise. */
+    {
+        static uint64_t last_sig;
+        static int has_last;
+        const uint8_t* src = guest_ptr(mem, xfb, s_efb.copy_stride * h);
+        uint64_t sig = 1469598103934665603ull;
+        if (src) {
+            unsigned q, span = s_efb.copy_stride * h, step = span / 1800u;
+            if (!step) step = 1u;
+            for (q = 0; q < span; q += step) {
+                sig ^= src[q];
+                sig *= 1099511628211ull;
+            }
+            sig ^= (uint64_t)xfb;
+            if (has_last && sig == last_sig) return 0;   /* same picture */
+            last_sig = sig;
+            has_last = 1;
+        }
+    }
+
     if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, scratch))
         return 0;
 
