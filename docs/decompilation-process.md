@@ -2837,13 +2837,15 @@ framebuffer to memory (`DOLPHIN_USER`), 1,333 pages differ rather than
       4.32% of pixels differ, 3.75% by more than 8, mean abs error 3.96
 
 That is the first frame this project has compared against the oracle, and
-**it does not reproduce**. A second Dolphin run to the same field finds the
+**it does not reproduce**: a second Dolphin run to the same field finds the
 framebuffer never written (`00 00 00 00`) and reports 100% of pixels
-differing at a mean error of 45.38. In one run the emulator had drawn its
-black frame by field 1500 and in the other it had not: Dolphin is not
-deterministic against the field counter, so "field 1500" does not name a
-state. The memory figure is the one to quote from this stage; the frame
-figure is not yet a measurement of anything.
+differing at a mean error of 45.38. The first reading of that - "Dolphin is
+not deterministic against the field counter" - was WRONG, and is recorded
+here as such. The two runs agree to the word on every counter in the game at
+field 1500. What differed was whether the copy had landed in guest memory at
+the instant the watcher polled, which is a property of sampling from outside
+and not of the emulator. The memory figure is the one to quote from this
+stage; the frame figure is not yet a measurement of anything.
 
 **How it was checked.** Three independent ways, because a single agreement
 figure could come from comparing a buffer with itself.
@@ -2871,10 +2873,40 @@ the frame has been drawn - so the field counter does not name a state even
 within one emulator. A field number is a valid common trigger and not a
 valid common state.
 
-The next step is an anchor the GAME defines. The specific candidate: the
-Nth EFB copy to the framebuffer, which both sides can count - ours directly,
-Dolphin's by watching the framebuffer contents change - and which by
-construction names a drawn picture rather than a moment in time.
+**A better anchor, found by subtraction - with one flawed inference on the
+way, recorded because the shape of it recurs.** Snapshot the port at its
+100th and 200th copy to the framebuffer (`MGS_MEM_AT_COPY=100,200`) and look
+for words that advance by EXACTLY 100. Six do:
+
+    0x801E8DE0  184 -> 284   the SDK's retrace count, mirrored
+    0x801E9178  184 -> 284   the same
+    0x8027DD6C  184 -> 284   the SDK's retrace count itself
+    0x8020D0EC   96 -> 196   the game's own, and its partner
+    0x8020D0F0   96 -> 196
+    0x80994374   37 -> 137   an engine counter; not one at field 1500
+
+**In that window the FIELD count also advanced by exactly 100**, so the test
+could not separate "counts copies" from "counts fields" and proved nothing
+about which. Over a longer window where the two do separate it does: from
+the 100th copy to counter 800, the counter advances 704 and the field count
+809. So 0x8020D0EC does not follow fields; what it does follow is not
+established and it should not be named until it is.
+
+`MGS_MEM_ADDR=<addr>` and `DOLPHIN_FRAME_ADDR=<addr>` anchor both sides on
+any guest word, which is the part that matters.
+
+**What the anchor is worth, measured.** Pages of MEM1 differing between the
+port and the emulator:
+
+    anchored on fields, field 1500      1,333 of 6,144  (21.7%)
+    anchored on 0x8020D0EC, at  800       660 of 6,144  (10.7%)
+    anchored on 0x8020D0EC, at 1000     3,420 of 6,144  (55.7%)
+
+At counter 800 the two agree on **89% of all memory**, the best figure this
+project has. By 1000 they have diverged badly - so the divergence lies
+between them, and that is a bracket a bisection can close. That is what a
+divergence report is for, and it is the first time this project has had one
+to close.
 
 ---
 

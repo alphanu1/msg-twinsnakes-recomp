@@ -240,12 +240,22 @@ def main():
         gfx = os.path.join(cfg, 'GFX.ini')
         if not os.path.exists(gfx):
             with open(gfx, 'w') as f:
-                f.write('[Hacks]\n'
+                # THE BACKEND LINE IS NOT DECORATION. A fresh user directory
+                # has no backend chosen, and what the headless build falls
+                # back to does not perform the copy at all: the snapshots
+                # came back with the framebuffer all zeros, exactly as they
+                # did before the hacks were turned off, and that cost a run
+                # to tell apart from "the hacks did not take".
+                f.write('[Settings]\n'
+                        'Backend = Vulkan\n'
+                        '[Hacks]\n'
                         'EFBToTextureEnable = False\n'
                         'XFBToTextureEnable = False\n'
+                        'EFBAccessEnable = True\n'
                         'DeferEFBCopies = False\n'
                         'ImmediateXFBEnable = False\n')
-            print('wrote %s (EFB/XFB copies forced to guest memory)' % gfx)
+            print('wrote %s (Vulkan; EFB/XFB copies forced to guest memory)'
+                  % gfx)
         extra = ['-u', user_dir] + extra
 
     binary = os.environ.get('DOLPHIN_BIN', 'dolphin-emu-nogui')

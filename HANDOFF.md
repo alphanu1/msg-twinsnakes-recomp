@@ -13740,8 +13740,8 @@ With both fixed, at field 1500 of a boot with no input:
             before Dolphin was writing the framebuffer to memory
 
 **That is the first frame this project has compared against the oracle -
-and it does not reproduce.** Running Dolphin again to the same field gives a
-different answer entirely:
+and it did not reproduce, for a reason I got wrong first.** Running Dolphin
+again to the same field gave a different answer entirely:
 
     run 1, field 1500   framebuffer 0x8015A480 = 10 80 10 80  (YUV black)
                         4.32% of pixels differ, mean abs error  3.96
@@ -13749,17 +13749,74 @@ different answer entirely:
                       100.00% of pixels differ, mean abs error 45.38
     the port, both      framebuffer 0x80066480 = 10 80 10 80
 
-In one run Dolphin had drawn its black frame by field 1500 and in the other
-it had not. **Dolphin is not deterministic against the field counter** -
-host timing and disc caching move where the game is by that field - so the
-field number is not a usable anchor even for Dolphin against itself, let
-alone against us. This is the same finding as above, sharpened: it is not
-only that the port gets further per field, it is that "field 1500" does not
-name a state at all.
+**WHAT I CONCLUDED, AND WHY IT WAS WRONG.** I read that as "Dolphin is not
+deterministic against the field counter" and wrote it up that way. It is
+not: the two runs agree to the word on every counter in the game. At field
+1500 both read the game's drawn-frame counter as 1187, both read the retrace
+count as 1500, both read the SDK's mirrors as 1500. What differed was only
+whether the COPY had landed in guest memory at the instant the watcher
+happened to read it - a sampling artefact of polling from outside, not the
+emulator disagreeing with itself. Two identical states, sampled a moment
+apart. The lesson is the old one: a difference seen through an instrument is
+a property of the instrument until shown otherwise.
 
-**So the number to quote from this session is the MEMORY one (67.5% of live
-pages identical), not the frame one.** The frame comparison needs an anchor
-the game defines. The specific candidate: the Nth EFB-copy-to-framebuffer,
-which both sides can count - ours directly, Dolphin's by watching the
-framebuffer contents change - and which by construction names a drawn
-picture rather than a moment in time.
+**A BETTER ANCHOR, found by subtraction - and one flawed inference on the
+way.** Snapshot the port at its 100th and 200th copy to the framebuffer
+(`MGS_MEM_AT_COPY=100,200`) and look for words that advance by exactly 100.
+Six do:
+
+    0x801E8DE0  184 -> 284   the SDK's retrace count, mirrored
+    0x801E9178  184 -> 284   the same
+    0x8027DD6C  184 -> 284   the SDK's retrace count itself
+    0x8020D0EC   96 -> 196   the game's own, and its partner
+    0x8020D0F0   96 -> 196
+    0x80994374   37 -> 137   an engine counter; not one at field 1500
+
+**The flaw: in that window the FIELD count also advanced by exactly 100**,
+so the test could not tell "counts copies" from "counts fields" - it found
+six words that advance once per field-and-copy-together and proved nothing
+about which. Over a longer window where the two separate, it does:
+
+    from the 100th copy to counter 800:  counter +704, fields +809
+
+So 0x8020D0EC does NOT follow fields. What it does follow is not
+established, and it should not be called a drawn-frame counter until it is.
+
+`MGS_MEM_ADDR=<addr>` on the port and `DOLPHIN_FRAME_ADDR=<addr>` on the
+watcher anchor both sides on any guest word, which is the part that matters.
+
+**And it immediately says something about the port.** At field 1500 Dolphin
+has drawn **1187** frames and the port **1042** - so over the same 1500
+fields the port draws 12% fewer. Between its own 100th and 200th copy the
+port's retrace count advances by exactly 100, so it is 1:1 there; the
+shortfall is accumulated somewhere earlier, and that is now a measurable
+question rather than a suspicion.
+
+**The anchor makes the memory comparison sharply better, and brackets the
+divergence.** Anchored on drawn frames instead of fields:
+
+    drawn frame  800    660 of 6,144 pages differ (10.7%)
+    drawn frame 1000  3,420 of 6,144 pages differ (55.7%)
+    field       1500  1,333 of 6,144 pages differ (21.7%)   for comparison
+
+At drawn frame 800 the port and the emulator agree on **89% of all memory**,
+which is the best number this project has. By drawn frame 1000 they have
+diverged badly. **The divergence is therefore between drawn frames 800 and
+1000**, and that is a bracket a bisection can close - which is what a
+divergence report is for.
+
+(The two runs are at different FIELDS when they are at the same counter
+value - 993 against 1000 at 800, and 1408 against 1205 at 1000 - which is
+the anchor doing exactly its job.)
+
+**What is still not working: Dolphin's framebuffer.** At counter 800 both of
+Dolphin's framebuffers are all zeros, while the port's holds a real picture
+(luma sd 46.4). At field 1500 - Dolphin's counter 1187 - they hold YUV black
+(`10 80`). So Dolphin's copies do reach memory eventually and not by counter
+800, which is one more reason not to call that counter "frames drawn". The
+`--xfb-from` numbers stay unquotable until Dolphin's picture is in memory at
+the moment being compared. Getting there took three attempts and each is
+worth knowing: the Null video backend writes nothing; `EFBToTextureEnable`
+and `XFBToTextureEnable` default to keeping copies on the GPU; and a fresh
+user directory with no `Backend` line falls back to something that does not
+copy either, which looks identical to the first two failures.

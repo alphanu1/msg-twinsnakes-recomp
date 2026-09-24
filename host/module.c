@@ -1108,6 +1108,80 @@ static uint32_t retrace_count_addr(void* cpu)
     return cached;
 }
 
+/* Parse a comma-separated list of frame numbers once. */
+static unsigned parse_at(const char* at, uint32_t* want, unsigned max)
+{
+    unsigned n = 0;
+    const char* p = at;
+    while (p && *p && n < max) {
+        want[n++] = (uint32_t)strtoul(p, (char**)&p, 0);
+        while (*p == ',' || *p == ' ') ++p;
+    }
+    return n;
+}
+
+/* MEM1 to <prefix>_<n>.mem. Shared by both triggers. */
+static void snapshot_write(const char* prefix, uint32_t n, const char* why,
+                           uint32_t reached)
+{
+    char path[512];
+    FILE* f;
+    MgsRuntime* rt = mgs_runtime_from(NULL);
+
+    if (!rt || !rt->mem.ram) return;
+    snprintf(path, sizeof path, "%s_%u.mem", prefix, (unsigned)n);
+    f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "[frame] cannot write %s\n", path); return; }
+    {
+        size_t wrote = fwrite(rt->mem.ram, 1u, GUEST_RAM_SIZE, f);
+        fclose(f);
+        fprintf(stderr, "[frame] %s %u (asked %u): wrote %s, %zu bytes\n",
+                why, (unsigned)reached, (unsigned)n, path, wrote);
+    }
+}
+
+/* SNAPSHOTS ANCHORED ON WHAT THE GAME DRAWS, not on the video clock.
+ *
+ * The retrace trigger below is a valid common trigger and NOT a valid
+ * common state: two Dolphin runs to field 1500 disagree with each other
+ * about whether the frame has been drawn (F319), because host timing moves
+ * where the game is by any given field. A copy to the external framebuffer
+ * is different - it is the game finishing a picture, so the Nth of them
+ * names the same picture in any run that gets there.
+ *
+ * MGS_MEM_DUMP=<prefix> with MGS_MEM_AT_COPY=<n>[,<n>...]. Called from
+ * host/display.c, where the copies are.
+ */
+void mgs_module_snapshot_copy(void);
+void mgs_module_snapshot_copy(void)
+{
+    static int checked;
+    static const char* prefix;
+    static uint32_t want[16];
+    static unsigned want_n, taken;
+    static uint32_t copies;
+    unsigned i;
+
+    if (!checked) {
+        checked = 1;
+        prefix = getenv("MGS_MEM_DUMP");
+        if (prefix) want_n = parse_at(getenv("MGS_MEM_AT_COPY"), want, 16u);
+        if (!want_n) prefix = NULL;
+        if (prefix)
+            fprintf(stderr, "[frame] snapshots at %u framebuffer copies\n",
+                    want_n);
+    }
+    if (!prefix || taken >= want_n) return;
+
+    ++copies;
+    for (i = 0; i < want_n; ++i) {
+        if (want[i] == 0xFFFFFFFFu || copies < want[i]) continue;
+        snapshot_write(prefix, want[i], "copy", copies);
+        want[i] = 0xFFFFFFFFu;
+        ++taken;
+    }
+}
+
 static void frame_snapshot(void* cpu)
 {
     static int checked;
@@ -1118,16 +1192,9 @@ static void frame_snapshot(void* cpu)
     unsigned i;
 
     if (!checked) {
-        const char* at = getenv("MGS_MEM_AT");
         checked = 1;
         prefix = getenv("MGS_MEM_DUMP");
-        if (prefix && at) {
-            const char* p = at;
-            while (*p && want_n < 16u) {
-                want[want_n++] = (uint32_t)strtoul(p, (char**)&p, 0);
-                while (*p == ',' || *p == ' ') ++p;
-            }
-        }
+        if (prefix) want_n = parse_at(getenv("MGS_MEM_AT"), want, 16u);
         if (prefix && !want_n) {
             fprintf(stderr, "[frame] MGS_MEM_DUMP is set but MGS_MEM_AT "
                             "gave no frame numbers; no snapshots\n");
@@ -1139,6 +1206,32 @@ static void frame_snapshot(void* cpu)
     }
     if (!prefix || taken >= want_n) return;
 
+    /* MGS_MEM_ADDR NAMES THE COUNTER, so both sides can anchor on the same
+     * one. The default is the SDK's retrace count, which is a field clock;
+     * the game's own DRAWN-FRAME counter at 0x8020D0EC is the better anchor
+     * and is what `DOLPHIN_FRAME_ADDR` should be pointed at too. See F319. */
+    {
+        static int looked;
+        static uint32_t forced;
+        if (!looked) {
+            const char* e = getenv("MGS_MEM_ADDR");
+            looked = 1;
+            forced = (e && *e) ? (uint32_t)strtoul(e, NULL, 0) : 0u;
+            if (forced)
+                fprintf(stderr, "[frame] counting 0x%08X\n", forced);
+        }
+        if (forced) {
+            now = mgs_module_guest_read32(cpu, forced);
+            for (i = 0; i < want_n; ++i) {
+                if (want[i] == 0xFFFFFFFFu || now < want[i]) continue;
+                snapshot_write(prefix, want[i], "count", now);
+                want[i] = 0xFFFFFFFFu;
+                ++taken;
+            }
+            return;
+        }
+    }
+
     addr = retrace_count_addr(cpu);
     if (!addr) {
         /* Not ready yet is the normal case for the first few hundred
@@ -1149,22 +1242,8 @@ static void frame_snapshot(void* cpu)
     now = mgs_module_guest_read32(cpu, addr);
 
     for (i = 0; i < want_n; ++i) {
-        char path[512];
-        FILE* f;
-        MgsRuntime* rt;
         if (want[i] == 0xFFFFFFFFu || now < want[i]) continue;
-        rt = mgs_runtime_from(NULL);
-        if (!rt || !rt->mem.ram) { want[i] = 0xFFFFFFFFu; ++taken; continue; }
-        snprintf(path, sizeof path, "%s_%u.mem", prefix, (unsigned)want[i]);
-        f = fopen(path, "wb");
-        if (f) {
-            size_t wrote = fwrite(rt->mem.ram, 1u, GUEST_RAM_SIZE, f);
-            fclose(f);
-            fprintf(stderr, "[frame] retrace %u (asked %u): wrote %s, "
-                            "%zu bytes\n", now, want[i], path, wrote);
-        } else {
-            fprintf(stderr, "[frame] cannot write %s\n", path);
-        }
+        snapshot_write(prefix, want[i], "retrace", now);
         want[i] = 0xFFFFFFFFu;
         ++taken;
     }

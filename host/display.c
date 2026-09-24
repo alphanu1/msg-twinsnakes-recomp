@@ -27,6 +27,8 @@
 
 #include "gfx/gpu.h"
 
+void mgs_module_snapshot_copy(void);
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -666,6 +668,14 @@ static void run_copy(uint32_t cmd)
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
+                /* A SNAPSHOT ANCHORED ON A FINISHED PICTURE.
+                 *
+                 * Taken AFTER the copy, because the point of counting
+                 * copies rather than fields is that the Nth copy names the
+                 * same picture in any run that gets there - and it only
+                 * does that once the picture is in memory. See
+                 * mgs_module_snapshot_copy and F319. */
+                mgs_module_snapshot_copy();
                 /* The clear has to reach the GPU's target too, or the next
                  * frame draws on top of the last one there while the host
                  * buffer starts empty - which looks like the geometry
