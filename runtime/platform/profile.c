@@ -125,6 +125,38 @@ void mgs_profile_report(void)
     fprintf(stderr, "[profile] %lu samples over %u addresses (%lu lost to collisions)\n",
             prof_total, n, prof_lost);
     fprintf(stderr, "[profile] base 0x%lx - subtract it to look an address up\n", prof_base);
+
+    /* WHERE THE TIME GOES, OVER EVERY SAMPLE AND NOT JUST THE TOP FORTY.
+     *
+     * The list below is capped at forty lines, and in this program the top
+     * forty are a fifth of the samples: the rest is spread across twenty
+     * thousand addresses in the translated game code, a fraction of a per
+     * cent each. Summing the printed lines therefore answers "which
+     * function is hottest" and cannot answer "is the cost the game's code
+     * or ours", which is the question that decides what to work on.
+     *
+     * The split is by ADDRESS RANGE. Our binary is loaded at `prof_base`
+     * and is a few megabytes; the recompiled module is dlopened far away.
+     * Anything within 64 MB of the base is ours, anything else is the
+     * game's - crude, and exact enough for a ratio. */
+    {
+        unsigned long ours = 0ul, theirs = 0ul;
+        unsigned k;
+        for (k = 0; k < PROF_SLOTS; ++k) {
+            if (!prof_hits[k]) continue;
+            if (prof_pc[k] >= prof_base &&
+                prof_pc[k] - prof_base < (64ul << 20))
+                ours += prof_hits[k];
+            else
+                theirs += prof_hits[k];
+        }
+        if (prof_total) {
+            fprintf(stderr, "[profile] ALL SAMPLES: translated game code "
+                            "%5.1f%%, our native runtime %5.1f%%\n",
+                    100.0 * (double)theirs / (double)prof_total,
+                    100.0 * (double)ours / (double)prof_total);
+        }
+    }
     /* Offsets, not absolute addresses: an offset can be fed straight to
      * addr2line against the binary, which is the point of printing them. */
     for (i = 0; i < n && i < 40u; ++i) {
