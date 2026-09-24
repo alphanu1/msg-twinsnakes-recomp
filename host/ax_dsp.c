@@ -28,6 +28,7 @@
  * the failure mode is visible and cheap, which is why this is worth doing
  * before a real mixer rather than after.
  */
+#include <time.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -657,6 +658,48 @@ void mgs_ax_dsp_frame(void* cpu)
         if (wav) fwrite(out, sizeof(int16_t) * 2u, AX_FRAME_SAMPLES, wav);
     }
     mgs_audio_push(out, AX_FRAME_SAMPLES);
+
+    /* MGS_TRACE_AUDIOQ: THE DEVICE'S SIDE, which is the side that is heard.
+     *
+     * Every audio measurement before this one looked at what the mixer
+     * PRODUCED - the sample stream, its gaps, its clipping - and all of it
+     * was taken from headless runs, where `mgs_audio_open` is never called
+     * at all. The exit report said so in a line I did not read:
+     * "5616320 dropped (no device), 0 underruns". A mixer can produce a
+     * perfect stream and still judder, because what judders is the device
+     * running dry between pushes.
+     *
+     * So: how deep is the queue, is it draining, and how does the guest's
+     * production rate compare with real time. A queue that trends down is
+     * a guest falling behind, and "it gets worse and worse" is what that
+     * sounds like. */
+    {
+        static int on = -1;
+        static uint64_t n, first_ns;
+        if (on < 0) on = getenv("MGS_TRACE_AUDIOQ") != NULL;
+        if (on) {
+            struct timespec ts;
+            uint64_t now;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+            if (!first_ns) first_ns = now;
+            ++n;
+            if ((n % 200u) == 0u) {          /* once a second of sound */
+                double real = (double)(now - first_ns) / 1e9;
+                double made = (double)(n * AX_FRAME_SAMPLES) / AX_MIX_RATE;
+                uint64_t pushed = 0, dropped = 0, under = 0;
+                mgs_audio_stats(&pushed, &dropped, &under);
+                fprintf(stderr, "[audioq] %6.1fs real  %6.1fs produced  "
+                        "(%+.2f%%)  queue %5u samples (%.0f ms)  "
+                        "underruns %llu\n",
+                        real, made,
+                        real > 0.1 ? 100.0 * (made - real) / real : 0.0,
+                        mgs_audio_queued(),
+                        1000.0 * mgs_audio_queued() / (double)AX_MIX_RATE,
+                        (unsigned long long)under);
+            }
+        }
+    }
 }
 
 void mgs_ax_dsp_report(void);

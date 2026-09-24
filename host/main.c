@@ -2023,6 +2023,18 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused,
                                    (unsigned long long)rs->tex.evictions);
                         }
+                        {   /* The census, when it was asked for. */
+                            uint64_t mgs_module_cycles_run(void);
+                            uint64_t mgs_module_dispatches(void);
+                            uint64_t cy = mgs_module_cycles_run();
+                            uint64_t dc = mgs_module_dispatches();
+                            if (dc)
+                                printf("dispatch: %llu calls, %llu guest "
+                                       "cycles, %.1f cycles per call\n",
+                                       (unsigned long long)dc,
+                                       (unsigned long long)cy,
+                                       (double)cy / (double)dc);
+                        }
                         printf("GX draw-done: %llu offers, %llu delivered, "
                                "%llu acknowledged by the guest's handler\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),

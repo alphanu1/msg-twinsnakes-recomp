@@ -278,6 +278,43 @@ static uint64_t host_external_read(void* cpu, uint32_t addr, uint8_t size)
         for (i = 0; i < size; ++i) v = (v << 8) | p[i];   /* big-endian */
         return v;
     }
+
+    /* MGS_WATCH_READ=<hex>: WHO reads this register?
+     *
+     * The hottest-reads list names the address and cannot name the caller,
+     * and the two questions have very different answers: 27 million reads of
+     * the graphics FIFO's pointers is either the game drawing a great deal
+     * or the game spinning, and only the return address tells them apart.
+     * `lr` at the moment of the load is the function that did it. */
+    {
+        static long watch = -1;
+        static uint32_t keys[12]; static uint64_t hits[12]; static unsigned nk;
+        if (watch == -1) { const char* e = getenv("MGS_WATCH_READ");
+                           watch = e ? (long)strtoul(e, NULL, 16) : 0; }
+        if (watch && addr == (uint32_t)watch) {
+            uint32_t lr = mgs_module_lr(cpu);
+            unsigned k;
+            for (k = 0; k < nk; ++k) if (keys[k] == lr) break;
+            if (k == nk && nk < 12u) { keys[nk] = lr; hits[nk] = 0; ++nk; }
+            if (k < 12u) {
+                ++hits[k];
+                if ((hits[k] & 0xFFFFFu) == 1u) {
+                    /* ...and the values the spin is comparing. A loop that
+                     * never exits is comparing two things that never meet,
+                     * and naming them is the whole answer. */
+                    fprintf(stderr, "[read] 0x%08X from lr 0x%08X "
+                            "(%llu so far)  PI wp 0x%08X  CP rwd 0x%08X  "
+                            "CP wp 0x%08X  CP rp 0x%08X  CP status 0x%04X\n",
+                            addr, lr, (unsigned long long)hits[k],
+                            (uint32_t)mgs_mmio_read(&s_mmio, 0xCC003014u, 4),
+                            (uint32_t)mgs_mmio_read(&s_mmio, 0xCC000030u, 4),
+                            (uint32_t)mgs_mmio_read(&s_mmio, 0xCC000034u, 4),
+                            (uint32_t)mgs_mmio_read(&s_mmio, 0xCC000038u, 4),
+                            (unsigned)mgs_mmio_read(&s_mmio, 0xCC000000u, 2));
+                }
+            }
+        }
+    }
     return mgs_mmio_read(&s_mmio, addr, size);
 }
 

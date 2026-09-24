@@ -12585,3 +12585,81 @@ SFX matched against Dolphin within tolerance, and nothing here has been
 compared against Dolphin yet - only the field and frame rates have. The
 movie's own rate is also unconfirmed against the oracle, for the reason in
 F294: its plane addresses are ours.
+
+### F296 — the audio judder is the port running slower than real time, and EVERY audio measurement before this was of a run with no audio device
+
+The user reported the judder was not fixed and was getting worse. It was
+not fixed, and the reason I thought it was is a measurement error of the
+worst kind: `MGS_AUDIO_WAV` dumps what the MIXER PRODUCES, and every run I
+measured was headless, where
+
+    host/main.c:  if (!headless) mgs_audio_open(32000u);
+
+so no device is ever opened. The exit report said so, in a line I read past
+in three separate runs:
+
+    device: 0 frames queued, 5616320 dropped (NO DEVICE), 0 underruns
+
+A mixer can produce a flawless stream and still judder, because what judders
+is the device running dry between pushes. `tools/check-audio.py` is not
+wrong - it answers a question that is not the one being asked.
+
+**What the device side says.** `MGS_TRACE_AUDIOQ` reports produced sound
+against real time:
+
+    68.3s real   62.0s produced   (-10.7%)
+    73.1s real   65.0s produced   (-11.1%)
+
+The guest produces sound at about 90% of real time and the shortfall
+accumulates: eight seconds behind at seventy. A device consuming at 32 kHz
+starves for a tenth of every second - "At t t ac ck" - and the picture drifts
+further from the sound the longer it runs. Both of the user's complaints,
+one cause.
+
+**Why.** Guest time advances per STEP, so a PAL field is 810,000/4 = 202,500
+steps and fifty fields a second needs **10.1M steps/s**. The port manages
+**9.3M/s**. It is not a pacing bug; the port is simply too slow, and the
+audio clock is derived from the same counter, so the shortfall is audible
+rather than merely slow.
+
+**And a step is not what it sounds like.** `MGS_CYCLE_CENSUS`:
+
+    199,988,167 dispatch calls, 2,701,701,634 guest cycles
+    = 13.5 guest cycles per call
+
+The budget is 100,000 cycles, so the run loop's cost ought to be amortised
+to nothing. It is not: translated code returns after about thirteen guest
+instructions, so the whole run loop is paid every thirteen instructions.
+That is why the work below is worth as much as it is.
+
+**What was in that loop, per guest instruction:**
+
+- `mgs_retrace_period()` - two calls and a 64-bit DIVISION - then
+  `r.steps % period`, a second 64-bit division. To answer a question that
+  changes fifty times a second. Now a deadline on `gt` like every other
+  hook, with the field period re-read once per field (the reason it was not
+  cached - the guest programmes the format in VIConfigure - is preserved).
+- `mgs_runtime_from(NULL)` and `mgs_host_mmio()` looked up every step.
+  Hoisted.
+- `mgs_mmio_advance_ticks`, which assembles a 32-bit register value from
+  bytes before doing anything. Now batched 16 steps at a time: the guest
+  clock is 40.5 MHz and this quantises it to 64 ticks, 1.6 microseconds,
+  which nothing in the SDK can see. `gt` stays exact.
+- `recent[recent_n % RECENT]` with RECENT = 12 - a 32-bit division per step
+  for a diagnostic ring. Sixteen, and a mask.
+- `fntrace_step()` called unconditionally; now the check is at the call site.
+
+    production against real time:  -9.2%  ->  -5.6%  ->  -3.5%  ->  -3.1%
+
+Video is unchanged by it: 26 frames sampled, 0 noisy, 0 purple, 603 movie
+frames decoded.
+
+**Still not enough.** -3.1% still starves the device, and the windowed path
+the user runs has presentation on top of this. The remaining cost is the run
+loop itself being entered every 13 guest instructions; the real fix is for
+dispatch to cover more code per call, which is a recompiler question.
+
+**What not to re-propose:** judging the audio from `MGS_AUDIO_WAV` alone, or
+from any headless run. The dump is the mixer's output and the device is
+never opened without a window. Use `MGS_TRACE_AUDIOQ`, which compares
+produced sound against real time and works either way.

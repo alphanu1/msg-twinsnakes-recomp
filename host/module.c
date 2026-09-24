@@ -804,6 +804,14 @@ volatile const char* mgs_module_phase = "start";
 /* Cycles the translated code may run per dispatch call. See MGS_BUDGET. */
 static uint32_t s_budget = 100000u;
 
+/* MGS_CYCLE_CENSUS: guest cycles run per dispatch call. */
+static int s_cycle_census;
+static uint64_t s_cycles_run, s_dispatches;
+uint64_t mgs_module_cycles_run(void);
+uint64_t mgs_module_cycles_run(void) { return s_cycles_run; }
+uint64_t mgs_module_dispatches(void);
+uint64_t mgs_module_dispatches(void) { return s_dispatches; }
+
 static MgsPump s_pump;
 static void*   s_pump_user;
 
@@ -1191,6 +1199,28 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
      * which stopped every voice.
      *
      * A deadline fires at the right rate whatever the increment. */
+    /* HOISTED OUT OF THE STEP LOOP.
+     *
+     * These were looked up per step, ten million times a second, and the
+     * retrace check divided and then took a modulo - two 64-bit divisions
+     * every instruction - to ask a question that changes fifty times a
+     * second. The port runs about 9% slower than real time in this scene
+     * and that is audible: guest time advances per step, so a field is
+     * 810,000/4 = 202,500 steps and fifty fields a second needs 10.1M
+     * steps/s against the 9.3M being managed. The audio device is fed from
+     * that same clock, so the shortfall is heard directly as gaps.
+     *
+     * The field period is still READ rather than latched, for the reason
+     * the note below gives - the guest programmes the format in
+     * VIConfigure, long after the first call - but it is read once per
+     * field instead of once per instruction. */
+    MgsRuntime* const rt = mgs_runtime_from(NULL);
+    MgsMmio* const mmio_p = mgs_host_mmio();
+    const unsigned tick_rate = mgs_tick_rate();
+    unsigned long long forced_retrace = 0ull;
+    uint64_t due_vi = 0;
+    uint64_t pending_ticks = 0;
+    unsigned tick_batch = 0;
     uint64_t due_pe = 0, due_dsp = 0, due_pend = 0, due_aram = 0,
              due_aid = 0, due_pump = 0, due_disp = 0;
     uint32_t last_pc = 0u;
@@ -1219,6 +1249,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         env = getenv("MGS_HEARTBEAT");
         heartbeat = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
         profile = getenv("MGS_PROFILE") != NULL;
+        s_cycle_census = getenv("MGS_CYCLE_CENSUS") != NULL;
         env = getenv("MGS_BUDGET");
         if (env) {
             unsigned long v = strtoul(env, NULL, 0);
@@ -1238,11 +1269,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     /* A ring of recent addresses. A stop address says where execution ended;
      * for a jump to a bad address the interesting part is what branched
      * there, and that is always a few steps back. */
-    #define RECENT 12
+    /* A POWER OF TWO, so the ring index is a mask and not a DIVISION.
+     *
+     * This ring records the last few program counters for the report that
+     * prints when dispatch finds no code for an address. It is written
+     * every step - once per 13 guest instructions - and at 12 entries the
+     * index cost a 32-bit division each time. Sixteen is the same
+     * diagnostic without the divide. */
+    #define RECENT 16
     static uint32_t recent[RECENT];
     unsigned recent_n = 0u;
 
     memset(&r, 0, sizeof r);
+    {   /* MGS_RETRACE_STEPS still forces a STEP period, as it did. */
+        const char* e = getenv("MGS_RETRACE_STEPS");
+        forced_retrace = (e && *e) ? strtoull(e, NULL, 10) : 0ull;
+    }
     {
         const char* env = getenv("MGS_WATCH");
         char* end = NULL;
@@ -1295,7 +1337,22 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          *
          * MGS_TICK_RATE overrides it while that is being measured; the
          * calibrated figure for 60 Hz is 675000/2000 = 337 or 338. */
-        mgs_runtime_advance_ticks(mgs_runtime_from(NULL), mgs_tick_rate());
+        /* BATCHED, because these are two out-of-line calls per guest
+         * instruction and one of them assembles a register value from
+         * bytes before it does anything.
+         *
+         * The guest's clock is 40.5 MHz and the SDK measures milliseconds
+         * against it; flushing every 16 steps quantises it to 64 ticks,
+         * which is 1.6 microseconds. Nothing in the SDK can see that. What
+         * must stay exact is `gt`, the schedule the periodic hooks run on,
+         * and that is accumulated every step as before. */
+        pending_ticks += tick_rate;
+        if (++tick_batch >= 16u) {
+            mgs_runtime_advance_ticks(rt, pending_ticks);
+            mgs_mmio_advance_ticks(mmio_p, (uint32_t)pending_ticks);
+            pending_ticks = 0;
+            tick_batch = 0;
+        }
         /* THE PERIODIC HOOKS BELOW RUN ON GUEST TIME, NOT ON STEPS.
          *
          * They used to be `r.steps % N`, which makes every modelled device
@@ -1311,10 +1368,10 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * they were tuned at - every hook fires on exactly the step it used
          * to, and at any other rate it fires at the same point in GUEST
          * TIME instead of the same step. */
-        gt += mgs_tick_rate();
+        gt += tick_rate;
         /* The audio interface's sample counter comes off the same clock,
          * because __AI_SRC_INIT times one against the other. */
-        mgs_mmio_advance_ticks(mgs_host_mmio(), mgs_tick_rate());
+
 
         /* Advance the video beam on a cadence, so a guest polling for retrace
          * sees time pass at the rate the host runs rather than as fast as it
@@ -1332,9 +1389,15 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * with the exception's MSR still in force - so interrupts are
          * permanently disabled from then on and exactly one is ever
          * delivered. That is precisely how this presented. */
-        if ((r.steps % mgs_retrace_period()) == 0ull) {
-            mgs_mmio_set_pad(mgs_host_mmio(), mgs_video_pad());
-            mgs_mmio_tick_frame(mgs_host_mmio());
+        if (forced_retrace ? (r.steps % forced_retrace) == 0ull
+                           : gt >= due_vi) {
+            /* Re-read the field period HERE, once a field, rather than in
+             * the step above. A PAL field is 810,000 ticks and an NTSC one
+             * 675,000, and the guest can change which. */
+            if (!forced_retrace)
+                due_vi = gt + (uint64_t)mgs_mmio_vi_field_ticks(mmio_p);
+            mgs_mmio_set_pad(mmio_p, mgs_video_pad());
+            mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);
             if (s_frame) s_frame();
             ++r.frames;
@@ -1502,7 +1565,9 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             }
         }
 
-        fntrace_step(cpu, pc);
+        /* The check, not the call: this is the per-step path and
+         * the trace is off in every normal run. */
+        if (s_fntrace_n) fntrace_step(cpu, pc);
 
         if (s_trace_addr && pc == s_trace_addr && s_trace_fn)
             s_trace_fn(cpu, mgs_module_gpr(cpu));
@@ -1519,7 +1584,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             s_linked(cpu, s_watch_r3);
         }
 
-        recent[recent_n % RECENT] = pc;
+        recent[recent_n & (RECENT - 1u)] = pc;
         ++recent_n;
         mgs_module_last_pc = pc;
         mgs_module_phase = "run-loop";
@@ -1598,7 +1663,27 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         }
 
         mgs_module_phase = "dispatch";
+        /* HOW MUCH GUEST CODE DOES ONE DISPATCH CALL ACTUALLY RUN?
+         *
+         * The budget is 100,000 cycles, so in principle the run loop's
+         * per-call overhead is amortised to nothing. In practice removing
+         * two divisions and four pointer lookups from that loop moved the
+         * port from 9.2% slower than real time to 3.5%, which it could not
+         * have done if a call ran anything like 100,000 cycles. The
+         * translated code decrements the downcount, so what it did not use
+         * is what it did not run. */
+        if (s_cycle_census) {
+            uint32_t before = s_budget;
+            uint32_t after;
+            int ok = mod->dispatch(cpu, pc);
+            memcpy(&after, (uint8_t*)cpu + CPU_DOWNCOUNT, sizeof after);
+            s_cycles_run += (uint64_t)(before - after);
+            ++s_dispatches;
+            if (!ok) goto uncovered;
+            continue;
+        }
         if (!mod->dispatch(cpu, pc)) {
+            uncovered:;
             r.stop = MGS_STOP_UNCOVERED;
             r.pc = pc;
             /* An uncovered address at an exception vector is not a gap in the
@@ -1756,7 +1841,9 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
     for (step = 0; step < max_steps; ++step) {
         uint32_t pc = mgs_module_pc(cpu);
         if (pc == MGS_GUEST_RETURN_SENTINEL) { returned = 1; break; }
-        fntrace_step(cpu, pc);
+        /* The check, not the call: this is the per-step path and
+         * the trace is off in every normal run. */
+        if (s_fntrace_n) fntrace_step(cpu, pc);
         {
             uint32_t budget = 100000u;
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
