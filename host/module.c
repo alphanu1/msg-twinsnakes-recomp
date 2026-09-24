@@ -987,8 +987,23 @@ static int mgs_clock_is_wall(void)
 {
     static int mode = -1;
     if (mode < 0) {
+        /* STEP-DRIVEN IS THE DEFAULT AGAIN, and this is a retreat rather
+         * than a decision. The wall clock is the right architecture - it is
+         * what stops us modelling a 486 MHz CPU - but turning it on broke
+         * Ben's build: audio clipping, popping and the echo back, and the
+         * video corrupting intermittently. Both at once means a global
+         * timing change, and moving guest time in 2 ms jumps every 64 steps
+         * moves WHEN every interrupt fires relative to the code it
+         * interrupts. The AX mixer runs inside the DSP interrupt and the GX
+         * parser runs inside the guest's own writes; neither was written
+         * expecting time to arrive in lumps.
+         *
+         * MGS_GUEST_CLOCK=wall turns it back on. It goes back to being the
+         * default when it has been shown not to do that, which means
+         * advancing guest time in far smaller increments - the lump is the
+         * suspect, not the clock. */
         const char* e = getenv("MGS_GUEST_CLOCK");
-        mode = !(e && (*e == 's' || *e == 'S'));
+        mode = (e && (*e == 'w' || *e == 'W'));
     }
     return mode;
 }
