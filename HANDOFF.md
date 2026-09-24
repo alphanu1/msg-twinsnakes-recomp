@@ -302,6 +302,8 @@ renderer.
   model textures really are black alpha masks.
 - **A whole-frame texture override as evidence about the models (F341).**
   It shows the composite blit. Restrict it to one format.
+- **Blaming alpha for see-through characters (F342).** Their combiner makes
+  them opaque. It was depth: GX screen z is in 24-bit units, not 0..1.
 
 - **Looking for a panning bug in the AX mixer (F315).** The two output
   channels are bit-identical because the game asks for that: 0 of 62,162
@@ -14717,3 +14719,43 @@ it measures the blit.
 list and the texture-shape list (16 entries - the C4 shapes never appeared
 in it) both silently stop recording once full. A capped list says what was
 seen FIRST, not what matters; count by the field that decides the question.
+
+### F342 — the GPU had no working depth: every 3D triangle sat at depth 1.0
+
+Ben, with screenshots: figures are see-through, the green hologram is drawn
+over Naomi when it is behind her, "3D layers not in the correct place". He
+also called the cause correctly before it was found: the figure itself is
+transparent, and that is why things show through it.
+
+**Ruled out first, by measurement.** The character draws are five-stage
+combiners, blended SRCALPHA / INVSRCALPHA, whose last stage makes alpha =
+texture alpha x A0 (`MGS_TRACE_BLENDDRAW=1`). A0 is 255 and the texture is
+CMPR, whose alpha is 255 except for the explicit transparent colour, and our
+CMPR decoder matches the reference. So the combiner was producing opaque
+characters, and the fault was downstream of it.
+
+**What it was.** The same trace printed the depth side: the viewport's z
+scale and offset are both **16,777,216** - GX works in 24-bit depth units -
+so `to_screen` produces z between 0 and 16.7 million (observed 16,606,346,
+16,745,416, ...). The GPU vertex took that as 0..1, on a comment that said
+to_screen "already produces" it; that is only true of the default before
+the game programs a viewport. The pipeline clamps depth, so nearly every 3D
+triangle landed at exactly 1.0, `LEQUAL` passed for all of them, and the
+frame was painted in pure draw order. Anything drawn after a character
+covered it; a translucent layer drawn after appeared on top of it.
+
+**Fix:** clamp to [0, 16777215] as the hardware does and divide by
+16777215, so the D24 depth buffer holds exactly GX's value. Verified on the
+deterministic clock against the two scenes in Ben's screenshots: the
+hologram now sits behind the crew, foreground figures are solid, background
+figures are occluded, and the horizontal streaks across the walls are gone.
+Frame rate unchanged (21-25 fps on the heavy scenes).
+
+**The software rasteriser was never affected** - it compares in GX's own
+units - and it is too slow to reach these scenes for an A/B (12 frames in
+9 minutes). The GPU path's depth had simply never been compared against it
+in a scene with overlapping 3D until textures made the result legible.
+
+**Also found while tracing:** MGS_TRACE_BLENDDRAW's first version read
+per-stage texture pointers past the stages that had been filled and
+segfaulted a run. Fixed before any conclusion was drawn from it.

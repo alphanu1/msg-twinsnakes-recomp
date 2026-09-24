@@ -1854,6 +1854,80 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     alpha_always = mgs_tev_alpha_test_always(&gx->bp);
     mgs_tev_compile(&gx->bp, &tev);
 
+    /* MGS_TRACE_BLENDDRAW: WHY IS A CHARACTER SEE-THROUGH?
+     *
+     * Ben: the figures are transparent, which is why the screen behind
+     * shows through them. That is the alpha this draw produces, meeting
+     * the blend it is drawn with - so print both, once per distinct
+     * configuration, for textured draws with blending on: the blend
+     * register, the alpha test, every stage's alpha environment and the
+     * format of the texture each stage samples. Distinct configurations
+     * rather than a count, because the question is WHICH arithmetic sends
+     * a model's alpha below one, and that is in the selectors. */
+    {
+        static int on = -1;
+        static uint32_t seen[60]; static unsigned nseen;
+        if (on < 0) on = getenv("MGS_TRACE_BLENDDRAW") != NULL;
+        if (on && tex && !(tex->width == 512u && tex->height == 448u) &&
+            nseen < 60u) {
+            uint32_t key = mgs_bp_get(&gx->bp, BP_BLEND_MODE) * 2654435761u;
+            unsigned st, k;
+            for (st = 0; st < tev.stages; ++st)
+                key = key * 31u + tev.ae[st] * 7u + tev.ce[st];
+            key ^= (uint32_t)tex->format << 28;
+            key = key * 31u + mgs_bp_get(&gx->bp, BP_ZMODE) + gx->viewport[2]
+                + gx->viewport[5] * 3u;
+            for (k = 0; k < nseen; ++k) if (seen[k] == key) break;
+            if (k == nseen) {
+                seen[nseen++] = key;
+                fprintf(stderr, "[blenddraw] blend %s 0x%06X (src %u dst %u)"
+                                " alphacmp 0x%06X stages %u tex0 fmt 0x%X %ux%u"
+                                " vtxA %02X\n",
+                        r->blend_enable ? "ON " : "off",
+                        mgs_bp_get(&gx->bp, BP_BLEND_MODE), r->blend_src,
+                        r->blend_dst, mgs_bp_get(&gx->bp, BP_ALPHA_COMPARE),
+                        tev.stages, tex->format, tex->width, tex->height,
+                        (unsigned)(vin[0]->color[0] >> 24));
+                fprintf(stderr, "[blenddraw]   zmode 0x%02X (test %u func %u "
+                                "write %u)  viewport z scale %.1f offset %.1f"
+                                "  screen z %.6f %.6f %.6f  clip w %.3f\n",
+                        mgs_bp_get(&gx->bp, BP_ZMODE),
+                        mgs_bp_get(&gx->bp, BP_ZMODE) & 1u,
+                        (mgs_bp_get(&gx->bp, BP_ZMODE) >> 1) & 7u,
+                        (mgs_bp_get(&gx->bp, BP_ZMODE) >> 4) & 1u,
+                        f_from_bits(gx->viewport[2]),
+                        f_from_bits(gx->viewport[5]),
+                        sz[0], sz[1], sz[2], iw[0] != 0.0f ? 1.0f / iw[0] : 0.0f);
+                fprintf(stderr, "[blenddraw]   regs (r,g,b,a): prev %d,%d,%d,%d"
+                                "  c0 %d,%d,%d,%d  c1 %d,%d,%d,%d  c2 %d,%d,%d,%d"
+                                "   BP E0..E7: %06X %06X %06X %06X %06X %06X"
+                                " %06X %06X\n",
+                        tev.reg[0][0], tev.reg[0][1], tev.reg[0][2], tev.reg[0][3],
+                        tev.reg[1][0], tev.reg[1][1], tev.reg[1][2], tev.reg[1][3],
+                        tev.reg[2][0], tev.reg[2][1], tev.reg[2][2], tev.reg[2][3],
+                        tev.reg[3][0], tev.reg[3][1], tev.reg[3][2], tev.reg[3][3],
+                        mgs_bp_get(&gx->bp, 0xE0u), mgs_bp_get(&gx->bp, 0xE1u),
+                        mgs_bp_get(&gx->bp, 0xE2u), mgs_bp_get(&gx->bp, 0xE3u),
+                        mgs_bp_get(&gx->bp, 0xE4u), mgs_bp_get(&gx->bp, 0xE5u),
+                        mgs_bp_get(&gx->bp, 0xE6u), mgs_bp_get(&gx->bp, 0xE7u));
+                for (st = 0; st < tev.stages && st < 16u; ++st) {
+                    uint32_t ae = tev.ae[st];
+                    fprintf(stderr, "[blenddraw]   stage %u: alpha a=%u b=%u"
+                                    " c=%u d=%u (op %u bias %u scale %u clamp %u"
+                                    " dest %u)  ka=%d  tex %s fmt 0x%X\n",
+                            st, (ae >> 13) & 7u, (ae >> 10) & 7u,
+                            (ae >> 7) & 7u, (ae >> 4) & 7u, (ae >> 18) & 1u,
+                            (ae >> 16) & 3u, (ae >> 20) & 3u,
+                            (ae >> 19) & 1u, (ae >> 22) & 3u, tev.ka[st],
+                            (st < stage_n && st < 8u && stage_tex[st])
+                                ? "yes" : "no",
+                            (st < stage_n && st < 8u && stage_tex[st])
+                                ? stage_tex[st]->format : 0u);
+                }
+            }
+        }
+    }
+
     /* The weights' setup, done once instead of once per pixel. */
     /* THE GPU PATH, when one is up.
      *
@@ -1950,7 +2024,30 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             uint32_t col = vin[k]->color[0];
             gv[k].x = ndx * w1;
             gv[k].y = ndy * w1;
-            gv[k].z = sz[k] * w1;
+            {
+                /* DEPTH IN GX'S OWN UNITS, NORMALISED FOR THE GPU.
+                 *
+                 * `to_screen` produces GX screen z: the viewport's scale
+                 * and offset are in 24-bit depth units - this game sets
+                 * both to 16,777,216 - so z comes out between 0 and
+                 * 16.7 million. It was handed to the GPU as if it were
+                 * 0..1, on a comment that said to_screen "already
+                 * produces" that; it only does before the game has
+                 * programmed a viewport. The pipeline clamps depth, so
+                 * nearly every 3D triangle landed at exactly 1.0, the
+                 * less-or-equal test passed for all of them, and the
+                 * frame was painted in draw order: a hologram behind
+                 * Naomi drawn over her, figures showing what was drawn
+                 * after them, 3D layers in the wrong place.
+                 *
+                 * Clamped to the 24-bit range as the hardware clamps it,
+                 * and divided by its maximum so a D24 depth buffer holds
+                 * exactly GX's value. */
+                float zg = sz[k];
+                if (zg < 0.0f) zg = 0.0f;
+                if (zg > 16777215.0f) zg = 16777215.0f;
+                gv[k].z = (zg / 16777215.0f) * w1;
+            }
             gv[k].w = w1;
             gv[k].r = (float)((col >> 16) & 0xFFu) / 255.0f;
             gv[k].g = (float)((col >> 8) & 0xFFu) / 255.0f;
