@@ -1925,6 +1925,61 @@ int main(int argc, char** argv)
                                        (unsigned long long)rs->tex_on_later_stage);
                                 {
                                     const MgsGx* g = mgs_display_gx();
+                                    printf("  XF state parsed and DROPPED: "
+                                           "texgen %llu, texture matrices "
+                                           "%llu, other %llu\n",
+                                        (unsigned long long)(g ? g->xf_texgen_writes : 0),
+                                        (unsigned long long)(g ? g->xf_texmtx_writes : 0),
+                                        (unsigned long long)(g ? g->xf_other_writes : 0));
+                                    if (g && g->xf_texgen_n) {
+                                        unsigned k;
+                                        printf("    texgen configurations "
+                                               "written (value: type, source "
+                                               "row, projection):\n");
+                                        for (k = 0; k < g->xf_texgen_n; ++k) {
+                                            uint32_t v = g->xf_texgen_key[k];
+                                            printf("      0x%08X x%llu  "
+                                                   "type %u, row %u, %s\n",
+                                                   v,
+                                                   (unsigned long long)g->xf_texgen_hits[k],
+                                                   (unsigned)((v >> 4) & 7u),
+                                                   (unsigned)((v >> 7) & 0x1Fu),
+                                                   ((v >> 1) & 1u) ? "3x4"
+                                                                   : "2x4");
+                                        }
+                                    }
+                                    if (g && g->xf_other_n) {
+                                        unsigned k;
+                                        printf("    first distinct XF "
+                                               "addresses dropped:");
+                                        for (k = 0; k < g->xf_other_n; ++k)
+                                            printf(" 0x%04X",
+                                                   (unsigned)g->xf_other_first[k]);
+                                        printf("\n");
+                                    }
+                                    printf("  vertices with a texture-matrix "
+                                           "index: %llu, of them NOT "
+                                           "GX_IDENTITY: %llu\n",
+                                        (unsigned long long)(g ? g->tex_mtx_seen : 0),
+                                        (unsigned long long)(g ? g->tex_mtx_nonidentity : 0));
+                                    if (g) {
+                                        unsigned k;
+                                        printf("    texture matrix applied by "
+                                               "coordinate:");
+                                        for (k = 0; k < 8u; ++k)
+                                            if (g->tex_mtx_applied[k])
+                                                printf("  %u:%llu", k,
+                                                       (unsigned long long)g->tex_mtx_applied[k]);
+                                        printf("\n      of those, the "
+                                               "coordinate actually MOVED: "
+                                               "%llu; unchanged (identity-"
+                                               "valued matrix): %llu\n",
+                                               (unsigned long long)g->tex_mtx_moved,
+                                               (unsigned long long)g->tex_mtx_unmoved);
+                                        printf("      (asked for a POSITION "
+                                               "matrix row: %llu)\n",
+                                               (unsigned long long)g->tex_mtx_position_row);
+                                    }
                                     printf("  indexed XF loads "
                                            "(GXLoadPosMtxIndx and friends): "
                                            "%llu  (no array: %llu, bad "

@@ -12,6 +12,8 @@
  * every format bug is in this file rather than spread through the renderer.
  */
 #include "fifo.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 #include <string.h>
 
@@ -244,8 +246,49 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
      * zero happens to hold. */
     if (f->kind[GX_VA_PNMTXIDX] != GX_ATTR_NONE) v->pos_matrix = r8(&r);
     else v->pos_matrix = gx->cp_matrix_index_a & 0x3Fu;
+    /* THE DEFAULT IS THE CP REGISTER, not identity.
+     *
+     * MatrixIndexA and MatrixIndexB hold the position matrix index AND the
+     * eight texture matrix indices, six bits each - PosNormal at 0, Tex0 at
+     * 6, Tex1 at 12, Tex2 at 18, Tex3 at 24 in A, and Tex4..7 at 0,6,12,18
+     * in B (Dolphin, `CPMemory.h`, TMatrixIndexA/B). A vertex that carries
+     * no per-coordinate index uses those, and most vertices here do not
+     * carry one: 1.4 million of some twenty million. Defaulting to identity
+     * would leave the great majority untransformed for the same reason the
+     * whole texture matrix was missing. */
+    for (i = 0; i < 4u; ++i)
+        v->tex_matrix[i] =
+            (gx->cp_matrix_index_a >> (6u + 6u * i)) & 0x3Fu;
+    for (i = 4u; i < 8u; ++i)
+        v->tex_matrix[i] =
+            (gx->cp_matrix_index_b >> (6u * (i - 4u))) & 0x3Fu;
     for (i = 0; i < 8u; ++i)
-        if (f->kind[GX_VA_TEX0MTXIDX + i] != GX_ATTR_NONE) v->tex_matrix[i] = r8(&r);
+        if (f->kind[GX_VA_TEX0MTXIDX + i] != GX_ATTR_NONE) {
+            v->tex_matrix[i] = r8(&r);
+            /* GX_IDENTITY is 60. Anything else means the game wants a
+             * texture matrix applied, and nothing here applies one. */
+            ++((MgsGx*)gx)->tex_mtx_seen;
+            if (v->tex_matrix[i] != 60u) {
+                ++((MgsGx*)gx)->tex_mtx_nonidentity;
+                /* WHAT IS ACTUALLY IN THE MATRIX. "The game uses texture
+                 * matrices" and "not applying them changes the picture" are
+                 * different claims: an identity-valued matrix at a
+                 * non-identity INDEX would make the count above alarming and
+                 * harmless. Print a few and settle it. */
+                if (getenv("MGS_TRACE_TEXMTX")) {
+                    static unsigned said;
+                    if (said < 6u) {
+                        unsigned row = v->tex_matrix[i], k;
+                        ++said;
+                        fprintf(stderr, "[texmtx] coord %u index %u:", i, row);
+                        for (k = 0; k < 8u; ++k)
+                            fprintf(stderr, " %7.3f",
+                                    (double)gx->xf_matrix[(row * 4u + k) & 0xFFu]);
+                        fprintf(stderr, "\n");
+                    }
+                }
+            }
+        }
 
     read_position(gx, &r, f, v);
 
@@ -288,6 +331,67 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
             v->u[i] = component(&ar, f->tex_format[i], f->tex_shift[i]);
             if (f->tex_count[i] == 2u)
                 v->v[i] = component(&ar, f->tex_format[i], f->tex_shift[i]);
+        }
+    }
+
+    /* THE TEXTURE MATRIX, APPLIED.
+     *
+     * The stream carries a texture-matrix INDEX per coordinate, and the
+     * matrix itself lives in the same XF matrix memory as the position
+     * matrices - GX_PNMTX0..9 are rows 0,3,..27 and GX_TEXMTX0..9 are rows
+     * 30,33,..57, with GX_IDENTITY at 60. So `xf_matrix` already held these
+     * and nothing multiplied by them: 1,398,946 vertices a run carried a
+     * non-identity index and every one was ignored.
+     *
+     * What the game actually puts there settles whether that mattered:
+     *
+     *     [  0.270  0.421  0  0 ]    a rotation of 57 degrees
+     *     [ -0.421  0.270  0  0 ]    combined with a scale of 0.5
+     *
+     * so those surfaces were drawn at twice the texture size and unrotated.
+     * That is Ben's "objects are incorrect".
+     *
+     * GX_TG_MTX2x4 against the stream's own coordinates, which takes the
+     * input as (s, t, 1, 1). The 3x4 form and the texgen configuration at
+     * XF 0x1040 are still dropped - counted in `xf_texgen_writes` - and a
+     * matrix whose third and fourth columns are zero, as this one's are,
+     * gives the same answer either way. */
+    /* MGS_NO_TEXMTX withdraws this, so "did applying the matrix change the
+     * picture" is a switch rather than a rebuild - HANDOFF F162 records two
+     * runs concluded from a build that had not finished. */
+    {
+        static int off = -1;
+        if (off < 0) off = getenv("MGS_NO_TEXMTX") != NULL;
+        if (off) return r.at;
+    }
+    for (i = 0; i < 8u; ++i) {
+        unsigned row = v->tex_matrix[i];
+        const float* m;
+        float s0, t0;
+        if (row >= 60u) continue;              /* identity, or out of range */
+        /* ROWS BELOW 30 ARE POSITION MATRICES. GX_PNMTX0..9 occupy rows
+         * 0,3,..27 and GX_TEXMTX0..9 rows 30,33,..57, in one memory. A
+         * texture coordinate pointed at a position matrix is either a game
+         * generating coordinates from geometry - which needs the texgen
+         * configuration we still drop - or our own misread of the CP
+         * register's default. Multiplying texture coordinates by a modelview
+         * matrix would be far worse than leaving them alone, so it is left
+         * alone and counted. */
+        if (row < 30u) { ++((MgsGx*)gx)->tex_mtx_position_row; continue; }
+        if (row * 4u + 8u > 64u * 4u) continue;
+        ++((MgsGx*)gx)->tex_mtx_applied[i];
+        m = &gx->xf_matrix[row * 4u];
+        s0 = v->u[i]; t0 = v->v[i];
+        v->u[i] = m[0] * s0 + m[1] * t0 + m[2] + m[3];
+        v->v[i] = m[4] * s0 + m[5] * t0 + m[6] + m[7];
+        {   /* Did it actually move? An identity-valued matrix at a
+             * non-identity index is common and costs nothing; it is also
+             * the difference between this mattering and not. */
+            float du = v->u[i] - s0, dv = v->v[i] - t0;
+            if (du < 0.0f) du = -du;
+            if (dv < 0.0f) dv = -dv;
+            if (du > 1e-6f || dv > 1e-6f) ++((MgsGx*)gx)->tex_mtx_moved;
+            else ++((MgsGx*)gx)->tex_mtx_unmoved;
         }
     }
     return r.at;

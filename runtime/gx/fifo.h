@@ -128,6 +128,41 @@ typedef struct MgsGx {
      * origin and invisible, so "we saw the command" and "we acted on
      * it" have to be separate numbers. */
     uint64_t indexed_xf_loads, indexed_xf_no_array, indexed_xf_bad_addr;
+    /* XF state we PARSE AND DROP, counted before deciding whether it
+     * matters. The indexed matrix loads were exactly this shape - a
+     * command handled well enough to keep the stream in sync and then
+     * ignored - and cost 406,076 invisible triangles (F322), so the
+     * rest of the XF address space gets counted rather than assumed
+     * harmless. 0x1040-0x104F is texgen, 0x0500-0x05FF the texture
+     * (post-transform) matrices, 0x1000-0x1017 the vertex spec and
+     * lighting control. */
+    uint64_t xf_texgen_writes, xf_texmtx_writes, xf_other_writes;
+    /* The DISTINCT texgen configurations written, because "144,332
+     * writes we ignore" does not say whether ignoring them matters.
+     * A coordinate configured as plain 2x4 from its own stream row is
+     * what the code already assumes; anything else - generated from
+     * position or normal, 3x4 projected, emboss, or a colour channel -
+     * is a coordinate we are computing wrongly. */
+    uint32_t xf_texgen_key[8]; uint64_t xf_texgen_hits[8];
+    unsigned xf_texgen_n;
+    uint32_t xf_other_first[8];
+    unsigned xf_other_n;
+    /* Vertices whose stream carries a texture-matrix index that is not
+     * GX_IDENTITY (60). If this is zero the matrices do not matter. */
+    uint64_t tex_mtx_nonidentity, tex_mtx_seen;
+    /* Which COORDINATE each transform lands on, and how many asked for
+     * a row that is a POSITION matrix rather than a texture one.
+     * Coordinate 0 is the one a single-stage draw samples; a matrix on
+     * coordinates 1-3 only shows up through a later TEV stage. */
+    uint64_t tex_mtx_applied[8];
+    uint64_t tex_mtx_position_row;
+    /* Of the transforms applied, how many actually MOVED the
+     * coordinate. "18 million vertices use a texture matrix" and
+     * "applying it changes the picture" are different claims, and a
+     * matrix can be identity-VALUED at a non-identity INDEX. Thirteen
+     * cinematic frames came out byte-identical with the transform on
+     * and off, and this is the number that explains why. */
+    uint64_t tex_mtx_moved, tex_mtx_unmoved;
     uint32_t array_base[16];             /* CP 0xA0-0xAF */
     uint32_t array_stride[16];           /* CP 0xB0-0xBF */
     uint32_t cp_matrix_index_a, cp_matrix_index_b;

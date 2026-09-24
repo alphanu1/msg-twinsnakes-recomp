@@ -13978,3 +13978,121 @@ game's own framebuffer -> YUV -> the window, because the framebuffer the
 video interface scans out is the game's and not ours; short-circuiting it
 would show a different picture from the console's. Presenting through the
 GPU device's own swapchain is a separate change with its own comparison.
+
+### F324 — the texture matrices were in memory all along and nothing multiplied by them
+
+Chasing F322 raised a question worth asking of every command: what else does
+this parser understand well enough to stay in sync, and then do nothing
+about? Counting the XF address space rather than assuming it harmless:
+
+    XF state parsed and DROPPED, in one 400M-step run
+      texgen (0x1040-0x104F)                  144,332 writes
+      post-transform matrices (0x0500-0x05FF) 151,536 writes
+      everything else                         562,282 writes
+      first distinct addresses  0x1000 0x1012 0x1006 0x1050 0x1018
+                                0x1051 0x1052 0x1053
+
+    vertices carrying a texture-matrix index      1,398,946
+      of them NOT GX_IDENTITY                     1,398,946   (all of them)
+
+**The matrices were already stored.** GX keeps texture matrices in the SAME
+XF matrix memory as the position matrices - `GX_PNMTX0..9` are rows 0,3,..27
+and `GX_TEXMTX0..9` are rows 30,33,..57, with `GX_IDENTITY` at 60 - so
+`xf_matrix` held them the whole time and nothing ever multiplied by them.
+
+**What the game puts there, which is what settles whether it mattered:**
+
+    [  0.270  0.421  0  0 ]    a rotation of 57 degrees
+    [ -0.421  0.270  0  0 ]    combined with a scale of 0.5
+
+sqrt(0.270^2 + 0.421^2) = 0.500 exactly. Those surfaces were being drawn at
+twice the texture size and unrotated. "The game uses texture matrices" and
+"ignoring them changes the picture" are different claims, and this is the
+second one.
+
+**The default is the CP register, not identity** - and getting that wrong
+would have left most vertices untransformed for the same reason the whole
+feature was missing. `MatrixIndexA` holds the position matrix index at bit 0
+and Tex0..3 at bits 6, 12, 18, 24; `MatrixIndexB` holds Tex4..7 at 0, 6, 12,
+18 (Dolphin, `CPMemory.h`). Only 1.4 million of some twenty million vertices
+carry a per-coordinate index; the rest take these.
+
+**AND IT CHANGES NOTHING ON SCREEN, WHICH IS THE HONEST RESULT.**
+`MGS_NO_TEXMTX=1` withdraws the transform, so this is a switch rather than a
+rebuild (F162), and thirteen frames of real scene content from the cinematic
+- taken from copy 700 onward, not the logo frames - are **byte-identical**
+with it and without it:
+
+    13 frame pairs, all: 0.00% of pixels differ, mean abs error 0.00
+
+**I got the reason wrong once, from six lines of trace.** The trace samples
+showed coordinates 1, 2 and 3 and never 0, and I wrote down "a matrix on
+the others only reaches the screen through a later TEV stage". The
+aggregate says otherwise:
+
+    texture matrix applied by coordinate
+      0: 10,675,352   1: 20,973,194   2: 19,438,824   3: 20,973,194
+      asked for a POSITION matrix row: 0
+
+Coordinate 0 - the one a single-stage draw samples - is transformed ten
+million times. Six lines of a trace are a sample, not a distribution, and
+this is the second time this session that reading one as the other produced
+a confident wrong answer.
+
+**Nor is it that the matrices are identity-valued.** That was the next
+explanation I reached for, and counting it refuted that too:
+
+    transforms applied           72,060,564
+      coordinate actually MOVED  28,707,300   (39.8%)
+      unchanged                  43,353,264
+
+Twenty-eight million texture coordinates genuinely move. So the transform
+is doing real work and the thirteen frames still came out identical, which
+leaves exactly one reading the numbers support: **those thirteen frames do
+not contain the geometry it affects.** They were taken from copy 700 onward
+at every 150th copy, which lands in the pre-rendered movie rather than in
+real-time 3D, and the A/B therefore sampled the wrong part of the run.
+
+**What is established, and nothing beyond it:** the texture matrix was not
+being applied and now is; it moves 40% of the coordinates it touches; and
+the frames sampled so far do not show it. Whether it is part of Ben's
+"objects are incorrect" is OPEN - the A/B has to be re-run against frames
+that contain real-time 3D before anything is claimed either way.
+
+**Three wrong explanations in one finding, all from reaching past the
+data.** First "never coordinate 0", read off six lines of trace against an
+aggregate that says ten million. Then "the matrices must be
+identity-valued", refuted by the counter in the same breath it was written.
+The measurements were each cheap and each took minutes; the guesses took
+longer and were wrong. The pattern to break is offering an explanation for
+a null result instead of measuring why it is null.
+
+**The texgen configuration turns out not to matter here, which is worth as
+much as a fix.** The distinct values written, decoded:
+
+    0x00000280 x63,997   type 0 (regular), source row 5 (TEX0), 2x4
+    0x00000300 x42,488   type 0 (regular), source row 6 (TEX1), 2x4
+    0x00000380..0x00000580 x1 each   rows 7-11, all type 0, all 2x4
+
+Every one is a plain 2x4 transform of the coordinate the stream already
+carries - exactly what the code assumes. No emboss, no colour-as-coordinate,
+no generation from position or normal, no 3x4 projection anywhere. Dropping
+the texgen registers costs this game nothing, and now there is a number
+saying so instead of a hope.
+
+**A guard added while implementing.** Rows below 30 are POSITION matrices
+(GX_PNMTX0..9 at 0,3,..27; GX_TEXMTX0..9 at 30,33,..57, in one memory). A
+texture coordinate pointed at one is either a game generating coordinates
+from geometry - which needs the texgen path we drop - or our own misread of
+the CP register's default, and multiplying texture coordinates by a
+modelview matrix would be far worse than leaving them alone. Left alone and
+counted.
+
+### XF 0x1018 is a shadow, and does not need acting on
+
+It appeared in the dropped list and looked like another F322. It is not:
+Dolphin treats `XFMEM_SETMATRIXINDA` as a duplicate of the CP register the
+vertex loader already reads, and only flags a shader-constant update on it
+(`XFStructs.cpp`, `g_needs_cp_xf_consistency_check`). Our CP path is the
+authority and already correct. Recorded because "it is in the dropped list"
+is not the same as "it is a bug", and the next reader will wonder.

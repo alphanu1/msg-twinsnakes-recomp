@@ -335,6 +335,28 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
          * which is enough to send every vertex behind the eye. */
         else if (a >= 0x1020u && a < 0x1026u) gx->xf_projection[a - 0x1020u] = f;
         else if (a == 0x1026u) gx->xf_projection_ortho = words[i] & 1u;
+        /* EVERYTHING ELSE IS DROPPED, and is counted while it is dropped.
+         * See the note beside these fields in fifo.h. */
+        else if (a >= 0x1040u && a < 0x1050u) {
+            unsigned k;
+            ++gx->xf_texgen_writes;
+            for (k = 0; k < gx->xf_texgen_n; ++k)
+                if (gx->xf_texgen_key[k] == words[i]) break;
+            if (k == gx->xf_texgen_n && gx->xf_texgen_n < 8u) {
+                gx->xf_texgen_key[gx->xf_texgen_n] = words[i];
+                gx->xf_texgen_n++;
+            }
+            if (k < 8u) ++gx->xf_texgen_hits[k];
+        }
+        else if (a >= 0x0500u && a < 0x0600u) ++gx->xf_texmtx_writes;
+        else {
+            unsigned k;
+            ++gx->xf_other_writes;
+            for (k = 0; k < gx->xf_other_n; ++k)
+                if (gx->xf_other_first[k] == a) break;
+            if (k == gx->xf_other_n && gx->xf_other_n < 8u)
+                gx->xf_other_first[gx->xf_other_n++] = a;
+        }
     }
 }
 
