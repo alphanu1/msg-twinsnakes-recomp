@@ -13325,3 +13325,65 @@ that case. The only thing that catches it is running the suite, and four
 commits went by without it. `ctest --test-dir build/runtime` takes 0.06
 seconds.
 
+### F312 — the "tin cup" is aliasing, not an echo: the resampler was point-sampling at 1.377
+
+Ben, after F310 removed the 95 ms repeat: "echo is reduced but still
+slightly there, like someone talking into a tin cup."
+
+**What it is.** The streaming voice's SRC ratio is `0x1607D` - 1.3769,
+which is 44.1 kHz stepped down to the DSP's 32 kHz. The mixer took the
+NEAREST input sample at each output instant:
+
+    sv = sample_at(format, curr, &ok);   /* frac was used only to advance */
+
+`frac` advanced the position and was then thrown away. Quantising the
+sampling instant like that is itself a signal - broadband, at the beat
+between the two rates - and at a ratio this far from unity it lands right
+across the audible band. It is not an echo and no delay-based test would
+ever have found it, which is why the 40-300 ms scan came back clean.
+
+**What the hardware does.** AX's SRC interpolates. `AXPB.srcSelect` is at
+offset 0x08 and this game writes **1**, `AX_SRC_TYPE_LINEAR` - traced, not
+assumed. The 4-tap polyphase types take their coefficients from the DSP's
+own ROM, which is Nintendo's code and will not be dumped here; Dolphin
+falls back to linear in exactly that case (`AXVoice.h`, `ResampleAudio`:
+`srctype == SRCTYPE_LINEAR || srctype == SRCTYPE_POLYPHASE`), and so do we.
+
+**The shape of the fix matters.** ADPCM decoding carries the predictor from
+the previous sample, so the two input samples an output sits between cannot
+be fetched at random - they have to be walked in order and exactly once.
+The history is a two-entry queue advanced by whole input samples, which
+REPLACES the separate catch-up walk that used to re-decode the skipped
+nibbles. That the replacement is exact is checkable by construction:
+
+    ADPCM samples decoded, point-sampled:   2,692,086
+    ADPCM samples decoded, interpolated:    2,692,086   (identical)
+
+**Measured, two independent ways.** 252 loud windows of a 145.9 s run,
+`MGS_AX_NEAREST=1` against the same binary with it off:
+
+                                       point-sampled   interpolated
+    12-16 kHz over 0.3-4 kHz, median      -29.84 dB      -37.40 dB
+    12-16 kHz absolute level, median       75.33 dB       68.79 dB
+    steps between samples > 25% FS           12,200          7,800
+    steps > 50% FS                              607            188
+    steps > 90% FS                                9              0
+    real time produced, overall             +30.15%        +31.40%
+    underruns                                     0              0
+
+The first pair is the aliasing floor: speech at this rate has almost
+nothing real between 12 and 16 kHz, so what is there is the artefact. The
+second is the same thing seen in the time domain without any spectrum at
+all - those steps ARE the point-sampling jumps - and it agrees.
+
+**What was NOT found, honestly.** A short-lag scan (0.5-20 ms, the band the
+earlier one excluded by construction) shows peaks at 0.5 ms and 17.97 ms in
+both runs, to three decimal places identical. They are the programme
+material, not an artefact: interpolating changed neither. So there is no
+delay-based comb left to remove, and if Ben still hears something metallic
+the next suspect is the missing 4-tap roll-off, not a buffer.
+
+**What not to re-propose:** dumping the DSP ROM for the polyphase
+coefficients. Rule 9. The difference between linear and 4-tap here is a
+gentle treble roll-off, and a windowed-sinc of our own is allowed if it ever
+matters.

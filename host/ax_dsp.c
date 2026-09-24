@@ -56,6 +56,7 @@
 #define PB_MIX_VR          0x16u      /* AXPBMIX.vR                      */
 #define PB_VE_VOLUME       0x64u      /* AXPBVE.currentVolume            */
 #define PB_VE_DELTA        0x66u      /* AXPBVE.currentDelta, per sample */
+#define PB_SRC_SELECT      0x08u      /* AXPB.srcSelect                  */
 #define PB_SRC_RATIO_HI    0xA6u
 #define PB_SRC_FRAC        0xAAu
 
@@ -272,6 +273,31 @@ static uint64_t s_rewinds, s_rewind_total;
 static uint32_t s_rewind_max, s_rewind_samples[8];
 static unsigned s_rewind_n;
 
+/* ONE INPUT SAMPLE, whichever format the voice is in.
+ *
+ * ADPCM is stateful - each call assumes the predictor is at `at - 1` - so
+ * the resampler above must walk positions in order and never revisit one.
+ * That is why the history below is a two-entry queue rather than random
+ * access to the source. */
+static int read_one(void* cpu, uint32_t pb, unsigned format,
+                    uint32_t at, int* ok)
+{
+    if (format == AX_FMT_ADPCM) {
+        ++s_adpcm_samples;
+        return adpcm_step(cpu, pb, at, ok);
+    }
+    return sample_at(format, at, ok);
+}
+
+/* MGS_AX_NEAREST restores point sampling, so "did interpolating change
+ * what Ben hears" is a switch rather than an argument. */
+static int ax_nearest(void)
+{
+    static int v = -1;
+    if (v < 0) v = getenv("MGS_AX_NEAREST") != NULL;
+    return v;
+}
+
 static int no_playon(void)
 {
     static int v = -1;
@@ -300,6 +326,10 @@ void mgs_ax_dsp_frame(void* cpu)
         uint32_t vol, vl, vr;
         int vdelta;
         unsigned k;
+        /* The resampler's two-sample history: `hist1` is the input sample
+         * at `hpos`, `hist0` the one before it. */
+        int hist0 = 0, hist1 = 0, hvalid = 0, src_sel, nearest;
+        uint32_t hpos = 0;
 
         if (rd16(cpu, pb + PB_STATE) != 1u) continue;      /* not running */
 
@@ -308,6 +338,11 @@ void mgs_ax_dsp_frame(void* cpu)
 
         format  = rd16(cpu, pb + PB_ADDR_FORMAT);
         looping = rd16(cpu, pb + PB_ADDR_LOOPFLAG);
+        /* AX_SRC_TYPE_NONE is 0 and means "step through the source without
+         * interpolating"; everything else is linear or four-tap polyphase,
+         * and both of those interpolate. */
+        src_sel = (int)rd16(cpu, pb + PB_SRC_SELECT);
+        nearest = (src_sel == 0) || ax_nearest();
         curr    = rd32pair(cpu, pb + PB_ADDR_CURR_HI);
 
         /* DID THE GAME REWIND US?
@@ -398,24 +433,63 @@ void mgs_ax_dsp_frame(void* cpu)
          * a 7.6-million-sample region. */
         if (s_trace && (++s_traced % 20000u) == 1u) {
             fprintf(stderr, "[axmix] voice %02u fmt %2u curr %08X end %08X "
-                            "loop %08X %s vol %04X vl %04X vr %04X ratio %08X\n",
+                            "loop %08X %s vol %04X vl %04X vr %04X ratio %08X "
+                            "src %d\n",
                     i, format, curr, end, loop,
-                    looping ? "loop" : "once", vol, vl, vr, ratio);
+                    looping ? "loop" : "once", vol, vl, vr, ratio, src_sel);
         }
 
         for (k = 0; k < AX_FRAME_SAMPLES; ++k) {
-            uint32_t prev = curr;
             int ok, sv;
 
-            if (format == AX_FMT_ADPCM) {
-                /* Walk every nibble the resampler passed over, so the
-                 * predictor's history is the one the encoder assumed. */
-                sv = adpcm_step(cpu, pb, curr, &ok);
-                ++s_adpcm_samples;
-            } else {
-                sv = sample_at(format, curr, &ok);
+            /* THE OUTPUT SAMPLE SITS BETWEEN TWO INPUT SAMPLES, NOT ON ONE.
+             *
+             * This voice runs at ratio 0x1607D - 1.3769, which is 44.1 kHz
+             * stepped down to the DSP's 32 kHz - and taking the nearest
+             * input sample at a ratio like that is the classic aliasing
+             * artefact: the quantisation of the sampling instant is itself
+             * a signal, at the beat between the two rates, and it lands in
+             * the audible band as a thin metallic ring over the voices.
+             * Ben described it as "like someone talking into a tin cup",
+             * which is what a comb filter at a few hundred Hz sounds like.
+             *
+             * AX's SRC interpolates: linear for AX_SRC_TYPE_LINEAR, and a
+             * four-tap polyphase filter for the 8K/12K/16K types, whose
+             * coefficients live in the DSP's own ROM. We do not have those
+             * coefficients and will not be dumping them - that ROM is
+             * Nintendo's code - so both cases resample linearly here, which
+             * is exactly what Dolphin falls back to when the coefficients
+             * are unavailable (AXVoice.h, ResampleAudio: "srctype ==
+             * SRCTYPE_LINEAR || srctype == SRCTYPE_POLYPHASE"). Linear
+             * removes the aliasing that is audible; the difference between
+             * linear and four-tap is a gentle treble roll-off.
+             *
+             * Walking the history forward one input sample at a time is not
+             * an optimisation, it is a requirement: ADPCM decoding carries
+             * the predictor from the previous sample, so positions must be
+             * visited in order and exactly once. That is also why the walk
+             * that used to catch up the skipped nibbles is gone - this loop
+             * is that walk. */
+            if (!hvalid) {
+                hist1 = read_one(cpu, pb, format, curr, &ok);
+                if (!ok) { ++s_silent_reads; hist1 = 0; }
+                hist0 = hist1;
+                hpos  = curr;
+                hvalid = 1;
             }
-            if (!ok) { ++s_silent_reads; sv = 0; }
+            while (hpos < curr + 1u) {
+                hist0 = hist1;
+                hist1 = read_one(cpu, pb, format, ++hpos, &ok);
+                if (!ok) { ++s_silent_reads; hist1 = 0; }
+            }
+
+            if (frac && !nearest) {
+                int64_t mix = (int64_t)hist0 * (int64_t)(65536u - frac)
+                            + (int64_t)hist1 * (int64_t)frac;
+                sv = (int)(mix >> 16);
+            } else {
+                sv = hist0;
+            }
             /* NON-ZERO SAMPLES, BY FORMAT. "253,816 loop points held data"
              * and "402 non-silent frames" cannot both be true, and the
              * number that separates them is how many samples each kind of
@@ -466,18 +540,6 @@ void mgs_ax_dsp_frame(void* cpu)
             curr += frac >> 16;
             frac &= 0xFFFFu;
 
-            /* For ADPCM the samples between `prev` and `curr` still have to
-             * be decoded, or the filter state is wrong from here on. */
-            if (format == AX_FMT_ADPCM) {
-                uint32_t step_at = prev + 1u;
-                while (step_at < curr) {
-                    int ok2;
-                    adpcm_step(cpu, pb, step_at, &ok2);
-                    ++s_adpcm_samples;
-                    ++step_at;
-                }
-            }
-
             if (end && curr > end) {
                 /* WHAT TO DO AT THE END OF A BLOCK, AND WHY THIS IS NOT
                  * COSMETIC (F249).
@@ -499,6 +561,7 @@ void mgs_ax_dsp_frame(void* cpu)
                  * empty, so the refill is neither late nor misplaced. */
                 if (looping && loop <= end) {
                     curr = loop + (curr - end - 1u);   /* an ordinary loop */
+                    hvalid = 0;      /* the history is from before the jump */
                     ++s_looped;
                 } else if (looping) {
                     int ok3;
