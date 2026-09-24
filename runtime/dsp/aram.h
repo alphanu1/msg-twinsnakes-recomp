@@ -50,6 +50,8 @@ typedef struct MgsAram {
      * wrote, which is the question when a mixer reads silence from an
      * address that is inside the store. */
     uint32_t lo_in, hi_in;
+    /* Transfers whose main-memory side is in the second window. */
+    uint64_t vmem_transfers;
 } MgsAram;
 
 int  mgs_aram_init(MgsAram* a, GuestMemory* mem);

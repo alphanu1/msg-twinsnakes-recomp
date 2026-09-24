@@ -218,7 +218,7 @@ static void exi_transfer(MgsMmio* m, unsigned chan, uint32_t cr)
         }
         for (i = 0u; i < len; ++i) {
             uint8_t b = 0xFFu;
-            uint32_t a = 0x80000000u | (mar + i);
+            uint32_t a = guest_from_phys26(mar + i);
             if (rw == 1u && m->exi_mem) b = guest_read8(m->exi_mem, a);
             exi_byte(m, &b);
             if (rw == 0u && m->exi_mem) guest_write8(m->exi_mem, a, b);
@@ -1329,7 +1329,8 @@ static uint16_t reg16(const MgsMmio* m, uint32_t addr)
  * part of this runtime uses. */
 static uint32_t as_guest(uint32_t physical)
 {
-    return physical ? (0x80000000u | (physical & 0x03FFFFFFu)) : 0u;
+    /* guest_from_phys26: the second window survives the round trip. */
+    return physical ? guest_from_phys26(physical) : 0u;
 }
 
 /* A CPU FIFO IN THE SECOND WINDOW (0x7E000000-0x7FFFFFFF).

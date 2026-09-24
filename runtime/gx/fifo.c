@@ -445,7 +445,7 @@ static void bp_side_effect(MgsGx* gx, uint8_t reg, uint32_t val)
          * GameCube ignores the upper bits of this address. Some games (WW,
          * MKDD) set them." Twin Snakes is another. */
         gx->bp.pending_tlut_addr =
-            0x80000000u | (((val & 0x00FFFFFFu) << 5) & 0x01FFFFFFu);
+            guest_from_phys26((val & 0x00FFFFFFu) << 5);
         return;
     }
     if (reg == BP_LOAD_TLUT1) {

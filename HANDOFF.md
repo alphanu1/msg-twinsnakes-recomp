@@ -15081,3 +15081,61 @@ Ocelot's first line.
 **Not the crash.** The run still ends at 0x4E923A7C. Next suspect: DMA into
 the same relocated .bss (ARAM transfers, audio), whose addresses are folded
 the same way - and a DMA WRITES, where a recorded list was only dropped.
+
+### F353 — the Dock-cutscene crash: the engine's scratch stack runs over the relocated .bss
+
+Headless runs driven through the menus into the Dock cutscene end with the
+guest jumping to 0x4E923A7C (a float). Reproduced every time; the old
+binary and the pre-downcount binary do it too, so it predates this session.
+
+**Traced to the byte.** The jump is `bctrl` through a message-handler table
+at 0x7F4BE5E4 - 26 slots, a-z, registered by letter (0x7F0FC294) and looked
+up by a message type from the top byte of the argument (0x7F0FC334). The
+crashing message is type 12 ('m'). `MGS_WATCH` on that slot:
+
+    0          -> 0x000C0605   memcpy, lr 0x8000678C   loader copies the module FILE in
+    0x000C0605 -> 0            memset, lr 0x80020AAC   OSLink clears .bss (ours)
+    0          -> 0x7F1110E8   0x7F0FC294              the engine registers 'm'
+    0x7F1110E8 -> 0x4E923A7C   memcpy, lr 0x7F139D18   the engine copies data over it
+
+The destination of that last copy comes from 0x7F1001EC, a **downward bump
+allocator**: top pointer at 0x7F4C52EC, reset from 0x7F4C12B4, initialised
+to **0x7F7CB800** by 0x7F10015C (called from 0x7F0FC5F4). It has no floor.
+It grows down through the module image's relocation-table area - dead once
+linked, and on a console that is all it is - and into our .bss.
+
+**The layout is the fault, not the engine.** DolRecomp places a REL's .bss
+at `base + fixSize` (`rel.c`, `bss_start`), i.e. at 0x7F499BA0, the first
+byte of the relocation tables - exactly the memory the engine reuses. On a
+console .bss is allocated separately, in MEM1: the loader allocates it at
+**0x8054A180** before calling OSLink (every run's `[link]` line), and our
+relink forces OSLink onto DolRecomp's address instead.
+
+**Tried and reverted, both recorded so they are not re-tried:**
+- Moving the module header's `fixSize` past .bss after linking: no effect
+  - the scratch stack is not derived from fixSize.
+- Moving it at OSLink's entry, before linking: the game never got past
+  frame 0.
+- Steering DolRecomp through the header: it rejects `fixSize > file_size`
+  (`rel.c:402`), so .bss cannot be placed outside the image that way.
+
+**The fix, not yet done:** compile the engine's .bss at the game's own MEM1
+allocation (0x8054A180). OSLink then runs with the game's own argument and
+no relink, nothing of ours sits in the scratch stack's path, and the
+hardware sees MEM1 addresses for the engine's display lists and DMA buffers
+as a console does. It needs a DolRecomp option to place REL .bss at a given
+address (a local patch to vendored code: rule 4 / rule 11), a regeneration
+of the REL chunks, and a check that the loader's allocation is where the
+code expects - with the relink kept as the fallback. Ben's windowed runs
+reach gameplay without hitting it, so it is timing- or path-dependent, but
+it is real.
+
+### F354 — one rule for every 26-bit hardware address
+
+MEM1 is 24 MB, so a 26-bit device address with bit 25 set cannot be in it;
+it can only be the second window, and `0x7C000000 | addr` inverts the mask
+exactly across it. The texture path already did this on its own. It is now
+`guest_from_phys26` in `guest.h` and used by the CPU FIFO pointers, EFB copy
+destinations, palette loads, ARAM DMA and memory-card DMA, with a test
+that sweeps the whole window. ARAM showed 0 transfers into the window in a
+run to the Dock, so it changed nothing there; it is correct regardless.

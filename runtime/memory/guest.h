@@ -75,6 +75,27 @@ static inline uint8_t* guest_ptr(const GuestMemory* m, uint32_t addr, uint32_t s
     return m->ram + off;
 }
 
+/* A HARDWARE ADDRESS, BACK INTO THE GUEST'S OWN SPACE.
+ *
+ * The GameCube's devices hold 26-bit physical addresses: DMA engines, the
+ * FIFO pointers, the EFB copy destination, the texture and palette bases.
+ * For MEM1 that loses nothing, and rebuilding with 0x80000000 is exact. But
+ * the recompiled engine's code AND its .bss live in the second window
+ * (0x7E000000-0x7FFFFFFF), and the game hands addresses in its .bss to the
+ * hardware like any other. Rebuilt with 0x80000000 they land past the end of
+ * the 24 MB of RAM and every access is refused: recorded display lists,
+ * ARAM transfers, copies - all silently dropped.
+ *
+ * MEM1 is 24 MB, so a 26-bit address with bit 25 set cannot be in it, and
+ * `0x7C000000 | addr` inverts the mask exactly for the whole window. The
+ * texture path already did this on its own (raster.c, bind_texture); this is
+ * the same rule, for everything else. */
+static inline uint32_t guest_from_phys26(uint32_t phys)
+{
+    phys &= 0x03FFFFFFu;
+    return (phys & 0x02000000u) ? (0x7C000000u | phys) : (0x80000000u | phys);
+}
+
 static inline uint32_t guest_read32(const GuestMemory* m, uint32_t addr)
 {
     const uint8_t* p = guest_ptr(m, addr, 4);

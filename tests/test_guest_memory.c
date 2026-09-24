@@ -53,6 +53,27 @@ int main(void)
     CHECK(guest_read32(&m, 0x80000000u + GUEST_RAM_SIZE) == 0u);
     CHECK(guest_ptr(&m, 0x80000000u + GUEST_RAM_SIZE - 2u, 4) == NULL);
 
+    /* A 26-bit hardware address back into the guest's space. MEM1 comes
+     * back cached; an address past MEM1 with bit 25 set can only be the
+     * second window, where the engine's .bss is - the display list at
+     * 0x7F4AD180 whose FIFO base the SDK wrote as 0x3F4AD180 is the case
+     * that was being dropped. And the round trip is exact across the whole
+     * window, so the display list reaches the memory it was recorded into. */
+    CHECK(guest_from_phys26(0x00DC2600u) == 0x80DC2600u);
+    CHECK(guest_from_phys26(0x08DC2600u) == 0x80DC2600u);   /* junk top bits */
+    CHECK(guest_from_phys26(0x3F4AD180u) == 0x7F4AD180u);
+    CHECK(guest_from_phys26(0x034AD180u) == 0x7F4AD180u);
+    {
+        uint32_t a;
+        for (a = GUEST_VMEM_BASE; a < GUEST_VMEM_BASE + GUEST_VMEM_SIZE; a += 0x1000u)
+            if (guest_from_phys26(a & 0x3FFFFFFFu) != a) {
+                CHECK(!"the second window does not round-trip");
+                break;
+            }
+    }
+    guest_write8(&m, guest_from_phys26(0x034AD180u), 0x5Au);
+    CHECK(guest_ptr(&m, 0x7F4AD180u, 1) && *guest_ptr(&m, 0x7F4AD180u, 1) == 0x5Au);
+
     guest_memory_free(&m);
     printf(failures ? "%d failure(s)\n" : "all guest memory checks passed\n", failures);
     return failures != 0;

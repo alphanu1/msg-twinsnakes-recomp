@@ -65,6 +65,12 @@ void mgs_aram_run_dma(MgsAram* a, const uint8_t* regs)
 
     to_main = (rd16(regs, AR_LEN_HI) & AR_DIR_READ) != 0;
 
+    /* Back into the guest's own space, so a transfer to or from the
+     * engine's .bss in the second window lands there instead of being
+     * dropped past the end of RAM. See guest_from_phys26. */
+    if (mm & 0x02000000u) ++a->vmem_transfers;
+    mm = guest_from_phys26(mm);
+
     if (!len) return;
 
     /* ARAM is 16 MB and the address is 26 bits, so a transfer can name memory

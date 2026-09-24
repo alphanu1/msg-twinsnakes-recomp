@@ -1887,6 +1887,18 @@ int main(int argc, char** argv)
                                    g[1], g[2], g[13], g[3]);
                             printf("  r25=0x%08X r26=0x%08X r27=0x%08X r31=0x%08X\n",
                                    g[25], g[26], g[27], g[31]);
+                            /* ALL of them, when the run stopped on a jump
+                             * to an address with no code: the register that
+                             * held the bad target is usually one of these,
+                             * and the four above are a guess at which. */
+                            if (r.stop == MGS_STOP_UNCOVERED) {
+                                unsigned k;
+                                for (k = 0; k < 32u; k += 4u)
+                                    printf("  r%-2u 0x%08X  r%-2u 0x%08X  r%-2u "
+                                           "0x%08X  r%-2u 0x%08X\n",
+                                           k, g[k], k + 1u, g[k + 1u],
+                                           k + 2u, g[k + 2u], k + 3u, g[k + 3u]);
+                            }
                         }
                         if (r.stop == MGS_STOP_SPINNING)
                             printf("  msr = 0x%08X  (EE %s)\n", r.msr,
@@ -2778,6 +2790,9 @@ int main(int argc, char** argv)
                                 while (*d == ',' || *d == ' ') ++d;
                             }
                         }
+                        printf("ARAM: %llu transfers touching the engine's "
+                               ".bss in the second window\n",
+                               (unsigned long long)mgs_host_mmio()->aram.vmem_transfers);
                         printf("ARAM: %llu transfers in, %llu out; "
                                "interrupts %llu delivered, %llu refused\n",
                                (unsigned long long)mgs_host_mmio()->aram.writes,

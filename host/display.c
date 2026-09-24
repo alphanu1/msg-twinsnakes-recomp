@@ -488,7 +488,7 @@ no_readback:
         mgs_efb_set_clear(&s_efb, (a << 24) | (r << 16) | (g << 8) | b);
         /* Addresses in the command stream are in 32-byte units. */
         mgs_efb_set_dest(&s_efb,
-                         dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
+                         dest ? guest_from_phys26(dest << 5) : 0u,
                          stride << 5);
         {   /* EVERY copy, in the order the parser reads them, with the
              * one bit that says which kind it is. Copies run inside the
@@ -507,7 +507,7 @@ no_readback:
                  * the decodes, so "written correctly" and "decoded as noise"
                  * can be put in order against each other. */
                 static long watch = -1;
-                uint32_t d = dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu))
+                uint32_t d = dest ? guest_from_phys26(dest << 5)
                                   : 0u;
                 if (watch == -1) { const char* e = getenv("MGS_TRACE_BUF");
                                    watch = e ? (long)strtoul(e, NULL, 0) : 0; }
@@ -537,7 +537,7 @@ no_readback:
                         "fmt 0x%X  stride %u  dest set %u since last copy\n",
                         n,
                         (cmd & COPY_TO_XFB) ? "XFB" : "tex",
-                        dest ? (0x80000000u | ((dest << 5) & 0x03FFFFFFu)) : 0u,
+                        dest ? guest_from_phys26(dest << 5) : 0u,
                         copy_w, copy_h, copy_tex_format(cmd),
                         stride << 5, s_gx.bp.efb_addr_writes);
             }
