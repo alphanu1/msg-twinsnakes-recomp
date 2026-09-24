@@ -13820,3 +13820,51 @@ worth knowing: the Null video backend writes nothing; `EFBToTextureEnable`
 and `XFBToTextureEnable` default to keeping copies on the GPU; and a fresh
 user directory with no `Backend` line falls back to something that does not
 copy either, which looks identical to the first two failures.
+
+### F320 — the oracle's first catch: 8.7 MB the port writes and the console never touches
+
+The harness of F319, anchored on 0x8020D0EC instead of the field counter,
+found this on its first use. Pages of MEM1 differing between the port and
+Dolphin, walking the counter:
+
+    counter  pages differ          largest differing run
+        800    660 / 6144  10.7%   0x80450000..0x805B3000
+        850    660 / 6144  10.7%   0x80450000..0x805B3000
+        880  2868 / 6144  46.7%    0x8079C000..0x80FF2000   <- appears
+        910  3830 / 6144  62.3%    0x8079C000..0x80FFC000
+        940  3830 / 6144  62.3%    0x8079C000..0x80FFC000
+        970  3821 / 6144  62.2%    0x8079C000..0x80FFC000
+
+**One region, 8.7 MB of it, and it is the PORT that writes it.** Measured
+against the content both sides shared at counter 850:
+
+                       counter 850   counter 880   counter 910
+    port                    100%           4%            4%
+    dolphin                 100%         100%          100%
+
+Dolphin leaves that region exactly as it was. The port overwrites 96% of it
+somewhere between counter 850 and 880. The region sits inside the OS arena
+(0x8028E700 - 0x817F8EE0), so it is game heap and not ours to be writing
+into unasked.
+
+**It is not the same data at a different offset.** Twelve 256-byte probes
+taken from the port's copy at counter 880 appear nowhere in Dolphin's copy
+of the same region, so this is not a stream buffer that has simply advanced
+further on one side - it is different content.
+
+**The control that makes all of this trustworthy.** Two port runs to counter
+850 produce **byte-identical** 24 MB snapshots. The port is deterministic,
+so a difference against Dolphin is a difference and not noise. That control
+should be re-run whenever this harness is used to make a claim.
+
+**Not yet named.** `MGS_TRACE_DEST=<addr>` was added to
+`mgs_dvd_read_abs_async` to print which disc read covers a given guest
+address, because the disc log says what is read and how much but never
+where. The ordinary write watch cannot see this: `host_external_write` only
+covers VMEM, and a fill of this size is a DMA rather than guest stores.
+
+**This is the first thing the Dolphin comparison has caught that no other
+instrument here would have found**, and it is worth saying why: 8.7 MB of
+wrong content in the game's own heap produces no error, no log line and no
+visible fault until something reads it back. Only a second implementation
+running the same game says it should not be there.

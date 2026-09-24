@@ -151,6 +151,27 @@ MgsDvdRequest* mgs_dvd_read_abs_async(MgsDvd* dvd, uint32_t disc_offset,
                                       uint32_t guest_callback,
                                       uint32_t guest_block)
 {
+    /* MGS_TRACE_DEST=<addr>: which read lands on a given guest address.
+     *
+     * The disc log says what is being read and how much; it does not say
+     * WHERE it goes, and "where" is the question when a region of guest
+     * memory is found holding something the console never put there. The
+     * comparison against Dolphin found 8.7 MB at 0x8079C000 that the port
+     * writes and the emulator does not (F320), and a destination is the
+     * only thing that names the read responsible. */
+    {
+        static long watch = -1;
+        if (watch == -1) {
+            const char* e = getenv("MGS_TRACE_DEST");
+            watch = e && *e ? (long)strtoul(e, NULL, 0) : 0;
+        }
+        if (watch && guest_dest <= (uint32_t)watch &&
+            (uint32_t)watch < guest_dest + length)
+            fprintf(stderr, "[dest] read of %u bytes from disc 0x%X lands on "
+                            "0x%08X..0x%08X, covering 0x%08X\n",
+                    length, disc_offset, guest_dest, guest_dest + length,
+                    (uint32_t)watch);
+    }
     /* The path is unused for an absolute read, but passing "" rather than
      * NULL keeps the one allocation path: the builder refuses a null path,
      * and duplicating the request setup to avoid that is how the two would

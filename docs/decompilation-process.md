@@ -2904,9 +2904,35 @@ port and the emulator:
 
 At counter 800 the two agree on **89% of all memory**, the best figure this
 project has. By 1000 they have diverged badly - so the divergence lies
-between them, and that is a bracket a bisection can close. That is what a
-divergence report is for, and it is the first time this project has had one
-to close.
+between them, and that is a bracket a bisection can close.
+
+**The bisection, and the first thing the oracle caught.** Walking the
+counter at 850, 880, 910, 940, 970:
+
+    counter  pages differ          largest differing run
+        850    660 / 6144  10.7%   0x80450000..0x805B3000
+        880  2868 / 6144  46.7%    0x8079C000..0x80FF2000   <- appears
+        910  3830 / 6144  62.3%    0x8079C000..0x80FFC000
+        970  3821 / 6144  62.2%    0x8079C000..0x80FFC000
+
+One region of 8.7 MB, and it is the PORT that writes it. Measured against
+the content both sides shared at counter 850, the port retains 4% of it at
+counter 880 while Dolphin retains 100%: the emulator leaves that memory
+alone and the port overwrites it. It sits inside the OS arena
+(0x8028E700 - 0x817F8EE0), so it is game heap. Twelve 256-byte probes from
+the port's copy appear nowhere in Dolphin's, so it is not the same data at a
+different offset either.
+
+**The control.** Two port runs to counter 850 produce byte-identical 24 MB
+snapshots, so the port is deterministic and a difference against Dolphin is
+a difference and not noise. Re-run that control whenever this harness is
+used to make a claim.
+
+**Why this matters beyond the one bug.** 8.7 MB of wrong content in the
+game's own heap produces no error, no log line and no visible fault until
+something reads it back. No instrument in this project would have found it;
+only a second implementation running the same game says it should not be
+there. That is what stage 9 is for.
 
 ---
 
