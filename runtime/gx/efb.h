@@ -54,6 +54,21 @@ typedef struct MgsEfb {
      * not dropping to 25 for the video, that's probably the reason" - and it
      * was. */
     uint64_t xfb_copies;
+    /* THE GEOMETRY OF THE LAST COPY TO THE EXTERNAL FRAMEBUFFER, kept apart
+     * from `copy_stride` and friends, which EVERY copy overwrites.
+     *
+     * A render-to-texture pass sets a stride of its own - 8192 for the
+     * ones this game makes - and presentation then read the framebuffer
+     * with it, striding eight rows per row and running off the end of the
+     * picture into unwritten memory. Ben's trace caught it exactly:
+     *
+     *   stride 1024  zero bytes  0.2%  scratch mean  28   correct
+     *   stride 8192  zero bytes 81.9%  scratch mean 135   green garbage
+     *
+     * Intermittent because it only shows when a texture copy falls between
+     * two presents, which is every couple of seconds. */
+    uint32_t xfb_stride;
+    unsigned xfb_w, xfb_h;
     uint64_t clears;          /* copies that also cleared */
 } MgsEfb;
 

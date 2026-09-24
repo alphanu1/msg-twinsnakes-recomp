@@ -746,6 +746,12 @@ static void run_copy(uint32_t cmd)
              * area, not the origin. */
             if (cmd & COPY_TO_XFB) {
                 long long tc = s_frame_timing ? frame_now_ns() : 0ll;
+                /* The geometry presentation must use. See efb.h: taking it
+                 * from the LAST copy of any kind reads the framebuffer with
+                 * a render-to-texture pass's stride. */
+                s_efb.xfb_stride = stride << 5;
+                s_efb.xfb_w = copy_w;
+                s_efb.xfb_h = copy_h;
                 mgs_gx_order_note('F');
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
@@ -924,7 +930,11 @@ int mgs_display_save_ppm(const char* path, const GuestMemory* mem)
     }
 
     if (!w || !h || !xfb) return 0;
-    if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, buf)) return 0;
+    /* The framebuffer copy's stride, for the same reason presentation uses
+     * it: any other copy's stride reads the picture eight rows at a time. */
+    if (!mgs_xfb_to_rgb(mem, xfb,
+                        s_efb.xfb_stride ? s_efb.xfb_stride : s_efb.copy_stride,
+                        w, h, buf)) return 0;
 
     f = fopen(path, "wb");
     if (!f) return 0;
@@ -962,7 +972,10 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
     static uint32_t scratch[MGS_EFB_WIDTH * MGS_EFB_HEIGHT];
     uint32_t xfb = mgs_mmio_xfb_address(mmio);
     uint32_t* fb = mgs_video_framebuffer();
-    unsigned w = s_efb.copy_width, h = s_efb.copy_height;
+    /* THE LAST FRAMEBUFFER COPY'S geometry, not the last copy's. */
+    unsigned w = s_efb.xfb_w ? s_efb.xfb_w : s_efb.copy_width;
+    unsigned h = s_efb.xfb_h ? s_efb.xfb_h : s_efb.copy_height;
+    unsigned stride = s_efb.xfb_stride ? s_efb.xfb_stride : s_efb.copy_stride;
     unsigned y, x;
 
     /* WHOSE GEOMETRY IS THIS?
@@ -1012,10 +1025,10 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
     {
         static uint64_t last_sig;
         static int has_last;
-        const uint8_t* src = guest_ptr(mem, xfb, s_efb.copy_stride * h);
+        const uint8_t* src = guest_ptr(mem, xfb, stride * h);
         uint64_t sig = 1469598103934665603ull;
         if (src) {
-            unsigned q, span = s_efb.copy_stride * h, step = span / 1800u;
+            unsigned q, span = stride * h, step = span / 1800u;
             if (!step) step = 1u;
             for (q = 0; q < span; q += step) {
                 sig ^= src[q];
@@ -1028,7 +1041,7 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
         }
     }
 
-    if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, scratch))
+    if (!mgs_xfb_to_rgb(mem, xfb, stride, w, h, scratch))
         return 0;
 
     /* MGS_TRACE_PRESENT: what we are about to put on screen, measured.
@@ -1048,8 +1061,7 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
         static unsigned said;
         if (on < 0) on = getenv("MGS_TRACE_PRESENT") != NULL;
         if (on && (said++ % 60u) == 0u) {
-            const uint8_t* src = guest_ptr(mem, xfb,
-                                                 s_efb.copy_stride * h);
+            const uint8_t* src = guest_ptr(mem, xfb, stride * h);
             unsigned zero = 0u, tot = 0u, q;
             if (src)
                 for (q = 0; q < s_efb.copy_stride * h; q += 97u) {
@@ -1058,7 +1070,7 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
                 }
             fprintf(stderr, "[present] xfb 0x%08X  %ux%u stride %u  "
                     "source %s  zero bytes %.1f%%  scratch mean %u\n",
-                    xfb, w, h, s_efb.copy_stride,
+                    xfb, w, h, stride,
                     src ? "mapped" : "NOT MAPPED",
                     tot ? 100.0 * (double)zero / (double)tot : 0.0,
                     (unsigned)((scratch[(h/2)*w + w/2] >> 8) & 0xFFu));
