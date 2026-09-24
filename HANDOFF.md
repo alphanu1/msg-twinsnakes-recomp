@@ -15244,3 +15244,28 @@ could not have passed before: the old path never counted it as clipped.
 390,525 triangles clipped at the near plane, 41,597 wholly in front of it
 rejected, **0 pieces refused**. Whether that is all of what Ben calls
 camera clipping is for his eyes, not a counter: ask.
+
+### F358 — present what the video interface scans, when it holds a new frame
+
+Ben saw an in-engine cutscene at 48 fps, juddering, where it should be 25 -
+intermittently, and "that's a bug nonetheless". The presentation key was
+the copy COUNT when a copy had just happened and the VI address otherwise,
+and the two alternated: a copy into the back buffer presented (while VI
+still showed the front buffer, the old frame), then the flip presented
+again. Depending on how copies and flips fell against the per-field pump,
+the screen could go new, old, new, old.
+
+The key is now the console's own rule: (the buffer VI scans, the frame copy
+that last filled that buffer). `host/display.c` records which copy last
+filled each framebuffer; the picture changes only when VI points at a buffer
+holding a frame not yet shown. A movie the CPU writes straight into the
+framebuffers still presents, through the buffer half of the key.
+
+**Headless runs now count presentation** instead of skipping it (the same
+key, counted rather than drawn) and print a `presentation cadence` line
+beside the game's own `frame cadence`. On a 420 s scripted run: 4,931
+one-field gaps presented against 6,189 in the copy cadence, 21.97 fps
+presented against 26.19 drawn - never more often than the game draws, and
+fewer where two copies land in one field, of which only the last can be
+seen. **Not yet confirmed by eye on the cutscene Ben saw**; the counter is
+the instrument for it when it recurs.

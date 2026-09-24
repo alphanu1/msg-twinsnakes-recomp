@@ -385,12 +385,29 @@ static uint64_t progress_counter(unsigned which)
  * the post-run viewer is skipped so one close means closed. */
 static int s_quit_requested;
 
+/* PRESENTATION CADENCE: fields between one new picture and the next, as the
+ * screen gets them. The copy cadence says how fast the game draws; this says
+ * how fast the viewer sees it, and the two disagreeing is a presentation
+ * bug - 1-field gaps in a 25 fps cutscene are a frame shown twice, or an old
+ * frame shown between two new ones. */
+static uint64_t s_present_hist[8];
+static uint64_t s_present_last_field = ~0ull;
+
+static void note_present_cadence(void)
+{
+    uint64_t mgs_mmio_field_count(const MgsMmio* m);
+    uint64_t f = mgs_mmio_field_count(mgs_host_mmio());
+    if (s_present_last_field != ~0ull) {
+        uint64_t d = f - s_present_last_field;
+        ++s_present_hist[d > 7u ? 7u : d];
+    }
+    s_present_last_field = f;
+}
+
 static void frame_pump(void)
 {
     static uint64_t shown = ~0ull;
     uint64_t copies;
-
-    if (!s_display_windowed) return;
 
     /* Input has to stay responsive on every tick; the picture only needs
      * redrawing when the game has actually finished one. The copy counter is
@@ -403,7 +420,7 @@ static void frame_pump(void)
      * forever. The window could not be closed by any normal means. Stopping
      * the guest is what the interrupt flag already means, so reuse it rather
      * than invent a second way to stop. */
-    if (!mgs_video_pump()) {
+    if (s_display_windowed && !mgs_video_pump()) {
         s_quit_requested = 1;
         mgs_module_interrupted = 1;
         return;
@@ -457,23 +474,41 @@ static void frame_pump(void)
      *
      * So: a copy is authoritative when copies are happening, and the
      * address is only consulted when they are not. */
+    /* PRESENT WHAT THE VIDEO INTERFACE SCANS, WHEN IT IS A NEW FRAME.
+     *
+     * The key is (the buffer VI points at, the frame copy that last filled
+     * that buffer) - the console's own rule: the picture changes when VI is
+     * pointed at a buffer holding a frame not yet shown.
+     *
+     * The previous key was the copy COUNT when a copy had just happened and
+     * the VI address otherwise, and the two alternated: a copy into the back
+     * buffer presented (VI still on the front buffer, the old frame), then
+     * the flip presented again - and depending on how copies and flips fell
+     * against this pump, the screen could alternate new, old, new, old. Ben
+     * saw an in-engine cutscene at 48 fps where it should be 25, juddering,
+     * intermittently.
+     *
+     * A movie the CPU writes straight into the framebuffers makes no copies,
+     * and still works: its flips change the buffer half of the key. The
+     * content fingerprint in mgs_display_present still drops a present whose
+     * picture has not changed. */
     {
-        static uint64_t last_copy_at;
-        uint64_t now_copies = mgs_display_efb()->xfb_copies;
-        if (now_copies != last_copy_at) {
-            last_copy_at = now_copies;
-            copies = now_copies;                 /* GX finished a frame */
-        } else {
-            /* No copy since the last present: either nothing has been
-             * drawn, or the decoder is writing the framebuffer itself.
-             * Let the address flip offer a frame and let the fingerprint
-             * in mgs_display_present decide whether it is a new one. */
-            copies = now_copies
-                   ^ ((uint64_t)(mgs_mmio_xfb_address(mgs_host_mmio())
-                                 & ~0xFFFu) << 32);
-        }
+        uint64_t mgs_display_frame_in(uint32_t xfb_addr);
+        uint32_t vi = mgs_mmio_xfb_address(mgs_host_mmio());
+        copies = ((uint64_t)(vi & ~0xFFFu) << 32) ^ mgs_display_frame_in(vi);
     }
     if (copies == shown) return;
+    /* HEADLESS, THE SAME RULE IS COUNTED INSTEAD OF DRAWN.
+     *
+     * Presentation only ever ran with a window, so a headless run could not
+     * say how often the picture would change - and a cutscene shown at 48
+     * fps instead of 25 is exactly a presentation fault. The key is the
+     * same, so the cadence printed at exit is the one a window would show. */
+    if (!s_display_windowed) {
+        shown = copies;
+        note_present_cadence();
+        return;
+    }
     /* The frame cap lives here now, as a question rather than a sleep: a
      * present we skip costs nothing, where a sleep on this thread stops the
      * game producing sound. See host/display.c. */
@@ -482,6 +517,7 @@ static void frame_pump(void)
         if (!mgs_display_may_present()) return;
     }
     shown = copies;
+    note_present_cadence();
 
     {   /* The whole presentation step - YUV to RGB, the streaming texture
          * upload, and SDL's present - timed as one, because from the guest
@@ -3113,6 +3149,26 @@ int main(int argc, char** argv)
                                 printf("   mean %.3f fields/frame = %.2f fps "
                                        "at 50.000 Hz\n",
                                        (double)wf / (double)tot,
+                                       wf ? 50.0 * (double)tot / (double)wf : 0.0);
+                            }
+                        }
+                        {   /* And what the viewer gets - see
+                             * note_present_cadence. */
+                            uint64_t tot = 0, wf = 0; unsigned k;
+                            for (k = 0; k < 8u; ++k) {
+                                tot += s_present_hist[k];
+                                wf += s_present_hist[k] * k;
+                            }
+                            if (tot) {
+                                printf("presentation cadence%s: ",
+                                       s_display_windowed ? ""
+                                           : " (headless: counted, not drawn)");
+                                for (k = 0; k < 8u; ++k)
+                                    if (s_present_hist[k])
+                                        printf(" %u field%s:%llu", k,
+                                               k == 1u ? "" : "s",
+                                               (unsigned long long)s_present_hist[k]);
+                                printf("   mean %.2f fps\n",
                                        wf ? 50.0 * (double)tot / (double)wf : 0.0);
                             }
                         }

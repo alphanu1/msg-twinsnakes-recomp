@@ -130,6 +130,41 @@ void mgs_display_field_hist(uint64_t* out8)
 MgsEfb* mgs_display_efb(void);
 MgsEfb* mgs_display_efb(void) { return &s_efb; }
 
+/* WHICH FRAME EACH FRAMEBUFFER HOLDS.
+ *
+ * For every framebuffer the game copies into, the number of the frame copy
+ * that last filled it. Presentation keys on (the buffer the video interface
+ * scans, the frame in it) - see frame_pump - so a finished frame is shown
+ * exactly once, when the game flips to it, and a buffer holding an older
+ * frame is never shown again just because our pump ran at the wrong moment.
+ * Addresses are masked to 4 KB so an interlaced field's one-line offset from
+ * the buffer base does not look like a different buffer. */
+static struct { uint32_t addr; uint64_t serial; } s_xfb_frames[8];
+static unsigned s_xfb_frames_n;
+
+static void note_xfb_frame(uint32_t dest, uint64_t serial)
+{
+    unsigned i;
+    dest &= ~0xFFFu;
+    for (i = 0; i < s_xfb_frames_n; ++i)
+        if (s_xfb_frames[i].addr == dest) { s_xfb_frames[i].serial = serial; return; }
+    if (s_xfb_frames_n < 8u) {
+        s_xfb_frames[s_xfb_frames_n].addr = dest;
+        s_xfb_frames[s_xfb_frames_n].serial = serial;
+        ++s_xfb_frames_n;
+    }
+}
+
+uint64_t mgs_display_frame_in(uint32_t xfb_addr);
+uint64_t mgs_display_frame_in(uint32_t xfb_addr)
+{
+    unsigned i;
+    xfb_addr &= ~0xFFFu;
+    for (i = 0; i < s_xfb_frames_n; ++i)
+        if (s_xfb_frames[i].addr == xfb_addr) return s_xfb_frames[i].serial;
+    return 0u;
+}
+
 uint64_t mgs_display_frames(void);
 uint64_t mgs_display_frames(void) { return s_presented; }
 
@@ -802,6 +837,7 @@ no_readback:
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
+                note_xfb_frame(s_efb.copy_dest, s_efb.xfb_copies);
                 {   /* Fields since the previous drawn frame. */
                     uint64_t now_f = mgs_mmio_field_count(mgs_host_mmio());
                     uint64_t d = now_f - s_fields_at_frame;

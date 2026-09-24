@@ -1490,6 +1490,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
         the patched-call round trip through the host loop (~5%, recompiler
         structure), per-primitive draw state (~5%), and presenting the frame
         copy from the GPU instead of reading it back.
+      - Presentation shows a frame once, when VI flips to the buffer
+        holding it (F358); a headless run prints its `presentation
+        cadence` beside the game's own, so a cutscene shown at 48 fps
+        instead of 25 is a number rather than an impression.
       Measure it with `MGS_TIME_FRAME=1`; run headless with
       `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
       the run with `MGS_RUN_SECONDS` so the exit report survives. Read the
