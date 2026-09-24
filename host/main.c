@@ -2386,6 +2386,14 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused_decode);
                             {
                                 unsigned k;
+                                {
+                                    uint64_t mgs_dvd_reads_past_end(void);
+                                    printf("DVD reads past the end of their "
+                                           "file, issued as the SDK issues "
+                                           "them: %llu\n",
+                                           (unsigned long long)
+                                           mgs_dvd_reads_past_end());
+                                }
                                 printf("near plane: %llu triangles wholly "
                                        "in front of it rejected, %llu "
                                        "crossing it clipped\n",

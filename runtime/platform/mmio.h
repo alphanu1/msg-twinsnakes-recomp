@@ -161,8 +161,8 @@ typedef struct MgsMmio {
      * ticks of a 40.5 MHz clock - 20 ms, 50.000 a second - so this is
      * the denominator for any honest statement about frame rate. */
     uint64_t field_count;
-    uint32_t pad_script_frame[16];   /* MGS_PAD_SCRIPT */
-    uint16_t pad_script_btn[16];
+    uint32_t pad_script_frame[128];  /* MGS_PAD_SCRIPT */
+    uint16_t pad_script_btn[128];
     unsigned pad_script_n;
     uint32_t pad_frame;
     uint16_t pad_reported;

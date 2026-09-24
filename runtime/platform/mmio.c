@@ -354,7 +354,7 @@ void mgs_mmio_init(MgsMmio* m)
         {
             const char* q = getenv("MGS_PAD_SCRIPT");
             m->pad_script_n = 0u;
-            while (q && *q && m->pad_script_n < 16u) {
+            while (q && *q && m->pad_script_n < 128u) {
                 char* end;
                 unsigned long fr = strtoul(q, &end, 0);
                 if (end == q || *end != ':') break;

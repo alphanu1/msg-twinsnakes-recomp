@@ -171,6 +171,12 @@ void mgs_DVDGetFileInfoStatus(CPUState* ctx) { mgs_DVDGetCommandBlockStatus(ctx)
  *                       s32 offset, DVDCallback callback, s32 prio)
  * and the four-argument DVDReadAsync, which differs only in the priority.
  */
+/* Reads that ran past the end of their file and were issued anyway, as
+ * the retail SDK issues them. See mgs_DVDReadAsync. */
+static uint64_t s_reads_past_end;
+uint64_t mgs_dvd_reads_past_end(void);
+uint64_t mgs_dvd_reads_past_end(void) { return s_reads_past_end; }
+
 void mgs_DVDReadAsync(CPUState* ctx)
 {
     uint32_t fi       = mgs_guest_gpr(s_rt, 3);
@@ -208,15 +214,30 @@ void mgs_DVDReadAsync(CPUState* ctx)
     start = guest_read32(&s_rt->mem, fi + DVD_FI_START_ADDR);
     size  = guest_read32(&s_rt->mem, fi + DVD_FI_LENGTH);
 
-    /* The SDK refuses a read that runs past the file; so does this, rather
-     * than silently returning a short one the game did not ask for. */
+    /* A READ PAST THE END OF THE FILE IS ISSUED, NOT REFUSED.
+     *
+     * This used to refuse one, on the belief that the SDK does. It does
+     * not. DVDReadAsyncPrio's bounds checks are DVD_ASSERTMSGLINE - debug
+     * builds only, compiled out of a retail game - and it always returns
+     * TRUE and hands the read to DVDReadAbsAsyncPrio (dolsdk2004,
+     * dvd/dvdfs.c). Even the debug check allows the end to be overshot by
+     * up to DVD_MIN_TRANSFER_SIZE, because transfers are rounded up to 32
+     * bytes. The drive then reads whatever lies on the disc after the
+     * file, and the caller ignores the excess by its own length.
+     *
+     * Refusing made the game retry for ever. The music streamer does
+     * exactly this on the last chunk of a stream: at GAME START it
+     * reached +0x98060 in shared/audio/stream/0058L and called
+     * DVDReadAsyncPrio 24.7 million times without one of them landing,
+     * and the game froze with nothing in the log.
+     *
+     * Counted, so how often the game relies on it is visible. */
     if (offset > size || length > size - offset) {
+        ++s_reads_past_end;
         if (getenv("MGS_TRACE_DVD"))
-            fprintf(stderr, "[dvd] async REFUSED: past end - start=0x%08X "
-                            "size=%u offset=%u length=%u\n",
-                    start, size, offset, length);
-        mgs_set_guest_gpr(s_rt, 3, 0u);
-        return;
+            fprintf(stderr, "[dvd] async past end (issued, as the SDK "
+                            "does): start=0x%08X size=%u offset=%u "
+                            "length=%u\n", start, size, offset, length);
     }
     if (getenv("MGS_TRACE_DVD"))
         fprintf(stderr, "[dvd] async fi=0x%08X start=0x%08X size=%u "

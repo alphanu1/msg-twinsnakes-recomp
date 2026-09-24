@@ -14946,3 +14946,34 @@ far.
 **New fault reported by Ben:** reaching GAME START in the menus and choosing
 YES freezes the game, with nothing in the terminal log. Not yet reproduced;
 his Ctrl+C `[wedged]` report is the first thing to get.
+
+### F349 — GAME START froze because we refused the last chunk of a music stream
+
+Ben reached the menus and chose GAME START -> YES; the game froze with
+nothing in the log. His Ctrl+C report named it at once: the current thread
+resumed at `DVDReadAsyncPrio` (0x80026FE8), called from 0x80054EA4, and
+that function had been called **24,721,563 times** against 1,089 completed
+reads. The streamer was at +0x98060 in `shared/audio/stream/0058L`, exactly
+where our reads had stopped.
+
+`mgs_DVDReadAsync` refused any read running past the end of its file, "as
+the SDK does". **The SDK does not.** In dolsdk2004's `dvd/dvdfs.c` the
+bounds checks are `DVD_ASSERTMSGLINE` - debug builds only, compiled out of
+a retail game - and `DVDReadAsyncPrio` always returns TRUE and hands the
+read to `DVDReadAbsAsyncPrio`. Even the debug check allows the end to be
+overshot by `DVD_MIN_TRANSFER_SIZE`, since transfers round up to 32 bytes.
+The drive reads whatever follows the file and the caller ignores the rest.
+Refused, the streamer retried for ever.
+
+Such reads are now issued and counted. **Verified by Ben: he gets into the
+first gameplay scene.** Headless, with the pad script driving the title and
+menus: `DVDReadAsyncPrio` 931-985 calls instead of 24.7 million, 2-16 reads
+past the end per run, and the menu music loops normally.
+
+**Found with it, not yet understood:** one headless run through the menus
+stopped with the guest at 0x4E923A7C ("no code for that address") after
+loading `stage.dat`. Ben's run did not. Recorded, to be reproduced.
+
+`MGS_PAD_SCRIPT` now holds 128 entries (was 16), which is what driving the
+title and four menus needs: `300:1000` skips the intro, Start at the title,
+then A alone - Start+A together does not select in the menus.
