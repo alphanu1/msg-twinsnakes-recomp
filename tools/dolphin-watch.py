@@ -220,6 +220,34 @@ def main():
     # An empty DOLPHIN_PLATFORM or DOLPHIN_VIDEO omits the flag entirely,
     # leaving the emulator's own configured backend alone - the GUI build
     # has no "headless" platform, so passing one is worse than passing none.
+    # DOLPHIN_USER GIVES THE EMULATOR ITS OWN CONFIGURATION, and for the
+    # frame comparison that is not a nicety - it is the difference between
+    # a framebuffer in guest memory and none at all.
+    #
+    # Dolphin's defaults keep EFB and XFB copies ON THE GPU
+    # (EFBToTextureEnable, XFBToTextureEnable), which is right for speed and
+    # useless here: nothing is written to guest RAM, so a snapshot contains
+    # no picture. Two runs were spent concluding "the game has not drawn
+    # yet" from that, at frames 600 and 1500, when the game had drawn and
+    # the copy simply never reached memory.
+    #
+    # The settings are written into a directory of OUR choosing rather than
+    # into the user's own Dolphin configuration, which stays untouched.
+    user_dir = os.environ.get('DOLPHIN_USER')
+    if user_dir:
+        cfg = os.path.join(user_dir, 'Config')
+        os.makedirs(cfg, exist_ok=True)
+        gfx = os.path.join(cfg, 'GFX.ini')
+        if not os.path.exists(gfx):
+            with open(gfx, 'w') as f:
+                f.write('[Hacks]\n'
+                        'EFBToTextureEnable = False\n'
+                        'XFBToTextureEnable = False\n'
+                        'DeferEFBCopies = False\n'
+                        'ImmediateXFBEnable = False\n')
+            print('wrote %s (EFB/XFB copies forced to guest memory)' % gfx)
+        extra = ['-u', user_dir] + extra
+
     binary = os.environ.get('DOLPHIN_BIN', 'dolphin-emu-nogui')
     platform = os.environ.get('DOLPHIN_PLATFORM', 'headless')
     video = os.environ.get('DOLPHIN_VIDEO', 'Null')
@@ -312,6 +340,7 @@ def main():
         #
         #   DOLPHIN_FRAME_DUMP=<prefix>  DOLPHIN_FRAME_AT=60,200,800
         #   DOLPHIN_FRAME_ADDR=0x8027DD6C   (optional)
+        #   DOLPHIN_USER=<dir>           REQUIRED for a picture: see below
         #
         # writes <prefix>_<n>.mem, the whole of MEM1, the first time the
         # counter reads each n - which is what the port's MGS_MEM_DUMP and

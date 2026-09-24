@@ -2805,11 +2805,20 @@ both sides sampling at the same frame, on a clock the game itself keeps.
       ./build/runtime/host/twin-snakes --module <module.so> --headless
 
     # Dolphin, the same fields, the same counter
+    #
+    # DOLPHIN_USER IS NOT OPTIONAL. Dolphin's defaults keep EFB and XFB
+    # copies on the GPU, so guest memory never receives a framebuffer and
+    # the snapshot contains no picture at all. This gives it a
+    # configuration directory of our own with those hacks off, and leaves
+    # the user's Dolphin configuration untouched.
+    DOLPHIN_USER=$PWD/build/dolphin-user \
     DOLPHIN_FRAME_DUMP=/tmp/dol DOLPHIN_FRAME_AT=60,200,1500 \
       python3 tools/dolphin-watch.py <disc1.iso>
 
-    # the comparison
+    # the comparison: all of memory, and the picture each side is showing
     python3 tools/compare-mem.py /tmp/port_1500.mem /tmp/dol_1500.mem
+    python3 tools/compare-mem.py /tmp/port_1500.mem /tmp/dol_1500.mem \
+      --xfb-from 0x8027DDB8:512x448 --ppm /tmp/frame1500
 
 **The counter's address is derived, not assumed.** `VIGetRetraceCount` at
 0x8002BF34 is `lwz r3,-31764(r13)` followed by `blr`; the port decodes the
@@ -2820,23 +2829,52 @@ moved map fails loudly.
 **What it produced.** At frame 1500 of a boot with no input, of 6,144 pages
 of 4 KB: 1,631 empty on both sides, **3,048 byte-identical**, 1,465
 differing - so **67.5% of the pages that hold anything on either side are
-byte-identical** between the port and the emulator.
+byte-identical** between the port and the emulator. With Dolphin writing its
+framebuffer to memory (`DOLPHIN_USER`), 1,333 pages differ rather than
+1,465, and the picture itself compares:
 
-**How it was checked.** Two independent ways, because a single agreement
-figure could come from comparing a buffer with itself. First, the derived
-counter address 0x8027DD6C matches the one computed by hand from the r13
-that `MGS_REPORT_INTR` prints (0x80285980 - 31764), from a different run and
-a different code path. Second, the comparison run against two snapshots of
-the SAME port run at different frames (60 and 200) reports a far larger
-difference - 25.3% of all pages against 23.8% - which it could not do if the
-tool were comparing a file with itself.
+    framebuffer pointer 0x8027DDB8: port -> 0x80066480, dolphin -> 0x8015A480
+      4.32% of pixels differ, 3.75% by more than 8, mean abs error 3.96
+
+That is the first frame this project has compared against the oracle, and
+**it does not reproduce**. A second Dolphin run to the same field finds the
+framebuffer never written (`00 00 00 00`) and reports 100% of pixels
+differing at a mean error of 45.38. In one run the emulator had drawn its
+black frame by field 1500 and in the other it had not: Dolphin is not
+deterministic against the field counter, so "field 1500" does not name a
+state. The memory figure is the one to quote from this stage; the frame
+figure is not yet a measurement of anything.
+
+**How it was checked.** Three independent ways, because a single agreement
+figure could come from comparing a buffer with itself.
+
+1. The derived counter address 0x8027DD6C matches the one computed by hand
+   from the r13 that `MGS_REPORT_INTR` prints (0x80285980 - 31764), from a
+   different run and a different code path.
+2. The comparison run against two snapshots of the SAME port run at
+   different frames (60 and 200) reports a larger difference - 25.3% of all
+   pages against 23.8% - which it could not do if the tool were comparing a
+   file with itself.
+3. The framebuffer addresses were not inferred but read: the port's own VI
+   trace gives 0x80066480 and 0x8015A480, and searching the port's snapshot
+   for those two words finds 12 slots holding one - every one of which holds
+   a framebuffer pointer in Dolphin's snapshot as well. The two runs
+   allocate the pair at the same addresses, which is why comparing them is
+   meaningful at all.
 
 **Why it is not a divergence report yet.** The same field number is not the
-same point in the game: at frame 200 the port had drawn and Dolphin had not,
-and at frame 600 Dolphin still had no framebuffer in MEM1 at all, because
-the port does not model disc latency. A field number is a valid common
-trigger and not yet a valid common state. The next step is an anchor the
-GAME defines rather than one the video clock defines.
+same point in the game, and this was established twice over. At frame 200
+the port had drawn and Dolphin had not; at frame 600 Dolphin still had no
+framebuffer in MEM1 at all, because the port does not model disc latency.
+And two Dolphin runs to frame 1500 disagree with EACH OTHER about whether
+the frame has been drawn - so the field counter does not name a state even
+within one emulator. A field number is a valid common trigger and not a
+valid common state.
+
+The next step is an anchor the GAME defines. The specific candidate: the
+Nth EFB copy to the framebuffer, which both sides can count - ours directly,
+Dolphin's by watching the framebuffer contents change - and which by
+construction names a drawn picture rather than a moment in time.
 
 ---
 

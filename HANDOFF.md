@@ -13705,10 +13705,61 @@ something the video clock does.
 4. A 64 KB-granular scan for a framebuffer finds nothing: these are not 64
    KB aligned. At 16 KB they appear at once.
 
-**Not yet done, and the next step is specific.** The framebuffer comparison
-runs and writes PPMs, but the ADDRESS is being guessed from the page diff
-rather than read, and at frame 1500 the address that holds our picture holds
-something else in Dolphin. Read the framebuffer address from the video
-interface's own register on both sides - ours from MMIO, Dolphin's from its
-VI state - instead of inferring it. Until that is done the `--xfb` numbers
-are comparing two different things and should not be quoted.
+### The framebuffer, and the two things that were wrong about it
+
+**The address was inferred and was wrong by 0x480.** The page diff showed a
+large differing run starting at 0x80066000, so that is what the first
+`--xfb` runs used. Nothing in MEM1 holds that value: the port's own VI trace
+says the copy destination is **0x80066480**, and the pair is 0x80066480 and
+0x8015A480. Searching the port's snapshot for those words finds **12 slots**
+that hold one - and every one of them holds a framebuffer pointer in
+Dolphin's snapshot too, which is a small but real result on its own: the two
+runs allocate the pair at exactly the same addresses.
+
+`0x8027DDB8` is the SDK's current-framebuffer static in this build - 0x4C
+past the retrace count, in the same small-data block - so
+`--xfb-from 0x8027DDB8` reads each side's own pointer. That matters because
+the game double-buffers: at field 1500 the port is showing 0x80066480 and
+Dolphin 0x8015A480, and comparing one address on both sides compares a
+picture with the one before it.
+
+**Dolphin was not writing the framebuffer to memory at all.** Its defaults
+keep EFB and XFB copies on the GPU (`EFBToTextureEnable`,
+`XFBToTextureEnable`), which is right for speed and useless for this: the
+snapshot contains no picture. Two runs were spent concluding "the game has
+not drawn yet" from that, at frames 600 and 1500, when the game had drawn
+and the copy never reached memory. `DOLPHIN_USER=<dir>` now gives the
+emulator its own configuration directory, writes the four settings into it,
+and leaves the user's own Dolphin configuration untouched.
+
+With both fixed, at field 1500 of a boot with no input:
+
+    framebuffer pointer 0x8027DDB8: port -> 0x80066480, dolphin -> 0x8015A480
+      4.32% of pixels differ, 3.75% by more than 8, mean abs error 3.96
+    memory: 1,333 of 6,144 pages differ (21.7%), against 1,465 (23.8%)
+            before Dolphin was writing the framebuffer to memory
+
+**That is the first frame this project has compared against the oracle -
+and it does not reproduce.** Running Dolphin again to the same field gives a
+different answer entirely:
+
+    run 1, field 1500   framebuffer 0x8015A480 = 10 80 10 80  (YUV black)
+                        4.32% of pixels differ, mean abs error  3.96
+    run 2, field 1500   framebuffer 0x8015A480 = 00 00 00 00  (never written)
+                      100.00% of pixels differ, mean abs error 45.38
+    the port, both      framebuffer 0x80066480 = 10 80 10 80
+
+In one run Dolphin had drawn its black frame by field 1500 and in the other
+it had not. **Dolphin is not deterministic against the field counter** -
+host timing and disc caching move where the game is by that field - so the
+field number is not a usable anchor even for Dolphin against itself, let
+alone against us. This is the same finding as above, sharpened: it is not
+only that the port gets further per field, it is that "field 1500" does not
+name a state at all.
+
+**So the number to quote from this session is the MEMORY one (67.5% of live
+pages identical), not the frame one.** The frame comparison needs an anchor
+the game defines. The specific candidate: the Nth EFB-copy-to-framebuffer,
+which both sides can count - ours directly, Dolphin's by watching the
+framebuffer contents change - and which by construction names a drawn
+picture rather than a moment in time.
