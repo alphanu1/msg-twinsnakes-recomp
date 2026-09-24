@@ -126,11 +126,15 @@ def write_ppm(path, rgb, w, h):
 def compare_xfb(a, b, spec, ppm):
     addr, _, size = spec.partition(':')
     addr = int(addr, 0)
+    compare_xfb_pair(a, b, addr, addr, size or '512x448', ppm)
+
+
+def compare_xfb_pair(a, b, addr_a, addr_b, size, ppm):
     w, _, h = size.partition('x')
     w, h = int(w, 0), int(h, 0)
-    off = addr - MEM1_BASE if addr >= MEM1_BASE else addr
-    ra = decode_xfb(a, off, w, h)
-    rb = decode_xfb(b, off, w, h)
+    addr = addr_a
+    ra = decode_xfb(a, addr_a - MEM1_BASE, w, h)
+    rb = decode_xfb(b, addr_b - MEM1_BASE, w, h)
     n = w * h
     diff = big = acc = 0
     for k in range(0, n * 3, 3):
@@ -145,7 +149,8 @@ def compare_xfb(a, b, spec, ppm):
         if m > 8:
             big += 1
         acc += d0 + d1 + d2
-    print('  framebuffer 0x%08X, %dx%d, YUV 4:2:2:' % (addr, w, h))
+    print('  framebuffer 0x%08X / 0x%08X, %dx%d, YUV 4:2:2:'
+          % (addr_a, addr_b, w, h))
     print('    %6.2f%% of pixels differ, %6.2f%% by more than 8, '
           'mean abs error %6.2f'
           % (100.0 * diff / n, 100.0 * big / n, acc / (n * 3.0)))
@@ -188,6 +193,34 @@ def main():
         hi = lo + (int(length, 0) if length else page)
         lo = max(0, min(lo, n))
         hi = max(lo, min(hi, n))
+
+    if 'xfb-from' in opts:
+        # THE BUFFER EACH SIDE IS ACTUALLY SHOWING, not a fixed address.
+        #
+        # The game double-buffers, and which of the two is on screen at a
+        # given field is a matter of how many times it has flipped - so at
+        # the same field number the port can be showing 0x80066480 while
+        # Dolphin shows 0x8015A480, and comparing one address on both sides
+        # compares a picture with the picture before it. Both allocate the
+        # pair at the SAME two addresses (checked), so reading each side's
+        # own pointer is all that is needed.
+        #
+        # 0x8027DDB8 is the SDK's own current-framebuffer static in this
+        # build - 0x4C past the retrace count, in the same small-data block.
+        ptr, _, size = opts['xfb-from'].partition(':')
+        ptr = int(ptr, 0)
+        off = ptr - MEM1_BASE
+        pa = int.from_bytes(a[off:off + 4], 'big')
+        pb = int.from_bytes(b[off:off + 4], 'big')
+        print('%s vs %s' % (args[0], args[1]))
+        print('  framebuffer pointer at 0x%08X: a -> 0x%08X, b -> 0x%08X'
+              % (ptr, pa, pb))
+        if not (MEM1_BASE <= pa < MEM1_BASE + MEM1_SIZE) or \
+           not (MEM1_BASE <= pb < MEM1_BASE + MEM1_SIZE):
+            print('  one of those is not a MEM1 address; nothing to compare')
+            return 1
+        compare_xfb_pair(a, b, pa, pb, size or '512x448', opts.get('ppm'))
+        return 0
 
     if 'xfb' in opts:
         print('%s vs %s' % (args[0], args[1]))
