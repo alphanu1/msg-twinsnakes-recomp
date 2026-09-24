@@ -64,6 +64,24 @@ typedef struct MgsGpuVertex {
 int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
                  const uint32_t* tex, unsigned tex_w, unsigned tex_h);
 
+/* THE PER-DRAW STATE THAT HAS TO REACH THE PIPELINE.
+ *
+ * GX decides blending, the depth comparison and the alpha test per draw,
+ * and a pipeline object bakes all three in - so a change of any of them
+ * ends the batch and selects a different pipeline. The first version baked
+ * "opaque, depth less-or-equal, no alpha test" for everything, and it
+ * showed: a fade-out just replaced instead of fading, and untextured white
+ * geometry that should have been blended away was painted solid.
+ *
+ * The factors are GX's own numbering, translated in gpu.c, because that is
+ * the form the rasteriser already has them in. */
+typedef struct MgsGpuState {
+    unsigned char blend_enable;
+    unsigned char blend_src, blend_dst, blend_sub;
+    unsigned char depth_test, depth_write, depth_func;
+    unsigned char colour_write;
+} MgsGpuState;
+
 /* ---- batching ----------------------------------------------------------
  *
  * A draw call per triangle would be far slower than the software rasteriser
@@ -76,7 +94,7 @@ int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
                        const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key);
+                       uint64_t key, const MgsGpuState* state);
 
 /* Draw whatever is gathered. Called when the state changes and before the
  * embedded buffer is read. */

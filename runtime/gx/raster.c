@@ -1810,10 +1810,25 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             gv[k].u = tex ? vin[k]->u[tex_coord] : 0.0f;
             gv[k].v = tex ? vin[k]->v[tex_coord] : 0.0f;
         }
-        mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2],
-                          tex ? tex->texels : NULL,
-                          tex ? tex->width : 0u, tex ? tex->height : 0u,
-                          tex ? tex->hash : 0ull);
+        {   /* The draw state the game asked for, which the pipeline has
+             * to bake in. Leaving it out drew everything opaque with one
+             * depth mode: fades did not fade and untextured white geometry
+             * covered the picture. */
+            MgsGpuState st;
+            memset(&st, 0, sizeof st);
+            st.blend_enable = (r->blend_enable && !r->blend_noop) ? 1u : 0u;
+            st.blend_src = (unsigned char)r->blend_src;
+            st.blend_dst = (unsigned char)r->blend_dst;
+            st.blend_sub = r->blend_sub ? 1u : 0u;
+            st.depth_test = r->depth_test ? 1u : 0u;
+            st.depth_write = r->depth_update ? 1u : 0u;
+            st.depth_func = (unsigned char)r->depth_func;
+            st.colour_write = r->color_update ? 1u : 0u;
+            mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2],
+                              tex ? tex->texels : NULL,
+                              tex ? tex->width : 0u, tex ? tex->height : 0u,
+                              tex ? tex->hash : 0ull, &st);
+        }
         return;
     }
 

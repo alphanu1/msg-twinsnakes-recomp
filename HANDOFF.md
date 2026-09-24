@@ -13155,3 +13155,45 @@ solid rectangles because there is no TEV generator, no alpha test and no
 blending. Faster and wrong is still wrong. But the performance question that
 forced the decision is answered, and answered by a wide enough margin that
 the remaining work can be judged on correctness alone.
+
+### F308 — the white rectangles and the fades were the missing blend and depth STATE
+
+Ben, running the GPU build: "Logos dont fade out like thay are ment to. 3d
+video is only white rectangles."
+
+Both are one fault. The pipeline baked "opaque, depth less-or-equal, depth
+write on, colour write on" for every draw, because a pipeline object bakes
+blending and the depth comparison in and there was only ever one pipeline.
+GX chooses all of them PER DRAW.
+
+- A fade-out is alpha blending. With blending disabled the quad REPLACED
+  instead of fading, so the logos cut rather than faded.
+- The 7.8 million untextured white triangles measured in F301 are drawn
+  with source-alpha blending on the real machine. Painted opaque they
+  covered the scene - which is exactly "only white rectangles".
+
+Now one pipeline per distinct state, in a small linear cache: blend enable,
+the two factors, subtract, the depth test, depth write, the comparison, and
+the colour write mask. The batch key includes the state, so a change of any
+of it ends the batch rather than drawing the rest with the wrong pipeline.
+
+Three details that are easy to get wrong and are written down in the code:
+
+- GX's blend factor ids are named relative to the OTHER operand - 2 is "the
+  other operand's colour" - so GX_BL_SRCCLR and GX_BL_DSTCLR are the same
+  number read from opposite sides, and which side is being translated
+  decides the answer.
+- GX's subtract mode is dst minus src and IGNORES the factors, so it maps
+  to a blend OP and not to a pair of factors.
+- The game turns colour writes off to lay depth down only; without the write
+  mask those draws paint over the picture.
+
+    batches   17,164 -> 20,558   (584 triangles each, from 700)
+
+and the opening goes from white rectangles to a blue submarine hull with
+bubbles and legible subtitles.
+
+**Still wrong, and it shows:** the background is light grey where it should
+be dark. There is still no TEV combiner - the shader is the rasterised
+colour times one texture - and no alpha test. That is the next piece and it
+is what the grey is waiting on.

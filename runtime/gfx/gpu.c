@@ -15,12 +15,39 @@ static SDL_GPUTexture*        s_depth;
 static SDL_GPUTransferBuffer* s_readback;
 static unsigned               s_w, s_h;
 static const char*            s_driver;
-static SDL_GPUGraphicsPipeline* s_pipe;
+static SDL_GPUShader*         s_vs;
+static SDL_GPUShader*         s_fs;
 static SDL_GPUSampler*        s_sampler;
 static SDL_GPUBuffer*         s_vbuf;
 static unsigned               s_vbuf_verts;
 static SDL_GPUTexture*        s_white;
 static SDL_GPUTextureFormat   s_depth_format;
+
+/* One pipeline per distinct state. There are only a handful in this game -
+ * the histogram in the exit report shows two blend configurations and one
+ * depth mode across ten million triangles - so a small linear cache is the
+ * right shape, and a miss is rare enough that building one is not a cost
+ * worth hiding. */
+#define PIPE_SLOTS 32u
+
+static struct {
+    MgsGpuState                st;
+    SDL_GPUGraphicsPipeline*   pipe;
+    int                        used;
+} s_pipes[PIPE_SLOTS];
+static uint64_t s_pipe_builds;
+
+static int state_eq(const MgsGpuState* a, const MgsGpuState* b)
+{
+    return a->blend_enable == b->blend_enable &&
+           a->blend_src == b->blend_src && a->blend_dst == b->blend_dst &&
+           a->blend_sub == b->blend_sub &&
+           a->depth_test == b->depth_test &&
+           a->depth_write == b->depth_write &&
+           a->depth_func == b->depth_func &&
+           a->colour_write == b->colour_write;
+}
+
 
 /* The embedded buffer is 640x528 of ARGB. The colour target matches it so a
  * readback is a memcpy with a channel swizzle rather than a rescale, which
@@ -108,13 +135,20 @@ void mgs_gpu_shutdown(void)
     if (!s_dev) return;
     if (s_vbuf) SDL_ReleaseGPUBuffer(s_dev, s_vbuf);
     if (s_sampler) SDL_ReleaseGPUSampler(s_dev, s_sampler);
-    if (s_pipe) SDL_ReleaseGPUGraphicsPipeline(s_dev, s_pipe);
+    {   unsigned pi2;
+        for (pi2 = 0; pi2 < PIPE_SLOTS; ++pi2)
+            if (s_pipes[pi2].pipe)
+                SDL_ReleaseGPUGraphicsPipeline(s_dev, s_pipes[pi2].pipe);
+        memset(s_pipes, 0, sizeof s_pipes);
+    }
+    if (s_vs) SDL_ReleaseGPUShader(s_dev, s_vs);
+    if (s_fs) SDL_ReleaseGPUShader(s_dev, s_fs);
     if (s_readback) SDL_ReleaseGPUTransferBuffer(s_dev, s_readback);
     if (s_depth) SDL_ReleaseGPUTexture(s_dev, s_depth);
     if (s_colour) SDL_ReleaseGPUTexture(s_dev, s_colour);
     SDL_DestroyGPUDevice(s_dev);
     s_dev = NULL; s_colour = NULL; s_depth = NULL; s_readback = NULL;
-    s_pipe = NULL; s_sampler = NULL; s_vbuf = NULL; s_vbuf_verts = 0;
+    s_vs = NULL; s_fs = NULL; s_sampler = NULL; s_vbuf = NULL; s_vbuf_verts = 0;
     s_white = NULL;
 }
 
@@ -181,83 +215,59 @@ static SDL_GPUShader* load_shader(SDL_GPUShaderStage stage,
     return SDL_CreateGPUShader(s_dev, &si);
 }
 
+/* GX blend factors, in the rasteriser's own numbering.
+ *
+ * The ids are shared between the two operands and named relative to the
+ * OTHER one: 2 is "the other operand's colour" and 3 is one minus it, so
+ * GX_BL_SRCCLR and GX_BL_DSTCLR are the same number read from opposite
+ * sides. Which side is being translated therefore decides the answer. */
+static SDL_GPUBlendFactor gx_factor(unsigned id, int for_src)
+{
+    switch (id) {
+        case 0: return SDL_GPU_BLENDFACTOR_ZERO;
+        case 1: return SDL_GPU_BLENDFACTOR_ONE;
+        case 2: return for_src ? SDL_GPU_BLENDFACTOR_DST_COLOR
+                               : SDL_GPU_BLENDFACTOR_SRC_COLOR;
+        case 3: return for_src ? SDL_GPU_BLENDFACTOR_ONE_MINUS_DST_COLOR
+                               : SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_COLOR;
+        case 4: return SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+        case 5: return SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+        case 6: return SDL_GPU_BLENDFACTOR_DST_ALPHA;
+        default: return SDL_GPU_BLENDFACTOR_ONE_MINUS_DST_ALPHA;
+    }
+}
+
+/* GX depth comparisons, as `depth_passes` in raster.c encodes them. */
+static SDL_GPUCompareOp gx_compare(unsigned f)
+{
+    switch (f) {
+        case 0: return SDL_GPU_COMPAREOP_NEVER;
+        case 1: return SDL_GPU_COMPAREOP_LESS;
+        case 2: return SDL_GPU_COMPAREOP_EQUAL;
+        case 3: return SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+        case 4: return SDL_GPU_COMPAREOP_GREATER;
+        case 5: return SDL_GPU_COMPAREOP_NOT_EQUAL;
+        case 6: return SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
+        default: return SDL_GPU_COMPAREOP_ALWAYS;
+    }
+}
+
+static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st);
+
 static int build_pipeline(void)
 {
 #if !defined(MGS_HAVE_SHADERS)
     return 0;
 #else
-    SDL_GPUGraphicsPipelineCreateInfo pi;
-    SDL_GPUVertexBufferDescription vb;
-    SDL_GPUVertexAttribute at[3];
-    SDL_GPUColorTargetDescription ct;
     SDL_GPUSamplerCreateInfo sa;
-    SDL_GPUShader* vs;
-    SDL_GPUShader* fs;
 
-    if (s_pipe) return 1;
-    vs = load_shader(SDL_GPU_SHADERSTAGE_VERTEX, k_vert_spv,
-                     sizeof k_vert_spv, 0);
-    fs = load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_frag_spv,
-                     sizeof k_frag_spv, 1);
-    if (!vs || !fs) {
+    if (s_fs) return 1;
+    s_vs = load_shader(SDL_GPU_SHADERSTAGE_VERTEX, k_vert_spv,
+                       sizeof k_vert_spv, 0);
+    s_fs = load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_frag_spv,
+                       sizeof k_frag_spv, 1);
+    if (!s_vs || !s_fs) {
         fprintf(stderr, "[gpu] shader: %s\n", SDL_GetError());
-        return 0;
-    }
-
-    memset(&vb, 0, sizeof vb);
-    vb.slot = 0;
-    vb.pitch = sizeof(MgsGpuVertex);
-    vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
-
-    memset(at, 0, sizeof at);
-    at[0].location = 0; at[0].buffer_slot = 0;
-    at[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-    at[0].offset = 0;
-    at[1].location = 1; at[1].buffer_slot = 0;
-    at[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4;
-    at[1].offset = 16;
-    at[2].location = 2; at[2].buffer_slot = 0;
-    at[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2;
-    at[2].offset = 32;
-
-    memset(&ct, 0, sizeof ct);
-    ct.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-
-    memset(&pi, 0, sizeof pi);
-    pi.vertex_shader = vs;
-    pi.fragment_shader = fs;
-    pi.vertex_input_state.vertex_buffer_descriptions = &vb;
-    pi.vertex_input_state.num_vertex_buffers = 1;
-    pi.vertex_input_state.vertex_attributes = at;
-    pi.vertex_input_state.num_vertex_attributes = 3;
-    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-    /* GX culls by the sign of the triangle's area and the rasteriser
-     * already expanded strips and fans with the hardware's winding, so the
-     * host must not cull again on its own idea of facing. */
-    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-    pi.target_info.color_target_descriptions = &ct;
-    pi.target_info.num_color_targets = 1;
-    /* THE DEPTH TEST, which the first version left off.
-     *
-     * Without it the last triangle drawn wins every pixel, and a 3D scene
-     * comes out as a flat mess of whatever happened to be submitted last -
-     * which is what it did. The game's own ZMODE register chooses the
-     * comparison per draw; LESS-OR-EQUAL is the state the hardware powers on
-     * with and what this game asks for on almost every draw. Honouring the
-     * register per draw needs one pipeline per state and belongs with the
-     * shader generator. */
-    pi.target_info.has_depth_stencil_target = true;
-    pi.target_info.depth_stencil_format = s_depth_format;
-    pi.depth_stencil_state.enable_depth_test = true;
-    pi.depth_stencil_state.enable_depth_write = true;
-    pi.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
-
-    s_pipe = SDL_CreateGPUGraphicsPipeline(s_dev, &pi);
-    SDL_ReleaseGPUShader(s_dev, vs);
-    SDL_ReleaseGPUShader(s_dev, fs);
-    if (!s_pipe) {
-        fprintf(stderr, "[gpu] pipeline: %s\n", SDL_GetError());
         return 0;
     }
 
@@ -273,6 +283,93 @@ static int build_pipeline(void)
     sa.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
     s_sampler = SDL_CreateGPUSampler(s_dev, &sa);
     return s_sampler != NULL;
+#endif
+}
+
+/* The pipeline for one draw state, built on first sight and kept. */
+static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
+{
+#if !defined(MGS_HAVE_SHADERS)
+    (void)st; return NULL;
+#else
+    SDL_GPUGraphicsPipelineCreateInfo pi;
+    SDL_GPUVertexBufferDescription vb;
+    SDL_GPUVertexAttribute at[3];
+    SDL_GPUColorTargetDescription ct;
+    unsigned i, victim = PIPE_SLOTS;
+
+    for (i = 0; i < PIPE_SLOTS; ++i) {
+        if (s_pipes[i].used && state_eq(&s_pipes[i].st, st))
+            return s_pipes[i].pipe;
+        if (!s_pipes[i].used && victim == PIPE_SLOTS) victim = i;
+    }
+    if (victim == PIPE_SLOTS) return s_pipes[0].pipe;   /* full: reuse */
+
+    memset(&vb, 0, sizeof vb);
+    vb.slot = 0;
+    vb.pitch = sizeof(MgsGpuVertex);
+    vb.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX;
+
+    memset(at, 0, sizeof at);
+    at[0].location = 0; at[0].buffer_slot = 0;
+    at[0].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4; at[0].offset = 0;
+    at[1].location = 1; at[1].buffer_slot = 0;
+    at[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4; at[1].offset = 16;
+    at[2].location = 2; at[2].buffer_slot = 0;
+    at[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2; at[2].offset = 32;
+
+    memset(&ct, 0, sizeof ct);
+    ct.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    if (st->blend_enable) {
+        ct.blend_state.enable_blend = true;
+        ct.blend_state.src_color_blendfactor = gx_factor(st->blend_src, 1);
+        ct.blend_state.dst_color_blendfactor = gx_factor(st->blend_dst, 0);
+        /* GX's subtract mode is dst - src and IGNORES the factors, which is
+         * why it is a blend OP here and not a pair of factors. */
+        ct.blend_state.color_blend_op = st->blend_sub
+            ? SDL_GPU_BLENDOP_REVERSE_SUBTRACT : SDL_GPU_BLENDOP_ADD;
+        ct.blend_state.src_alpha_blendfactor = gx_factor(st->blend_src, 1);
+        ct.blend_state.dst_alpha_blendfactor = gx_factor(st->blend_dst, 0);
+        ct.blend_state.alpha_blend_op = st->blend_sub
+            ? SDL_GPU_BLENDOP_REVERSE_SUBTRACT : SDL_GPU_BLENDOP_ADD;
+    }
+    if (!st->colour_write) {
+        /* The game turns colour writes off to lay down depth only. Without
+         * this those draws paint over the picture. */
+        ct.blend_state.enable_color_write_mask = true;
+        ct.blend_state.color_write_mask = 0;
+    }
+
+    memset(&pi, 0, sizeof pi);
+    pi.vertex_shader = s_vs;
+    pi.fragment_shader = s_fs;
+    pi.vertex_input_state.vertex_buffer_descriptions = &vb;
+    pi.vertex_input_state.num_vertex_buffers = 1;
+    pi.vertex_input_state.vertex_attributes = at;
+    pi.vertex_input_state.num_vertex_attributes = 3;
+    pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+    /* GX culls by the sign of the triangle's area and the rasteriser has
+     * already expanded strips and fans with the hardware's winding, so the
+     * host must not cull again on its own idea of facing. */
+    pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+    pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+    pi.target_info.color_target_descriptions = &ct;
+    pi.target_info.num_color_targets = 1;
+    pi.target_info.has_depth_stencil_target = true;
+    pi.target_info.depth_stencil_format = s_depth_format;
+    pi.depth_stencil_state.enable_depth_test = st->depth_test != 0;
+    pi.depth_stencil_state.enable_depth_write = st->depth_write != 0;
+    pi.depth_stencil_state.compare_op = gx_compare(st->depth_func);
+
+    s_pipes[victim].pipe = SDL_CreateGPUGraphicsPipeline(s_dev, &pi);
+    if (!s_pipes[victim].pipe) {
+        fprintf(stderr, "[gpu] pipeline: %s\n", SDL_GetError());
+        return NULL;
+    }
+    s_pipes[victim].st = *st;
+    s_pipes[victim].used = 1;
+    ++s_pipe_builds;
+    return s_pipes[victim].pipe;
 #endif
 }
 
@@ -407,8 +504,10 @@ static SDL_GPUTexture* cached_texture(SDL_GPUCopyPass* pass,
 
 static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
                               const uint32_t* tex, unsigned tex_w,
-                              unsigned tex_h, uint64_t key)
+                              unsigned tex_h, uint64_t key,
+                              const MgsGpuState* st)
 {
+    SDL_GPUGraphicsPipeline* pipe;
     SDL_GPUCommandBuffer* cmd;
     SDL_GPUColorTargetInfo ct;
     SDL_GPURenderPass* pass;
@@ -422,6 +521,8 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
 
     if (!s_dev || !verts || count < 3u) return 0;
     if (!build_pipeline()) return 0;
+    pipe = pipeline_for(st);
+    if (!pipe) return 0;
 
     /* The vertex buffer grows to fit and is kept: a frame submits the same
      * shape of work over and over, so reallocating per draw would be the
@@ -491,7 +592,7 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
         pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &ds);
     }
     if (pass) {
-        SDL_BindGPUGraphicsPipeline(pass, s_pipe);
+        SDL_BindGPUGraphicsPipeline(pass, pipe);
         memset(&bind, 0, sizeof bind);
         bind.buffer = s_vbuf;
         SDL_BindGPUVertexBuffers(pass, 0, &bind, 1);
@@ -518,7 +619,13 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
 int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
                  const uint32_t* tex, unsigned tex_w, unsigned tex_h)
 {
-    return mgs_gpu_draw_keyed(verts, count, tex, tex_w, tex_h, 0);
+    /* The plain entry point, for the test: opaque, depth on, less-or-equal,
+     * which is the power-on state. */
+    MgsGpuState st;
+    memset(&st, 0, sizeof st);
+    st.depth_test = 1; st.depth_write = 1; st.depth_func = 3;
+    st.colour_write = 1;
+    return mgs_gpu_draw_keyed(verts, count, tex, tex_w, tex_h, 0, &st);
 }
 
 /* ---- batching --------------------------------------------------------- */
@@ -530,6 +637,7 @@ static unsigned      s_batch_n;
 static const uint32_t* s_batch_tex;
 static unsigned      s_batch_tw, s_batch_th;
 static uint64_t      s_batch_key;
+static MgsGpuState   s_batch_state;
 static int           s_batch_has;
 static uint64_t      s_batch_tris, s_batch_flushes;
 
@@ -537,7 +645,7 @@ void mgs_gpu_batch_flush(void)
 {
     if (!s_dev || !s_batch_n) { s_batch_n = 0; s_batch_has = 0; return; }
     mgs_gpu_draw_keyed(s_batch, s_batch_n, s_batch_tex,
-                       s_batch_tw, s_batch_th, s_batch_key);
+                       s_batch_tw, s_batch_th, s_batch_key, &s_batch_state);
     s_batch_tris += s_batch_n / 3u;
     ++s_batch_flushes;
     s_batch_n = 0;
@@ -547,7 +655,7 @@ void mgs_gpu_batch_flush(void)
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
                        const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key)
+                       uint64_t key, const MgsGpuState* state)
 {
     if (!s_dev) return;
     if (!s_batch) {
@@ -557,11 +665,17 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
     /* A different texture, or a full batch, ends this one. Comparing the
      * KEY rather than the pointer is what lets a re-decoded video frame end
      * the batch while identical art carries on. */
-    if (s_batch_has && (key != s_batch_key || s_batch_n + 3u > BATCH_MAX))
+    /* A different texture, a different DRAW STATE, or a full batch ends
+     * this one. The state has to be part of that test: blending and the
+     * depth comparison are baked into the pipeline, so carrying triangles
+     * across a change of either would draw them with the wrong one. */
+    if (s_batch_has && (key != s_batch_key ||
+                        !state_eq(&s_batch_state, state) ||
+                        s_batch_n + 3u > BATCH_MAX))
         mgs_gpu_batch_flush();
 
     s_batch_tex = tex; s_batch_tw = tex_w; s_batch_th = tex_h;
-    s_batch_key = key; s_batch_has = 1;
+    s_batch_key = key; s_batch_state = *state; s_batch_has = 1;
     s_batch[s_batch_n++] = *a;
     s_batch[s_batch_n++] = *b;
     s_batch[s_batch_n++] = *c;
@@ -647,8 +761,9 @@ int  mgs_gpu_draw(const MgsGpuVertex* v, unsigned n, const uint32_t* t,
 { (void)v; (void)n; (void)t; (void)w; (void)h; return 0; }
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c, const uint32_t* t,
-                       unsigned w, unsigned h, uint64_t k)
-{ (void)a; (void)b; (void)c; (void)t; (void)w; (void)h; (void)k; }
+                       unsigned w, unsigned h, uint64_t k,
+                       const MgsGpuState* st)
+{ (void)a; (void)b; (void)c; (void)t; (void)w; (void)h; (void)k; (void)st; }
 void mgs_gpu_batch_flush(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
 
