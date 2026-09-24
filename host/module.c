@@ -263,6 +263,23 @@ static uint8_t* s_vmem;
 void mgs_module_set_vmem(uint8_t* vmem);
 void mgs_module_set_vmem(uint8_t* vmem) { s_vmem = vmem; }
 
+/* Hand the second window's buffer to the module's inlined accessors (see
+ * game/module/mgs_cpu.h). MGS_VMEM_SLOW=1 withholds it, so every window
+ * access goes through the host again - which is what the write-watch and
+ * the window's access counters need to see. */
+void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem);
+void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem)
+{
+    void (*set)(uint8_t*);
+    if (!mod || !mod->handle || getenv("MGS_VMEM_SLOW")) return;
+    set = (void (*)(uint8_t*))dlsym(mod->handle, "mgs_dispatch_set_vmem");
+    if (set) {
+        set(vmem);
+        fprintf(stderr, "[vmem] second window inlined in the module "
+                        "(MGS_VMEM_SLOW=1 for the host path)\n");
+    }
+}
+
 static uint8_t* gptr(void* cpu, uint32_t addr, uint32_t size)
 {
     uint32_t off;
@@ -2059,13 +2076,20 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * and the clear then zeroes the region once they are dead.
              * Relocation never writes into .bss itself. */
             if (s_relink_bss && g[3]) {
-                uint32_t want = g[3] + MGS_OVERLAY_BSS_OFFSET;
+                uint32_t want = MGS_OVERLAY_BSS_ADDR;
                 if (want != g[4]) {
+                    /* The game allocated .bss somewhere other than where the
+                     * recompiled code has it. Loud, because the memory at
+                     * `want` then belongs to someone else. */
                     fprintf(stderr,
-                            "[link] overlay .bss 0x%08X -> 0x%08X "
-                            "(the recompiled overlay's own)\n", g[4], want);
+                            "[link] WARNING: the game allocated overlay .bss at "
+                            "0x%08X but the recompiled code has it at 0x%08X; "
+                            "forcing the code's address\n", g[4], want);
                     g[4] = want;
                     s_watch_r4 = want;
+                } else {
+                    fprintf(stderr, "[link] overlay .bss 0x%08X: the game's "
+                                    "own allocation, as recompiled\n", want);
                 }
             }
         }

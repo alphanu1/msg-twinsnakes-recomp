@@ -1704,6 +1704,10 @@ int main(int argc, char** argv)
                     mgs_host_install_spr_handler(cpu);
                     mgs_host_set_vmem(rt.mem.vmem);
                     mgs_module_set_vmem(rt.mem.vmem);
+                    {
+                        void mgs_module_install_vmem(const MgsModule*, uint8_t*);
+                        mgs_module_install_vmem(&mod, rt.mem.vmem);
+                    }
 
                     /* Finished DVD reads have to be reported on the guest
                      * thread. Nothing else does it, and until this was here

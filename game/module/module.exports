@@ -12,6 +12,9 @@
        found. */
     mgs_dispatch_set_patch_hook;
     mgs_dispatch_patched_calls;
+    /* The second window's buffer, for the chunks' inlined accessors
+       (mgs_cpu.h). Unexported, the fast path simply stays off. */
+    mgs_dispatch_set_vmem;
   local:
     *;
 };

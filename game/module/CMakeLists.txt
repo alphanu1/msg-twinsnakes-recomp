@@ -21,6 +21,12 @@ endif()
 # address leaves the code branching correctly and reading its data from the
 # wrong place, which nothing downstream can fix. It must match the
 # --rel-base the overlay was generated with.
+#
+# The same goes for its .bss: generate with --rel-bss 0x8054A180, the address
+# the game itself allocates it at (host/module.h MGS_OVERLAY_BSS_ADDR, HANDOFF
+# F355). An overlay generated without it keeps its globals inside the module
+# image, where the engine's scratch allocator overwrites them, and does not
+# run on the current host.
 set(REL_BASE "0x7F008000" CACHE STRING "Virtual load address of the overlay")
 
 foreach(V DOL_GENERATED REL_GENERATED GXRUNTIME_DIR)
@@ -45,13 +51,19 @@ add_library(mgs_dol_code STATIC ${DOL_CHUNKS} dol_bridge.c)
 target_include_directories(mgs_dol_code PRIVATE
   "${DOL_GENERATED}/.." "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_dol_code PRIVATE DOLRECOMP_ENABLE_REPLACEMENTS=1
-  MGS_GENERATED_HEADER="${DOL_GENERATED}/generated.h")
+  MGS_GENERATED_HEADER="${DOL_GENERATED}/generated.h"
+  DOLRECOMP_CPU_HEADER="mgs_cpu.h")
 
 add_library(mgs_rel_code STATIC ${REL_CHUNKS} rel_bridge.c)
 target_include_directories(mgs_rel_code PRIVATE
   "${REL_GENERATED}/.." "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_rel_code PRIVATE DOLRECOMP_ENABLE_REPLACEMENTS=1
-  MGS_GENERATED_HEADER="${REL_GENERATED}/generated.h")
+  MGS_GENERATED_HEADER="${REL_GENERATED}/generated.h"
+  DOLRECOMP_CPU_HEADER="mgs_cpu.h")
+
+# DOLRECOMP_CPU_HEADER is DolRecomp's own hook for the header the chunks
+# include. mgs_cpu.h is GXRuntime's cpu.h plus an inlined path for the second
+# memory window, where the engine overlay's data lives - see its comment.
 
 # Position-independent: the result is loaded as a shared object.
 set_target_properties(mgs_dol_code mgs_rel_code PROPERTIES

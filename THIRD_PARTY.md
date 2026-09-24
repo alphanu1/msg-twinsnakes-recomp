@@ -54,6 +54,18 @@ Two things still apply:
 | `ww` (Wind Waker recomp) | **MIT** | reference | The shape of a true native port: own recompiler, GX→D3D11, TEV→HLSL. MIT, so lifting from it is actually permitted — the one reference here without a licence cost. |
 | `RecompCore` | **GPL-2.0+/GPLv3-compatible** | liftable | Dolphin fork with static-recomp core and interpreter fallback. The fallback design can now be taken, not just read. 102 MB, the largest entry. |
 
+### Local changes to fetched tools
+
+A fetched repository is never committed into this tree (rule 4), so a change
+to one is carried as a patch file under `tools/patches/`, named for the
+repository it applies to. `tools/bootstrap.sh` applies every
+`tools/patches/<name>-*.patch` after checking `<name>` out, and skips one that
+is already applied.
+
+| Patch | Upstream, commit | Licence | What it changes, and why |
+|---|---|---|---|
+| `tools/patches/DolRecomp-rel-bss.patch` | `github.com/ExpansionPak/DolRecomp` @ `71ce7f97419b1bb1ba9a9596c41507f6629e0fb0` | GPL-3.0 | Adds `--rel-bss <addr>`: resolve a REL's `.bss` relocations to the address the game itself allocates, instead of `base + fixSize`. Five files: `src/app/cli.h`, `src/app/cli.c` (the option), `src/app/main.c` (passes it on), `src/frontend/container/rel.h`, `src/frontend/container/rel.c` (`rel_set_bss_override`, applied where the loader chooses `bss_start`). Without it the engine's globals were compiled to addresses the engine's own scratch allocator later hands out, which is the 0x4E923A7C crash (HANDOFF F355). |
+
 ### Behaviour taken from Dolphin, with the commit
 
 Rule 11 wants a commit hash, not "copied from Dolphin". These are behaviours

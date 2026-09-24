@@ -171,10 +171,20 @@ void mgs_clear_overlay_bss(void* cpu, uint32_t module)
      * CHECKED, not assumed: the recompiler's base is pinned in one place and
      * has to lie inside this span, or the globals would not be zeroed and
      * nothing would say so. */
+    /* ONLY WHEN .bss LIVES IN THE IMAGE. With the overlay recompiled onto
+     * the game's own MEM1 allocation (MGS_OVERLAY_BSS_ADDR), OSLink zeroes
+     * .bss itself as it does on a console, and the relocation tables stay
+     * as the console leaves them - the engine reuses that space itself. */
+    if (MGS_OVERLAY_BSS_ADDR - module >= 0x01000000u) {
+        printf("overlay .bss: at 0x%08X, outside the module image; OSLink "
+               "zeroes it, the relocation tables are left alone\n",
+               MGS_OVERLAY_BSS_ADDR);
+        return;
+    }
     {
         uint32_t from = last;
         uint32_t span = bss + 0x8000u;
-        uint32_t want = module + MGS_OVERLAY_BSS_OFFSET;
+        uint32_t want = MGS_OVERLAY_BSS_ADDR;
         if (want < from || want + bss > from + span)
             printf("overlay .bss: WARNING - the recompiled overlay's .bss at "
                    "0x%08X+0x%X is not inside the span about to be cleared "

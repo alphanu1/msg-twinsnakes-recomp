@@ -2086,6 +2086,59 @@ does **not** say plainly, both found the hard way:
 - **The `.bss` entry then points at the game's allocation**, elsewhere in
   MEM1, so a maximum over all sections picks that rather than the image's end.
 
+### Zeroing it was not enough: generate against the game's own `.bss` · **DONE**
+
+Zeroing the region after linking made the globals start at zero, but they
+were still **compiled to the wrong address**. `0x7F499BA0..0x7F501C98` (`base +
+fixSize`, rounded up to 32 bytes) is,
+at run time, the relocation tables — memory the game considers free once
+`OSLink` is done. The engine's downward scratch allocator (`0x7F1001EC`,
+top pointer at `0x7F4C52EC`) hands it out, and whatever it is given
+overwrites the globals. One of those globals is the message-handler table
+(`0x7F4BE5E4`, 26 slots, looked up by `0x7F0FC334`); a scratch buffer over it
+is the `0x4E923A7C` jump that stops the game on entering the Codec and in
+the Dock (HANDOFF F353, F355).
+
+The game allocates `.bss` at **`0x8054A180`** in MEM1, the same address on
+every boot measured. DolRecomp had no way to be told that, so it gained one
+(`--rel-bss`, `tools/patches/DolRecomp-rel-bss.patch`, THIRD_PARTY.md):
+
+```sh
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko -j24 \
+    --rel-base 0x7F008000 --rel-bss 0x8054A180 \
+    discs/GGSPA4/disc1/files/shared/mgso_pal.rel build/phase1/rel-7f-bss
+```
+
+278 chunks, as before. The host checks at link time that the game really did
+allocate `.bss` at the address the code was generated for, and says so either
+way (`[link] overlay .bss 0x8054A180: ...`).
+
+**Checked by counting the address halves.** Every `.bss` reference is built
+by a `lis` of its high half. Counting `lis` immediates in the generated C:
+
+| | `lis` into `0x7F49..0x7F50` | `lis` into `0x8054..0x805B` |
+|---|---|---|
+| `rel-7f` (before) | 14,969 | 0 |
+| `rel-7f-bss` (after) | 1,627 | 13,342 |
+
+`1,627 + 13,342 = 14,969`: every high half moved or stayed, none appeared or
+vanished. The 1,627 that stay are `.data`/`.rodata` below `0x7F499BA0`, which
+shares those high halves and is correctly untouched. Command:
+
+```sh
+cat build/phase1/<dir>/generated/chunks/*.c \
+  | grep -oE ': lis +r[0-9]+, -?[0-9]+' | awk '{print $NF}' | sort | uniq -c \
+  | awk '{v=$2+0; if (v<0) v+=65536;
+          if (v>=0x7F49 && v<=0x7F50) o+=$1; if (v>=0x8054 && v<=0x805B) n+=$1}
+         END {print o+0, n+0}'
+```
+
+The second, independent check is the handler table itself: in the new code
+the lookup at `0x7F0FC334` indexes `0x8056EBC4`, which is
+`0x7F4BE5E4 - 0x7F499BA0 + 0x8054A180` — the same offset, `0x24A44`, into
+`.bss`. (Computed first with `0x7F499B8C`, the unrounded end, it missed by
+`0x14`; that is what showed the recompiler rounds the section start.)
+
 ### The engine loads nothing, very busily
 
 With the panic gone the game ran its own main loop and loaded **nothing**.

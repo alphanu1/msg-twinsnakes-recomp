@@ -102,3 +102,8 @@ __pycache__/
 # likewise theirs, not ours.
 module/
 *_recomp.so
+# ...but not our own source directory of that name. game/module/ holds the
+# glue that builds the module - our code, no game code - and a new file there
+# (mgs_cpu.h) was silently ignored by the rule above. The built module is
+# still kept out by *_recomp.so.
+!/game/module/

@@ -1,0 +1,102 @@
+diff --git a/src/app/cli.c b/src/app/cli.c
+index ae24504..8a58c9d 100644
+--- a/src/app/cli.c
++++ b/src/app/cli.c
+@@ -29,6 +29,7 @@ void print_usage(const char* argv0) {
+     fprintf(stderr, "  --partition-seed <n>           Stable partition naming seed\n");
+     fprintf(stderr, "  --gamecube                     GameCube mode (no title ID required)\n");
+     fprintf(stderr, "  --rel-base <addr>              Override first virtual load address for REL codegen\n");
++    fprintf(stderr, "  --rel-bss <addr>               Place a REL's .bss at this address instead of base+fixSize\n");
+     fprintf(stderr, "  --map <path>                   Load optional function names from a linker MAP\n");
+     fprintf(stderr, "  --setup                        Download titles database and optionally install wit\n");
+     fprintf(stderr, "\n");
+@@ -496,6 +497,17 @@ int parse_cli(int argc, char** argv, CliOptions* opts) {
+             continue;
+         }
+ 
++        if (strcmp(arg, "--rel-bss") == 0) {
++            if (i + 1 >= argc) {
++                fprintf(stderr, "error: --rel-bss needs an address\n");
++                return 0;
++            }
++            if (!parse_u32_arg(argv[++i], "--rel-bss", &opts->rel_bss))
++                return 0;
++            opts->rel_bss_set = 1;
++            continue;
++        }
++
+         if (strncmp(arg, "--rel-base=", 11) == 0) {
+             if (!parse_u32_arg(arg + 11, "--rel-base", &opts->rel_base))
+                 return 0;
+diff --git a/src/app/cli.h b/src/app/cli.h
+index 2a02069..fe4806d 100644
+--- a/src/app/cli.h
++++ b/src/app/cli.h
+@@ -24,6 +24,7 @@ typedef struct {
+     DolRecompBackend backend;
+     u32 jobs;
+     u32 rel_base;
++    u32 rel_bss;
+     u32 partition_instructions;
+     u64 partition_seed;
+     DolLLVMNativeABIPolicy llvm_native_abi;
+@@ -31,6 +32,7 @@ typedef struct {
+     int gamecube_mode;
+     int cpu_explicit;
+     int rel_base_set;
++    int rel_bss_set;
+     int setup_mode;
+     int show_help;
+     int fast_semantics;
+diff --git a/src/app/main.c b/src/app/main.c
+index 3805129..25e8ebd 100644
+--- a/src/app/main.c
++++ b/src/app/main.c
+@@ -171,6 +171,7 @@ int main(int argc, char** argv) {
+ 
+     if (rel_mode) {
+         RELFile rel;
++        if (opts.rel_bss_set) rel_set_bss_override(opts.rel_bss);
+         if (!rel_load(&rel, input_path, rel_start_base))
+             return 1;
+ 
+diff --git a/src/frontend/container/rel.c b/src/frontend/container/rel.c
+index 1df039a..fb7d9c2 100644
+--- a/src/frontend/container/rel.c
++++ b/src/frontend/container/rel.c
+@@ -6,6 +6,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
++/* See rel_set_bss_override in rel.h. */
++static u32 g_rel_bss_override;
++void rel_set_bss_override(u32 address) { g_rel_bss_override = address; }
++
+ enum {
+     REL_HEADER_MIN_SIZE = 0x40,
+     REL_SECTION_ENTRY_SIZE = 8,
+@@ -429,6 +433,8 @@ bool rel_load_image(RELFile* rel, const char* path, u32 base_address) {
+         rel_free(rel);
+         return false;
+     }
++    if (g_rel_bss_override)
++        bss_start = g_rel_bss_override;
+     u32 bss_cursor = align_up_u32(bss_start,
+                                   bss_alignment ? bss_alignment : 4, &ok);
+     if (!ok) {
+diff --git a/src/frontend/container/rel.h b/src/frontend/container/rel.h
+index 9109b07..1157b71 100644
+--- a/src/frontend/container/rel.h
++++ b/src/frontend/container/rel.h
+@@ -49,6 +49,11 @@ typedef struct {
+ } RELModuleMap;
+ 
+ bool rel_load(RELFile* rel, const char* path, u32 base_address);
++/* Where the next REL loaded places its .bss. Zero (the default) means
++ * base + fixSize, straight after the module's permanent sections. A game that
++ * allocates .bss itself and reuses the space after fixSize as scratch needs
++ * the real address instead. */
++void rel_set_bss_override(u32 address);
+ bool rel_load_image(RELFile* rel, const char* path, u32 base_address);
+ bool rel_apply_relocations(RELFile* rel, const RELModuleMap* modules);
+ void rel_free(RELFile* rel);

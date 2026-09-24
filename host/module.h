@@ -92,19 +92,25 @@ void mgs_module_trace_calls4(uint32_t address,
                              void (*fn)(void* cpu, const uint32_t* gpr));
 void mgs_dump_heaps(void* cpu, uint32_t rel_bss);
 void mgs_dump_tasks(void* cpu, uint32_t rel_bss);
-/* WHERE THE RECOMPILED OVERLAY PUTS .bss, as an offset from the module base.
+/* WHERE THE RECOMPILED OVERLAY'S .bss IS: THE GAME'S OWN MEM1 ALLOCATION.
  *
- * This is DolRecomp's layout decision, not the disc's: it compiles the
- * overlay at `--rel-base` and places .bss straight after .data. It cannot be
- * derived from the REL header - the loaded sections end at 0x491B7C and no
- * alignment of that gives 0x491BA0 - so it is pinned here, once, and read
- * back from the running engine: the record-ring pair the engine calls
- * `bss_55BF4` lands at 0x7F4EF794, and 0x7F4EF794 - 0x55BF4 - 0x7F008000 is
- * this number.
+ * The overlay's .bss is not part of the REL file. The game's loader
+ * allocates it in MEM1 - at 0x8054A180, the same address on every boot, since
+ * the loader runs before anything variable - and passes that to OSLink.
  *
- * It is a constant in ONE place because two copies of it silently drifting
- * is the whole bug below. */
-#define MGS_OVERLAY_BSS_OFFSET 0x491BA0u
+ * DolRecomp by default compiles a REL's .bss at base + fixSize, straight
+ * after .data, which for this module is 0x7F499BA0: the first byte of the
+ * relocation tables, in the second window. The game treats everything from
+ * fixSize on as dead once linked and runs a downward scratch allocator
+ * through it, so the engine's own globals were trampled: the message-handler
+ * table, the task table, the heap table, and eventually a call through a
+ * slot holding a float (HANDOFF F353). A comms call froze the game that way.
+ *
+ * So the overlay is recompiled with `--rel-bss 0x8054A180` (a local DolRecomp
+ * option, tools/patches/DolRecomp-rel-bss.patch) and its .bss IS the game's
+ * allocation. OSLink runs with the game's own argument; the host only checks
+ * that the game allocated where the code expects, and forces it if not. */
+#define MGS_OVERLAY_BSS_ADDR 0x8054A180u
 
 void mgs_clear_overlay_bss(void* cpu, uint32_t module);
 

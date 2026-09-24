@@ -77,6 +77,22 @@ fetch() {
   git -C "$dir" checkout -q --detach FETCH_HEAD
   # Read-only mirrors: never commit into them, never push from them.
   git -C "$dir" config remote.origin.pushurl "DO-NOT-PUSH"
+
+  # LOCAL PATCHES, carried in this tree and applied on top of the pin.
+  # tools/patches/<name>-*.patch, in name order. Each is recorded in
+  # THIRD_PARTY.md with what it changes and why (rule 11). The upstream
+  # repository itself is never committed into.
+  local p
+  for p in "$root"/tools/patches/"$name"-*.patch; do
+    [ -f "$p" ] || continue
+    if git -C "$dir" apply --check "$p" 2>/dev/null; then
+      git -C "$dir" apply "$p"
+      printf '  %-28s patched: %s\n' "$name" "$(basename "$p")"
+    else
+      printf '  %-28s patch already applied or does not fit: %s\n' \
+             "$name" "$(basename "$p")"
+    fi
+  done
 }
 
 echo "Fetching into $extern (groups: $groups)"

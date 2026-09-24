@@ -87,6 +87,12 @@ void mgs_dispatch_set_patch_hook(int (*hook)(CPUState*, u32)) { s_patch_hook = h
 unsigned long mgs_dispatch_patched_calls(void);
 unsigned long mgs_dispatch_patched_calls(void) { return s_patched_calls; }
 
+/* The second window's host buffer, for mgs_cpu.h's inlined accessors. Left
+ * NULL, the chunks take the old external_read route for that window. */
+u8* g_mgs_vmem;
+void mgs_dispatch_set_vmem(u8* base);
+void mgs_dispatch_set_vmem(u8* base) { g_mgs_vmem = base; }
+
 /* --- tracing ------------------------------------------------------------ */
 /* An open-addressed histogram, fixed size and never resized: this runs inside
  * the dispatch path, so an allocation here would change the timing of the

@@ -164,6 +164,30 @@ renderer.
 
 ---
 
+## STATE, 2026-09-25: MENUS, CUTSCENES, THE CODEC AND THE DOCK ALL RUN
+
+The game boots, plays its intro, takes the menus, plays the Dock cutscene,
+runs the first Codec call and reaches gameplay on our runtime and our
+renderer (SDL3 GPU, Vulkan). The comms-mode freeze is fixed at its cause:
+the engine's `.bss` is now compiled at the game's own allocation (F355).
+
+**Open, in order:**
+
+1. **Gameplay frame rate: 50 fps.** A 420 s scripted run averages 30.4 fps
+   over cutscene (25 correct) and gameplay together; profile gameplay on its
+   own, on the game's thread only (the profiler now separates threads).
+2. **Camera clipping** — F357 removes the largest cause (floors and walls
+   beside the camera vanishing). Ask Ben whether what he sees has changed
+   before looking further.
+3. **Presentation cadence** — a cutscene intermittently shown at 48 fps
+   instead of 25 (fix keyed on the buffer VI scans and the frame in it;
+   needs a run of the movie to confirm).
+4. **Invisible or transparent triangles** — re-check after the display-list
+   fix (F352) and the .bss move, which changed what the engine records.
+
+The list below is the 2026-09-19 plan, kept for its reasoning; most of it
+is done.
+
 ## NEXT, IN ORDER
 
 1. **Report a controller, then a memory card (F149).** The boot ends at the
@@ -266,6 +290,13 @@ renderer.
 ---
 
 ## WHAT NOT TO RE-PROPOSE
+
+- **Running an engine module generated without `--rel-bss 0x8054A180`
+  (F355).** The host forces OSLink onto that address; an old module keeps
+  its globals at 0x7F499BA0 and reads them from the wrong place. Regenerate.
+- **Patching the REL header's `fixSize`, before or after OSLink, to keep the
+  scratch allocator off `.bss` (F353).** Both tried: after linking it has no
+  effect, before linking the game never leaves frame 0.
 
 - **"The frame rate is the recompiled code, there is no hotspot left"
   (F329).** Flatly wrong, and it cost three sessions. The hotspot was a
@@ -15139,3 +15170,55 @@ exactly across it. The texture path already did this on its own. It is now
 destinations, palette loads, ARAM DMA and memory-card DMA, with a test
 that sweeps the whole window. ARAM showed 0 transfers into the window in a
 run to the Dock, so it changed nothing there; it is correct regardless.
+
+### F355 — the engine's .bss is now compiled where the game allocates it
+
+F353's fix, done. DolRecomp gained `--rel-bss <addr>`
+(`tools/patches/DolRecomp-rel-bss.patch`, applied by `tools/bootstrap.sh`,
+recorded in THIRD_PARTY.md) and the engine is regenerated with
+`--rel-bss 0x8054A180`: every `.bss` reference now points at the game's own
+MEM1 allocation instead of at the module image's relocation tables, which
+the engine's downward scratch allocator reuses. Nothing of ours is in that
+allocator's path any more, OSLink runs on the game's own argument, and the
+host says at link time whether the game really allocated `.bss` where the
+code expects (`[link] overlay .bss 0x8054A180: ...`).
+
+**Checked by two routes** (docs/decompilation-process.md): the count of
+`lis` high halves into the old range (14,969) equals those that stayed
+(1,627, `.data` sharing the halves) plus those that moved (13,342); and the
+message-handler table moved from 0x7F4BE5E4 to 0x8056EBC4, the same offset
+`0x24A44` into `.bss`.
+
+**A number that was wrong on the way:** the old `.bss` base was first taken
+as `base + fixSize` = 0x7F499B8C. The handler-table offset then missed by
+0x14. DolRecomp rounds the section start to 32 bytes: 0x7F499BA0.
+
+**Result, on the script that reproduced it.** The headless menu script
+that ended at copy 4,008 with the jump to 0x4E923A7C, every time, now runs
+its full 420 s: 17,842 copies, through the Dock cutscene, the Codec call
+(Ben's "freezes when entering the comms mode") and into gameplay, and stops
+only because the time limit says so. The `[link]` line reports the game's
+own allocation at 0x8054A180, as generated.
+
+**Host and engine module must match.** The host now forces OSLink to
+0x8054A180. An engine module generated without `--rel-bss` has its globals
+at 0x7F499BA0 and does not work with this host.
+
+### F356 — the second window's accesses are inlined in the generated code
+
+GXRuntime's inline accessors know MEM1 only, so every engine access to the
+second window (0x7E000000-0x7FFFFFFF, where its `.data` and constants live)
+went through `external_read`/`external_write`: an indirect call, a range
+check and a byte loop. `game/module/mgs_cpu.h` is selected through
+DolRecomp's own `DOLRECOMP_CPU_HEADER` hook and adds a subtract-and-compare
+path into the host's flat 32 MB buffer, installed by the host through
+`mgs_dispatch_set_vmem`. MEM1 is still tried first. `MGS_VMEM_SLOW=1` leaves
+the buffer uninstalled, which restores the old route for any diagnostic that
+wants to see every window access.
+
+**Measured** on the same 420 s run: 175,071,217 reads and **0 writes**
+still reach the host's window path, about 0.4 million a second. They are
+GXRuntime's own inline helpers (paired-single loads and the like), which
+call its accessors directly rather than through the chunks' names. Small
+enough to leave; the route to them is defining the accessors before
+GXRuntime's header is read.
