@@ -987,23 +987,14 @@ static int mgs_clock_is_wall(void)
 {
     static int mode = -1;
     if (mode < 0) {
-        /* STEP-DRIVEN IS THE DEFAULT AGAIN, and this is a retreat rather
-         * than a decision. The wall clock is the right architecture - it is
-         * what stops us modelling a 486 MHz CPU - but turning it on broke
-         * Ben's build: audio clipping, popping and the echo back, and the
-         * video corrupting intermittently. Both at once means a global
-         * timing change, and moving guest time in 2 ms jumps every 64 steps
-         * moves WHEN every interrupt fires relative to the code it
-         * interrupts. The AX mixer runs inside the DSP interrupt and the GX
-         * parser runs inside the guest's own writes; neither was written
-         * expecting time to arrive in lumps.
+        /* THE REAL CLOCK IS THE DEFAULT. Nothing here models a 486 MHz CPU.
          *
-         * MGS_GUEST_CLOCK=wall turns it back on. It goes back to being the
-         * default when it has been shown not to do that, which means
-         * advancing guest time in far smaller increments - the lump is the
-         * suspect, not the clock. */
+         * It was briefly put back behind a flag because it broke audio and
+         * video together, and that retreat was the wrong instinct: the
+         * clock was never the fault. Delivering its time in 2 ms LUMPS was,
+         * and that is fixed at the use below rather than avoided. */
         const char* e = getenv("MGS_GUEST_CLOCK");
-        mode = (e && (*e == 'w' || *e == 'W'));
+        mode = !(e && (*e == 's' || *e == 'S'));
     }
     return mode;
 }
@@ -1341,6 +1332,53 @@ static void frame_snapshot(void* cpu)
     }
 }
 
+/* ---- SCRIPTED INPUT ----------------------------------------------------
+ *
+ * EVERY PERFORMANCE NUMBER IN THIS PROJECT HAS BEEN OF A CUTSCENE, because
+ * a headless run cannot press Start. That is not a small caveat: Ben points
+ * out that this game targets 50 fps in GAMEPLAY on PAL and caps cutscenes
+ * at 25 for cinematic quality, so the 24.8 fps the intro measures is
+ * CORRECT there and says nothing at all about the case that matters. Months
+ * of benchmarks, all of the wrong scene, and the conclusion drawn from them
+ * - "we are at the game's own rate" - was true of the cutscene and false in
+ * general.
+ *
+ * MGS_PAD_SCRIPT=<frame>:<buttons>[,<frame>:<buttons>...] holds the named
+ * buttons from that retrace onward for eight frames - long enough for the
+ * game to see a press and a release. Buttons are the SDK's own bits, so
+ * 0x1000 is Start and 0x0100 is A.
+ *
+ *   MGS_PAD_SCRIPT=600:0x1000,900:0x1000,1400:0x0100
+ *
+ * It is ORed with the real pad, so a windowed run can still be driven by
+ * hand while a script gets it past the title.
+ */
+static uint16_t scripted_pad(uint64_t frame)
+{
+    static int checked;
+    static uint64_t at[16];
+    static uint16_t btn[16];
+    static unsigned n;
+    uint16_t held = 0u;
+    unsigned i;
+
+    if (!checked) {
+        const char* e = getenv("MGS_PAD_SCRIPT");
+        checked = 1;
+        while (e && *e && n < 16u) {
+            at[n] = strtoull(e, (char**)&e, 0);
+            if (*e == ':') ++e;
+            btn[n] = (uint16_t)strtoul(e, (char**)&e, 0);
+            ++n;
+            while (*e == ',' || *e == ' ') ++e;
+        }
+        if (n) fprintf(stderr, "[pad] %u scripted presses\n", n);
+    }
+    for (i = 0; i < n; ++i)
+        if (frame >= at[i] && frame < at[i] + 8ull) held |= btn[i];
+    return held;
+}
+
 /* Called once per retrace, to put the external framebuffer on the screen. */
 void mgs_module_set_frame(void (*fn)(void));
 void mgs_module_set_frame(void (*fn)(void)) { s_frame = fn; }
@@ -1538,6 +1576,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     unsigned tick_batch = 0;
     const int wall_clock = mgs_clock_is_wall();
     uint64_t gt_wall = 0;
+    uint64_t tick_pool = 0;
     uint64_t due_pe = 0, due_dsp = 0, due_pend = 0, due_aram = 0,
              due_aid = 0, due_pump = 0, due_disp = 0, due_pace = 0;
     uint32_t last_pc = 0u;
@@ -1669,6 +1708,26 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * about 20 ns and doing it per step would itself become the cost
          * this change exists to remove. */
         if (wall_clock) {
+            /* TIME ARRIVES IN A POOL AND IS PAID OUT IN SMALL COINS.
+             *
+             * The first version read the clock every 64 steps and applied
+             * the whole elapsed amount at once - up to 81,000 ticks in one
+             * go. Every periodic hook in this loop fires AT MOST ONCE per
+             * iteration and then re-arms to `gt + period`, so a jump larger
+             * than a hook's period does not make it fire more often: it
+             * makes the hook MISS. The DSP task hook has a period of 32,792
+             * ticks, so an 81,000-tick jump crossed it two and a half times
+             * and fired it once - dropping AX frames, which is heard as
+             * popping, and whose catch-up is heard as the echo and the
+             * tinniness Ben reported. `due_aid` at 712 ticks and `due_aram`
+             * at 1,016 fared far worse.
+             *
+             * So the clock is still read every 64 steps - it is a vDSO call
+             * and reading it per step would cost more than this saves - but
+             * what it returns goes into a POOL, and each step takes at most
+             * one hook-period's worth out of it. Guest time still tracks
+             * real time; it just cannot arrive in a lump big enough to step
+             * over a hook. */
             if (++tick_batch >= 64u) {
                 uint64_t delta;
                 {
@@ -1695,10 +1754,20 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
                 } else {
                     gt_wall += delta;
                 }
-                gt += delta;
-                mgs_runtime_advance_ticks(rt, delta);
-                mgs_mmio_advance_ticks(mmio_p, (uint32_t)delta);
+                tick_pool += delta;
                 tick_batch = 0;
+                }
+            }
+            /* Pay out at most a quarter of the SHORTEST hook period - 512
+             * ticks for the graphics completion - so no hook can be stepped
+             * over, however far behind the pool has fallen. */
+            {
+                uint64_t pay = tick_pool < 128ull ? tick_pool : 128ull;
+                if (pay) {
+                    tick_pool -= pay;
+                    gt += pay;
+                    mgs_runtime_advance_ticks(rt, pay);
+                    mgs_mmio_advance_ticks(mmio_p, (uint32_t)pay);
                 }
             }
         } else {
@@ -1753,7 +1822,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * 675,000, and the guest can change which. */
             if (!forced_retrace)
                 due_vi = gt + (uint64_t)mgs_mmio_vi_field_ticks(mmio_p);
-            mgs_mmio_set_pad(mmio_p, mgs_video_pad());
+            mgs_mmio_set_pad(mmio_p, (uint16_t)(mgs_video_pad() | scripted_pad(r.frames)));
             mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);
             frame_snapshot(cpu);

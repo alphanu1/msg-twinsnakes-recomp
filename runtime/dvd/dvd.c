@@ -126,17 +126,8 @@ static MgsDvdRequest* dvd_build_and_submit(MgsDvd* dvd, const char* path,
      * means anything (F320's control). So it is kept, off, behind
      * MGS_DVD_LATENCY=1 for that harness rather than deleted. */
     {
-        /* ON BY DEFAULT AGAIN. Removing it is right - a modelled drive on a
-         * machine with no drive in the path is exactly the emulation that
-         * does not belong in a static recompilation - but it landed in the
-         * same build as the wall clock, and that build broke audio and
-         * video together. Two changes, one symptom, so both go back until
-         * they can be tried one at a time. MGS_DVD_LATENCY=0 removes it. */
         static int modelled = -1;
-        if (modelled < 0) {
-            const char* e = getenv("MGS_DVD_LATENCY");
-            modelled = !(e && *e == '0');
-        }
+        if (modelled < 0) modelled = getenv("MGS_DVD_LATENCY") != NULL;
         req->ready_tick = modelled
             ? dvd->now + MGS_DVD_LATENCY_TICKS
                        + (uint64_t)length * MGS_DVD_TICKS_PER_BYTE
