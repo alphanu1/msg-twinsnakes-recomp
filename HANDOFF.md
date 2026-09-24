@@ -13128,3 +13128,30 @@ colour times one texture - the commonest combiner here and not the only one.
 There is no TEV generator, no alpha test, no blending and no per-draw depth
 state, so text quads come out as solid rectangles instead of glyphs. The
 logos are right; the rest is waiting on the shader generator.
+
+### F307 — the GPU path is 1.9x the software rasteriser, and the port is faster than real time again
+
+The measurement the whole of phase 3 was started for. Same run, same step
+budget, the only difference `MGS_GPU=1`:
+
+    software rasteriser   78s of sound produced in 107.9s real   = 72% of real time
+                          instantaneous -32% to -43% in the cinematic
+    SDL3 GPU             116s of sound produced in  85.6s real   = 136% of real time
+                          instantaneous +36% to +42%
+
+**A 1.9x swing, and it crosses real time.** The software path was 27% slower
+than real time overall and dipped to -43% in the heavy cinematic, which is
+what starved the audio device. The GPU path is 35% faster than real time
+overall and never goes below +36% in the same scene.
+
+That is with the GPU doing only the filling - the transform, the clipping,
+the vertex decode, the TEV state and the texture DECODE all still run on the
+CPU exactly as before, and a full-resolution readback happens 9,232 times.
+The headroom is not the interesting part; the interesting part is that the
+work the CPU rasteriser could not do at all is now nearly free.
+
+**What this does not mean.** The picture is not correct yet - text quads are
+solid rectangles because there is no TEV generator, no alpha test and no
+blending. Faster and wrong is still wrong. But the performance question that
+forced the decision is answered, and answered by a wide enough margin that
+the remaining work can be judged on correctness alone.
