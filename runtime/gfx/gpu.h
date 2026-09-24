@@ -58,13 +58,36 @@ typedef struct MgsGpuVertex {
     float    u, v;
 } MgsGpuVertex;
 
-/* Draw a triangle list into the colour target. `tex` is RGBA8 in the host's
+/* Draw a triangle list into the colour target. `tex` is ARGB in the host's
  * layout, or NULL for untextured, in which case a 1x1 white texel stands in
  * so one pipeline covers both. */
 int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
                  const uint32_t* tex, unsigned tex_w, unsigned tex_h);
 
+/* ---- batching ----------------------------------------------------------
+ *
+ * A draw call per triangle would be far slower than the software rasteriser
+ * it is replacing - this game submits twelve million a run. Triangles are
+ * gathered while the texture stays the same and drawn in one call when it
+ * changes, when the batch fills, or when the frame ends.
+ *
+ * `key` identifies the texture's CONTENTS, so the same art bound twice is
+ * uploaded once. Zero means untextured. */
+void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
+                       const MgsGpuVertex* c,
+                       const uint32_t* tex, unsigned tex_w, unsigned tex_h,
+                       uint64_t key);
+
+/* Draw whatever is gathered. Called when the state changes and before the
+ * embedded buffer is read. */
+void mgs_gpu_batch_flush(void);
+
+/* Clear the colour target, for the copy that clears. */
+void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear);
+
 /* Counters for the exit report. */
 void mgs_gpu_stats(uint64_t* frames, uint64_t* readbacks, uint64_t* bytes);
+void mgs_gpu_batch_stats(uint64_t* tris, uint64_t* flushes,
+                         uint64_t* uploads, uint64_t* cache_hits);
 
 #endif

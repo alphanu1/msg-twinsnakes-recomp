@@ -1,6 +1,7 @@
 #include "raster.h"
 #include "platform/jobs.h"
 #include "fifo.h"
+#include "gfx/gpu.h"
 
 #include <time.h>
 #include <stdio.h>
@@ -56,6 +57,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->note_pixels = getenv("MGS_TRACE_CENV") != NULL;
     r->trace_behind = getenv("MGS_TRACE_BEHIND") != NULL;
     r->time_raster = getenv("MGS_TRACE_RASTERTIME") != NULL;
+    r->gpu = 0;   /* set by the host once the device is up */
     /* The diagnostics added while chasing the video faults, read ONCE like
      * everything else here. Called per draw they were thousands of string
      * lookups a frame, which is a measurable cost to leave behind in a
@@ -1767,6 +1769,54 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     mgs_tev_compile(&gx->bp, &tev);
 
     /* The weights' setup, done once instead of once per pixel. */
+    /* THE GPU PATH, when one is up.
+     *
+     * The transform stays here - `transform`, `project` and `to_screen` are
+     * verified against Dolphin and against the game's own numbers - and
+     * only the FILLING goes to the GPU. Screen pixels are turned back into
+     * clip space by the inverse of the mapping just applied, multiplied by
+     * w, so the GPU's own divide reproduces exactly the same position AND
+     * perspective correction is preserved. Passing screen coordinates with
+     * w = 1 would be simpler and would make every texture swim.
+     *
+     * Depth goes through as 0..1, which is what SDL's GPU expects and what
+     * `to_screen` already produces.
+     *
+     * The colour is the rasterised vertex colour and the texture is stage
+     * 0's. That is the base shader's model, not the combiner's: a full
+     * TEV-to-shader generator is the next piece, and until it exists the
+     * GPU path is checkable but not correct for multi-stage draws. */
+    if (r->gpu) {
+        MgsGpuVertex gv[3];
+        unsigned k;
+        float tw = (float)r->width, th = (float)r->height;
+        for (k = 0; k < 3u; ++k) {
+            float w1 = (iw[k] != 0.0f) ? 1.0f / iw[k] : 1.0f;
+            float ndx = (sx[k] / tw) * 2.0f - 1.0f;
+            /* SDL's GPU normalised device space has +1 at the TOP, so a
+             * screen row counted downwards is negated here. Measured, not
+             * assumed: the first version mapped it straight through and
+             * every logo came out upside down. */
+            float ndy = 1.0f - (sy[k] / th) * 2.0f;
+            uint32_t col = vin[k]->color[0];
+            gv[k].x = ndx * w1;
+            gv[k].y = ndy * w1;
+            gv[k].z = sz[k] * w1;
+            gv[k].w = w1;
+            gv[k].r = (float)((col >> 16) & 0xFFu) / 255.0f;
+            gv[k].g = (float)((col >> 8) & 0xFFu) / 255.0f;
+            gv[k].b = (float)(col & 0xFFu) / 255.0f;
+            gv[k].a = (float)((col >> 24) & 0xFFu) / 255.0f;
+            gv[k].u = tex ? vin[k]->u[tex_coord] : 0.0f;
+            gv[k].v = tex ? vin[k]->v[tex_coord] : 0.0f;
+        }
+        mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2],
+                          tex ? tex->texels : NULL,
+                          tex ? tex->width : 0u, tex ? tex->height : 0u,
+                          tex ? tex->hash : 0ull);
+        return;
+    }
+
     {
         RasterSpan sp;
         sp.gx = gx; sp.r = r;

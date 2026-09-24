@@ -13079,3 +13079,52 @@ named it in one line. Turn it on FIRST.
 command buffer and submitted it before the draw's. That is not the
 documented pattern and the texture sampled as zero. Upload and draw now
 share one command buffer, with a copy pass then a render pass.
+
+### F306 — the game renders through the GPU, and two frames are byte-identical to the software path
+
+`MGS_GPU=1` turns it on. The CPU rasteriser keeps the transform - it is
+verified against Dolphin and against the game's own numbers - and only the
+FILLING moves:
+
+    GPU: 12,013,042 triangles in 17,164 batches (700 per batch),
+         7,356 texture uploads, 9,808 cache hits, 9,232 readbacks
+
+**How the two paths are compared, which is the whole point of the readback.**
+Same run, same frames, one with `MGS_GPU=1` and one without:
+
+    frame 0000   differs   4,921 of 98,304 sampled   mean |diff| 2.31
+    frame 0012   differs   4,024 of 98,304           mean |diff| 0.85
+    frame 0024   IDENTICAL          0                            0
+    frame 0036   IDENTICAL          0                            0
+
+Two frames byte-identical means the whole chain - transform, clip space,
+the GPU's own divide and viewport, the texture sample, the readback and the
+channel order - is exact for those. The two that differ are logo edges,
+where the software rasteriser's fill rule and the GPU's disagree by a pixel.
+
+**Screen coordinates go back to CLIP space, not through as they are.** The
+inverse of `to_screen` is applied and the result multiplied by w, so the
+GPU's divide reproduces the same position and perspective correction
+survives. Passing screen coordinates with w = 1 is simpler and makes every
+texture swim.
+
+**Three things that were wrong and what they looked like:**
+
+- *The flag was wiped by an init that ran after it.* The host set
+  `raster->gpu` before `mgs_display_init`, and `mgs_raster_init` zeroes the
+  structure - so the GPU device came up, announced itself, and the CPU path
+  kept running. Exactly the shape of F287b. It is now set at the END of
+  `mgs_display_init` from `mgs_gpu_ready()`, where nothing can run after it.
+- *SDL's normalised device space has +1 at the TOP.* Mapping a downward
+  screen row straight through drew every logo upside down.
+- *No depth test.* The pipeline was created without a depth target, so the
+  last triangle drawn won every pixel and a 3D scene came out as a flat
+  mess. LESS-OR-EQUAL is the power-on state and what this game asks for on
+  almost every draw; honouring ZMODE per draw needs one pipeline per state
+  and belongs with the shader generator.
+
+**What it does NOT do yet, and it shows.** The base shader is the rasterised
+colour times one texture - the commonest combiner here and not the only one.
+There is no TEV generator, no alpha test, no blending and no per-draw depth
+state, so text quads come out as solid rectangles instead of glyphs. The
+logos are right; the rest is waiting on the shader generator.

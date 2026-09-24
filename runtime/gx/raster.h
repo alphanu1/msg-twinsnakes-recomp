@@ -95,6 +95,7 @@ typedef struct MgsGxRaster {
     uint64_t  behind_mag[16]; /* how far behind the eye a rejected tri is */
     uint64_t  behind_zero_matrix;   /* ...with an all-zero position matrix */
     int       trace_behind; unsigned behind_shown;
+    int       gpu;            /* MGS_GPU=1: fill on the GPU, not here */
     int       time_raster;
     uint64_t  ns_serial, ns_banded, tris_serial, tris_banded, bands_total;
     uint64_t  behind_mtx[8];        /* ...by matrix index, in groups of 8 */

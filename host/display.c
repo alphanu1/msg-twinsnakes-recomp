@@ -25,6 +25,8 @@
 
 #include <time.h>
 
+#include "gfx/gpu.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +74,10 @@ const MgsGx* mgs_display_gx(void) { return &s_gx; }
 
 const MgsGxRaster* mgs_display_raster(void);
 const MgsGxRaster* mgs_display_raster(void) { return &s_raster; }
+/* The mutable one, for the host to turn the GPU path on. Kept separate so
+ * every other caller stays read-only by construction. */
+MgsGxRaster* mgs_display_raster_mut(void);
+MgsGxRaster* mgs_display_raster_mut(void) { return &s_raster; }
 
 /* The pool is owned by main, the rasteriser lives here. */
 /* REMEMBERED, NOT APPLIED IMMEDIATELY.
@@ -217,6 +223,15 @@ void mgs_display_init(GuestMemory* mem)
     s_gx.abandon = raster_abandon;
     s_gx.triangle = mgs_raster_triangle;
     s_gx.user = &s_raster;
+    /* THE GPU FLAG IS SET HERE, AT THE END OF INIT, and not by the caller.
+     *
+     * mgs_raster_init zeroes the whole structure, so a host that turned the
+     * GPU on BEFORE this ran had its flag wiped and silently kept the CPU
+     * path - which is exactly how the copy callback was lost for four
+     * commits (F287b). Setting it where nothing can run after it removes
+     * the ordering question rather than documenting it. */
+    s_raster.gpu = mgs_gpu_ready();
+
     mgs_mmio_set_fifo_sink(mgs_host_mmio(), fifo_sink, NULL);
 }
 
@@ -285,6 +300,23 @@ void mgs_display_set_best_path(const char* p) { s_best_path = p; }
  * 600 KB of framebuffer over whatever it points at. */
 static void run_copy(uint32_t cmd)
 {
+    /* BRING THE GPU'S WORK BACK BEFORE ANYTHING LOOKS AT THE BUFFER.
+     *
+     * Every diagnostic below, the copy to a texture, the copy to the
+     * framebuffer and the presentation all read `s_efb.pixels`. With the
+     * GPU filling triangles, that buffer is stale until the batch is drawn
+     * and read back - so it happens here, first, once per copy rather than
+     * once per triangle.
+     *
+     * A readback per copy is roughly 25 a second and it is what keeps the
+     * whole downstream path working untouched while the renderer is built.
+     * It is also what makes the GPU comparable with the software rasteriser
+     * pixel for pixel, which is the point. */
+    if (mgs_gpu_ready()) {
+        mgs_gpu_batch_flush();
+        mgs_gpu_read_back(s_efb.pixels, MGS_EFB_WIDTH, MGS_EFB_HEIGHT,
+                          MGS_EFB_WIDTH);
+    }
     {
         uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);
         uint32_t gb = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_GB);
@@ -606,6 +638,13 @@ static void run_copy(uint32_t cmd)
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
+                /* The clear has to reach the GPU's target too, or the next
+                 * frame draws on top of the last one there while the host
+                 * buffer starts empty - which looks like the geometry
+                 * accumulating. */
+                if (mgs_gpu_ready())
+                    mgs_gpu_begin_frame(s_efb.clear_argb,
+                                        (cmd & COPY_CLEAR) != 0);
             } else if (!getenv("MGS_NO_RTT")) {
                 /* A TEXTURE COPY, BUT NOT OVER THE SCREEN.
                  *

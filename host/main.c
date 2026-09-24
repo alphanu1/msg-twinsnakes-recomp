@@ -15,6 +15,7 @@
 #include "os/patch_table.h"
 #include "platform/jobs.h"
 #include "module.h"
+#include "gfx/gpu.h"
 #include "../runtime/platform/sdl_audio.h"
 #include "platform/sdl_video.h"
 #include "platform/mmio.h"
@@ -34,6 +35,7 @@ uint64_t mgs_dvd_errors(void);
 const MgsEfb* mgs_display_efb(void);
 const MgsGx* mgs_display_gx(void);
 const MgsGxRaster* mgs_display_raster(void);
+MgsGxRaster* mgs_display_raster_mut(void);
 
 void mgs_card_service(const MgsModule* mod, void* cpu);
 
@@ -1445,6 +1447,29 @@ int main(int argc, char** argv)
      * opens nothing by default, so batch runs stay silent. */
     if (!headless || getenv("MGS_AUDIO")) mgs_audio_open(32000u);
 
+    /* MGS_GPU=1 fills triangles on the GPU instead of the CPU.
+     *
+     * Off by default while the TEV-to-shader generator does not exist: the
+     * base shader is the rasterised colour times one texture, which is the
+     * commonest combiner in this game and not the only one, so the GPU path
+     * is checkable but not yet correct for multi-stage draws. The software
+     * rasteriser stays the reference.
+     *
+     * SDL_VIDEODRIVER=dummy has no GPU backend at all, so a headless run
+     * silently keeps the CPU path - which is right, and worth knowing
+     * before reading a headless measurement as if it exercised this. */
+    if (getenv("MGS_GPU")) {
+        if (mgs_gpu_init(MGS_EFB_WIDTH, MGS_EFB_HEIGHT)) {
+            /* mgs_display_init reads mgs_gpu_ready() and sets the flag
+             * itself, after mgs_raster_init has zeroed everything. */
+            printf("renderer: SDL3 GPU (%s), the CPU rasteriser is idle\n",
+                   mgs_gpu_driver() ? mgs_gpu_driver() : "?");
+        } else {
+            printf("renderer: MGS_GPU asked for, but no device; "
+                   "keeping the software rasteriser\n");
+        }
+    }
+
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");
     overlay_line("WORKERS: %u THREADS", mgs_jobs_worker_count(jobs));
 
@@ -2162,6 +2187,21 @@ int main(int argc, char** argv)
                                    rr->tris_banded
                                        ? (double)rr->bands_total /
                                          (double)rr->tris_banded : 0.0);
+                        }
+                        if (mgs_gpu_ready()) {
+                            uint64_t tris = 0, fl = 0, up = 0, hit = 0;
+                            uint64_t fr = 0, rb = 0, by = 0;
+                            mgs_gpu_batch_stats(&tris, &fl, &up, &hit);
+                            mgs_gpu_stats(&fr, &rb, &by);
+                            printf("GPU: %llu triangles in %llu batches "
+                                   "(%.0f per batch), %llu texture uploads, "
+                                   "%llu cache hits, %llu readbacks\n",
+                                   (unsigned long long)tris,
+                                   (unsigned long long)fl,
+                                   fl ? (double)tris / (double)fl : 0.0,
+                                   (unsigned long long)up,
+                                   (unsigned long long)hit,
+                                   (unsigned long long)rb);
                         }
                         printf("GX draw-done: %llu offers, %llu delivered, "
                                "%llu acknowledged by the guest's handler\n",
