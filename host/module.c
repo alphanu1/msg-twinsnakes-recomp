@@ -960,9 +960,20 @@ static unsigned mgs_tick_rate(void)
  * every device deadline fire at their real rate, and a faster machine makes
  * the game run better rather than making no difference at all.
  *
- * MGS_SPEED scales it - 2.0 runs the game at double speed, 0 lets guest
- * time advance as fast as the loop can run it, which is the "no limit at
- * all" case.
+ * MGS_SPEED scales it: 2.0 runs the game at double speed.
+ *
+ * THERE IS NO "ADVANCE GUEST TIME AS FAST AS POSSIBLE" SETTING, and the
+ * reason is worth writing down because it is counter-intuitive and I built
+ * one before working it out. Guest time advancing FASTER does not give the
+ * game more CPU - it gives it less. The rate of guest time decides how many
+ * video fields pass per unit of host work, so running it fast means fields
+ * arrive before the game has finished drawing, and the game is starved. A
+ * first version of this had MGS_SPEED=0 advance at the catch-up bound and
+ * the game produced no frames at all in four minutes.
+ *
+ * Real time IS the answer: a field every 20 ms of wall clock, and the guest
+ * getting every cycle the host can give it in between. Uncapping the
+ * PRESENTATION is a separate and real knob - MGS_FPS_CAP=0.
  *
  * MGS_GUEST_CLOCK=steps restores the old step-driven advance. That is not
  * nostalgia: the Dolphin comparison harness needs two runs of ours to be
@@ -988,7 +999,9 @@ static double mgs_speed(void)
     if (sp < 0.0) {
         const char* e = getenv("MGS_SPEED");
         sp = (e && *e) ? strtod(e, NULL) : 1.0;
-        if (sp < 0.0) sp = 0.0;
+        /* Zero would stop guest time dead. See the note above: it is not a
+         * meaningful setting, so it is refused rather than obeyed. */
+        if (sp <= 0.0) sp = 1.0;
     }
     return sp;
 }
@@ -1643,20 +1656,6 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         if (wall_clock) {
             if (++tick_batch >= 64u) {
                 uint64_t delta;
-                if (mgs_speed() == 0.0) {
-                    /* NO LIMIT AT ALL. Guest time advances at the catch-up
-                     * bound every batch, so the guest is never waiting on a
-                     * clock and the game renders as fast as the host can
-                     * carry it. Multiplying real time by zero would have
-                     * FROZEN guest time instead, which is the opposite of
-                     * what the flag says. */
-                    delta = 81000ull;
-                    gt += delta;
-                    mgs_runtime_advance_ticks(rt, delta);
-                    mgs_mmio_advance_ticks(mmio_p, (uint32_t)delta);
-                    tick_batch = 0;
-                    goto ticks_done;
-                }
                 {
                 uint64_t now_t = mgs_wall_ticks();
                 delta = now_t > gt_wall ? now_t - gt_wall : 0ull;
@@ -1673,7 +1672,6 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
                 tick_batch = 0;
                 }
             }
-          ticks_done: ;
         } else {
             pending_ticks += tick_rate;
             if (++tick_batch >= 16u) {

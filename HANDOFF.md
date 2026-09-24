@@ -14265,10 +14265,20 @@ shape: the maximum is now the real field rate instead of 88 fps of running
 too fast, the heavy scene holds a steady 24.8 instead of swinging 12 to 24,
 and the worst case improved 18%.
 
-**A bug in the first version, caught before it shipped:** `MGS_SPEED=0`
-multiplied real time by zero and would have FROZEN guest time - the exact
-opposite of the "no limit" the flag promises. It now advances at the
-catch-up bound instead.
+**THE "NO LIMIT" FLAG WAS INCOHERENT AND IS GONE**, which is worth more than
+the flag was. `MGS_SPEED=0` first multiplied real time by zero, freezing
+guest time; the fix made it advance at the catch-up bound instead, and THAT
+produced **no frames at all in four minutes**.
+
+Working out why is the useful part. Guest time advancing faster does not
+give the game more CPU - it gives it less. The rate of guest time decides
+how many video FIELDS pass per unit of host work, so running it fast means
+fields arrive before the game has finished drawing and the game is starved.
+That is the same mechanism as the tick sweep, seen from the other end.
+
+Real time is the answer: a field every 20 ms of wall clock, and the guest
+getting every cycle the host can give it in between. `MGS_SPEED` now refuses
+zero. Uncapping the PRESENTATION is a separate and real knob, `MGS_FPS_CAP=0`.
 
 ### F329 — after the texture hash, there is no hotspot left: it is the recompiled code
 
