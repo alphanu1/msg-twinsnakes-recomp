@@ -12972,3 +12972,63 @@ a stopgap for phases 1-2 rather than the answer.
 cores of thirty-two, with the split inside a triangle rather than across
 triangles. Batching triangles and banding the whole batch would use the
 machine; it is a larger change than tonight had room for.
+
+### F304 — phase 3 started: the SDL3 GPU device is up, and the readback is the method
+
+Ben's call, on the evidence: "2c is working right. audio is running. sound
+and voices. I think we need to get SDL3 gpu running." Recorded as a decision
+rather than a measurement - phase 2c's written exit criterion (matched
+against Dolphin within tolerance) was NOT met and is not being claimed.
+
+**Why it became urgent.** F302 fixed the vertex arrays, so the game now
+draws what it should: 2.36 billion pixels a run against 1.37 billion. The
+software rasteriser cannot keep up - 40% slower than real time in the
+cinematic - and the way that presents is the AUDIO starving, because the
+guest clock and the audio clock are the same clock.
+
+Ben put it plainly: 32 cores at 5.08 GHz against a 486 MHz Gekko and a
+162 MHz Flipper, and we are not using the GPU at all. Both halves are true.
+The design document said so first:
+
+> "It was fast enough for menus and far too slow for the intro movie -
+> 13.5 Mpx/s, about 320 cycles a pixel... A CPU rasteriser will not render
+> the Dock and the Heliport at native resolution. It buys time until the
+> Vulkan backend exists."
+
+**And a measurement that matters for whatever comes next.** The guest thread
+spends **47.8 s of a 110 s run inside the rasteriser** - 13.88 s serial over
+11,586,854 small triangles and 33.91 s banded over 426,188 large ones - at
+only **6.2 bands each**, not the 31 the pool could give. Rasterisation
+happens inside the guest's dispatch call and the band barrier is on the
+guest thread, so that is time the guest is not running. Whatever draws the
+pixels, this is the shape of the problem: the work is synchronous with the
+guest and poorly parallel.
+
+**What exists now.** `runtime/gfx/gpu.c`: an SDL3 GPU device (SPIR-V, SDL
+picks the backend - vulkan here), a 640x528 colour target and a depth
+target, and a **fenced readback** into the embedded buffer's ARGB layout.
+
+**The readback is the method, not a stopgap.** It keeps the existing copy,
+framebuffer and presentation path working untouched while the renderer is
+built underneath, and it makes every step comparable with the software
+rasteriser pixel for pixel - which is the only way to tell a shader bug from
+a state bug. `tests/test_gpu.c` covers it: a clear whose four channels are
+all distinct (so a swizzle cannot pass by accident), a second clear that
+must replace the first, and a stride wider than the region, because the
+embedded buffer is 640 wide and copies out a 512-wide box.
+
+**Two things worth knowing before the next session:**
+
+- The GPU API needs `SDL_INIT_VIDEO` even with no window. It does not need
+  a window, which is what lets a headless run render and read back.
+- `SDL_VIDEODRIVER=dummy` has **no GPU backend at all** - "No supported
+  SDL_GPU backend found". Every headless measurement in this file was taken
+  with the dummy driver, so none of them can exercise the GPU path. The test
+  SKIPS rather than fails there, which is right, but it means a green test
+  run does not mean the GPU path ran.
+
+**Still open and unstarted:** the vertex converter, the TEV-to-shader
+generator (shaderc is installed and is the right tool - shaders are
+generated from TEV state and cached by hash, as the design document
+describes), texture upload, GPU-side EFB copies, and the frame comparison
+against Dolphin that is the real exit criterion.

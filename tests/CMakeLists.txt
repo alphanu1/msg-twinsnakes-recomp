@@ -49,6 +49,10 @@ add_executable(test_gx test_gx.c)
 target_link_libraries(test_gx PRIVATE mgs_runtime)
 add_test(NAME gx COMMAND test_gx)
 
+add_executable(test_gpu test_gpu.c)
+target_link_libraries(test_gpu PRIVATE mgs_runtime)
+add_test(NAME gpu COMMAND test_gpu)
+
 add_executable(test_tev test_tev.c)
 target_link_libraries(test_tev PRIVATE mgs_runtime)
 add_test(NAME tev COMMAND test_tev)

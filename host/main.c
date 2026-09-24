@@ -2148,6 +2148,21 @@ int main(int argc, char** argv)
                                        (unsigned long long)cy,
                                        (double)cy / (double)dc);
                         }
+                        if (mgs_display_raster() &&
+                            mgs_display_raster()->time_raster) {
+                            const MgsGxRaster* rr = mgs_display_raster();
+                            printf("raster time ON THE GUEST THREAD: "
+                                   "%.2fs serial over %llu triangles, "
+                                   "%.2fs banded over %llu triangles "
+                                   "(%.1f bands each)\n",
+                                   (double)rr->ns_serial / 1e9,
+                                   (unsigned long long)rr->tris_serial,
+                                   (double)rr->ns_banded / 1e9,
+                                   (unsigned long long)rr->tris_banded,
+                                   rr->tris_banded
+                                       ? (double)rr->bands_total /
+                                         (double)rr->tris_banded : 0.0);
+                        }
                         printf("GX draw-done: %llu offers, %llu delivered, "
                                "%llu acknowledged by the guest's handler\n",
                                (unsigned long long)mgs_interrupt_pe_seen(),

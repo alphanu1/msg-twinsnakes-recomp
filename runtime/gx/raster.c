@@ -2,6 +2,7 @@
 #include "platform/jobs.h"
 #include "fifo.h"
 
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +55,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->trace_texuse = getenv("MGS_TRACE_TEXUSE") != NULL;
     r->note_pixels = getenv("MGS_TRACE_CENV") != NULL;
     r->trace_behind = getenv("MGS_TRACE_BEHIND") != NULL;
+    r->time_raster = getenv("MGS_TRACE_RASTERTIME") != NULL;
     /* The diagnostics added while chasing the video faults, read ONCE like
      * everything else here. Called per draw they were thousands of string
      * lookups a frame, which is a measurable cost to leave behind in a
@@ -789,12 +791,28 @@ static void tally_add(MgsRasterTally* dst, const MgsRasterTally* src)
 /* Below this many rows the job overhead dominates and the split loses. */
 #define RASTER_BAND_MIN_ROWS 8
 
+/* MGS_TRACE_RASTERTIME: how long the GUEST THREAD spends in here.
+ *
+ * The machine has 32 cores and the renderer uses three and a half, and
+ * there are two very different reasons that could be: the rasteriser is
+ * slow and serial, or the rasteriser is fine and the guest is the
+ * bottleneck. Rasterisation happens INSIDE the guest's dispatch call and
+ * the band barrier is on the guest thread, so the time spent here is time
+ * the guest is not running - which is the number that decides it. */
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 static void raster_dispatch(MgsGxRaster* r, const RasterSpan* sp, int y0, int y1)
 {
     RasterBand band[64];
     MgsRasterTally total;
     unsigned n, i;
     int rows = y1 - y0;
+    uint64_t t_in = r->time_raster ? now_ns() : 0;
 
     memset(&total, 0, sizeof total);
 
@@ -804,6 +822,10 @@ static void raster_dispatch(MgsGxRaster* r, const RasterSpan* sp, int y0, int y1
     if (!r->jobs || n < 2u) {
         raster_span(sp, y0, y1, &total);
         tally_fold(r, &total);
+        if (r->time_raster) {
+            r->ns_serial += now_ns() - t_in;
+            ++r->tris_serial;
+        }
         return;
     }
 
@@ -827,6 +849,11 @@ static void raster_dispatch(MgsGxRaster* r, const RasterSpan* sp, int y0, int y1
 
     for (i = 0; i < n; ++i) tally_add(&total, &band[i].t);
     tally_fold(r, &total);
+    if (r->time_raster) {
+        r->ns_banded += now_ns() - t_in;
+        ++r->tris_banded;
+        r->bands_total += n;
+    }
 }
 
 void mgs_raster_set_jobs(MgsGxRaster* r, void* pool)

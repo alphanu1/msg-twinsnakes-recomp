@@ -18,6 +18,7 @@ add_library(mgs_runtime STATIC
   gx/bp.c
   gx/texture.c
   gx/tev.c
+  gfx/gpu.c
   os/os_thread.c
   os/cpu_seam.c
   os/ppc_shims.c
