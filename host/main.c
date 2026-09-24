@@ -439,9 +439,40 @@ static void frame_pump(void)
      * Masking off the low twelve bits collapses the two field addresses of
      * one buffer to one value, so a flip between BUFFERS still presents and
      * a flip between FIELDS does not. */
-    copies = mgs_display_efb()->xfb_copies
-           ^ ((uint64_t)(mgs_mmio_xfb_address(mgs_host_mmio())
-                         & ~0xFFFu) << 32);
+    /* A FINISHED FRAME, AND WHAT COUNTS AS ONE DEPENDS ON WHO DREW IT.
+     *
+     * When GX draws, the copy to the external framebuffer IS the frame
+     * being finished - `GXCopyDisp` is the last thing the game does with
+     * it. Presenting on anything else presents a frame in progress: Ben,
+     * watching the cutscene, "it drops to 25 when the video starts, which
+     * starts with a black screen - as soon as it starts rendering
+     * triangles it goes straight back up to 40/50, seems it's drawing extra
+     * frames." Exactly so, because while triangles are going in the buffer
+     * changes continuously and anything that watches the buffer fires every
+     * field.
+     *
+     * When the VIDEO DECODER draws there is no copy at all - it writes the
+     * framebuffer directly - so there the only signal is the picture
+     * itself, and mgs_display_present's fingerprint provides it.
+     *
+     * So: a copy is authoritative when copies are happening, and the
+     * address is only consulted when they are not. */
+    {
+        static uint64_t last_copy_at;
+        uint64_t now_copies = mgs_display_efb()->xfb_copies;
+        if (now_copies != last_copy_at) {
+            last_copy_at = now_copies;
+            copies = now_copies;                 /* GX finished a frame */
+        } else {
+            /* No copy since the last present: either nothing has been
+             * drawn, or the decoder is writing the framebuffer itself.
+             * Let the address flip offer a frame and let the fingerprint
+             * in mgs_display_present decide whether it is a new one. */
+            copies = now_copies
+                   ^ ((uint64_t)(mgs_mmio_xfb_address(mgs_host_mmio())
+                                 & ~0xFFFu) << 32);
+        }
+    }
     if (copies == shown) return;
     /* The frame cap lives here now, as a question rather than a sleep: a
      * present we skip costs nothing, where a sleep on this thread stops the
