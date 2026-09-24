@@ -63,6 +63,25 @@ static MgsGxRaster s_raster;
 /* Frame pacing. 0 means uncapped, which is what a headless run wants. */
 static unsigned  s_fps_cap;
 static long long s_next_frame_ns;
+static int       s_frame_timing = -1;
+/* Nanoseconds, accumulated between reports. `guest` is what is left over
+ * once the measured pieces are taken out of the wall clock, which is the
+ * only honest way to name it: it is everything this file does not time. */
+static long long s_t_readback, s_t_copy, s_t_present, s_t_cap, s_t_last;
+static unsigned  s_t_frames;
+
+void mgs_display_add_present_ns(long long ns);
+void mgs_display_add_present_ns(long long ns)
+{
+    if (s_frame_timing > 0) s_t_present += ns;
+}
+
+static long long frame_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000ll + ts.tv_nsec;
+}
 static uint64_t s_presented;
 
 MgsEfb* mgs_display_efb(void);
@@ -314,6 +333,19 @@ static void run_copy(uint32_t cmd)
      * whole downstream path working untouched while the renderer is built.
      * It is also what makes the GPU comparable with the software rasteriser
      * pixel for pixel, which is the point. */
+    /* WHERE THE FRAME GOES, in the scene the person running it is actually
+     * looking at.
+     *
+     * Every performance number in this project so far has been measured on
+     * the intro movie, because a headless run cannot press Start - and the
+     * movie is light on geometry. Ben's 15 fps is a real-time 3D scene with
+     * the GPU at 15% and the CPU at 7%, which on 32 cores is about two
+     * cores: single-thread bound, not resource starved. A machine-wide
+     * percentage hides that, and so does a benchmark of the wrong scene.
+     *
+     * MGS_TIME_FRAME=1 prints a decomposition every 50 framebuffer copies,
+     * so the answer comes from the run that has the problem. */
+    if (s_frame_timing < 0) s_frame_timing = getenv("MGS_TIME_FRAME") != NULL;
     if (mgs_gpu_ready()) {
         /* ONLY THE RECTANGLE THIS COPY WILL READ.
          *
@@ -341,11 +373,13 @@ static void run_copy(uint32_t cmd)
         uint32_t box_tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
         uint32_t box_wh = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_WH);
         unsigned bx = box_tl & 0x3FFu, by = (box_tl >> 10) & 0x3FFu;
+        long long t0 = s_frame_timing ? frame_now_ns() : 0ll;
         mgs_gpu_batch_flush();
         mgs_gpu_read_back_rect(s_efb.pixels, 0u, 0u,
                                bx + (box_wh & 0x3FFu) + 1u,
                                by + ((box_wh >> 10) & 0x3FFu) + 1u,
                                MGS_EFB_WIDTH);
+        if (s_frame_timing) s_t_readback += frame_now_ns() - t0;
     }
     {
         uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);
@@ -502,6 +536,7 @@ static void run_copy(uint32_t cmd)
                         ts.tv_sec  = (time_t)(wait / 1000000000ll);
                         ts.tv_nsec = (long)(wait % 1000000000ll);
                         nanosleep(&ts, NULL);
+                        if (s_frame_timing) s_t_cap += wait;
                     }
                     s_next_frame_ns += period;
                 }
@@ -664,10 +699,35 @@ static void run_copy(uint32_t cmd)
              * buffer, often the scratch strip to the right of the visible
              * area, not the origin. */
             if (cmd & COPY_TO_XFB) {
+                long long tc = s_frame_timing ? frame_now_ns() : 0ll;
                 mgs_gx_order_note('F');
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
+                if (s_frame_timing) {
+                    s_t_copy += frame_now_ns() - tc;
+                    if (++s_t_frames >= 50u) {
+                        long long nowt = frame_now_ns();
+                        double span = (double)(nowt - s_t_last) / 1e6;
+                        double rb = (double)s_t_readback / 1e6;
+                        double cp = (double)s_t_copy / 1e6;
+                        double pr = (double)s_t_present / 1e6;
+                        double ca = (double)s_t_cap / 1e6;
+                        if (s_t_last)
+                            fprintf(stderr,
+                                "[frametime] %u frames in %7.1f ms "
+                                "(%5.1f fps): readback %6.1f, efb copy %6.1f,"
+                                " present %6.1f, fps-cap sleep %6.1f, "
+                                "everything else %6.1f ms\n",
+                                s_t_frames, span,
+                                span > 0.0 ? 1000.0 * s_t_frames / span : 0.0,
+                                rb, cp, pr, ca,
+                                span - rb - cp - pr - ca);
+                        s_t_last = nowt;
+                        s_t_readback = s_t_copy = s_t_present = s_t_cap = 0;
+                        s_t_frames = 0;
+                    }
+                }
                 /* A SNAPSHOT ANCHORED ON A FINISHED PICTURE.
                  *
                  * Taken AFTER the copy, because the point of counting

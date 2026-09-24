@@ -5,6 +5,7 @@
  * A window would only add a second unknown while the OS and DVD shims are
  * still being proven.
  */
+#include <time.h>
 #include "memory/guest.h"
 #include "dvd/disc.h"
 #include "dvd/disc_locate.h"
@@ -418,8 +419,22 @@ static void frame_pump(void)
     if (copies == shown) return;
     shown = copies;
 
-    if (mgs_display_present(mgs_host_mmio(), s_display_mem))
-        mgs_video_present();
+    {   /* The whole presentation step - YUV to RGB, the streaming texture
+         * upload, and SDL's present - timed as one, because from the guest
+         * thread's point of view it is one block of time it cannot spend
+         * running the game. Added to the same report as the readback and
+         * the copy; see MGS_TIME_FRAME in host/display.c. */
+        void mgs_display_add_present_ns(long long ns);
+        struct timespec a, b;
+        int drew;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        drew = mgs_display_present(mgs_host_mmio(), s_display_mem);
+        if (drew) mgs_video_present();
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        mgs_display_add_present_ns(
+            ((long long)b.tv_sec - a.tv_sec) * 1000000000ll
+            + (b.tv_nsec - a.tv_nsec));
+    }
 }
 
 
@@ -2282,6 +2297,23 @@ int main(int argc, char** argv)
                             uint64_t fr = 0, rb = 0, by = 0;
                             mgs_gpu_batch_stats(&tris, &fl, &up, &hit);
                             mgs_gpu_stats(&fr, &rb, &by);
+                            {
+                                void mgs_gpu_timing(uint64_t*, uint64_t*,
+                                                    uint64_t*, uint64_t*);
+                                uint64_t ns_s = 0, n_s = 0, ns_f = 0, n_f = 0;
+                                mgs_gpu_timing(&ns_s, &n_s, &ns_f, &n_f);
+                                if (n_s || n_f)
+                                    printf("GPU time: %llu submits costing "
+                                           "%.2f s (%.3f ms each), %llu "
+                                           "fenced readbacks costing %.2f s "
+                                           "(%.3f ms each)\n",
+                                        (unsigned long long)n_s,
+                                        (double)ns_s / 1e9,
+                                        n_s ? (double)ns_s / n_s / 1e6 : 0.0,
+                                        (unsigned long long)n_f,
+                                        (double)ns_f / 1e9,
+                                        n_f ? (double)ns_f / n_f / 1e6 : 0.0);
+                            }
                             printf("GPU: %llu triangles in %llu batches "
                                    "(%.0f per batch), %llu texture uploads, "
                                    "%llu cache hits, %llu readbacks "

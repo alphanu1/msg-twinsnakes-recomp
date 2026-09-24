@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static uint64_t s_frames, s_readbacks, s_bytes;
 
@@ -30,6 +31,29 @@ static SDL_GPUTextureFormat   s_depth_format;
 static SDL_GPUSampler* s_samplers[SAMPLER_SLOTS];
 
 static int                    s_tev_shader;  /* gxtev.frag, not gx.frag */
+
+/* WHERE THE FRAME ACTUALLY GOES, in nanoseconds.
+ *
+ * Ben's MangoHud shows 15 fps at 68 ms a frame with the GPU at 15% and the
+ * CPU at 7%: nothing is saturated, so the time is being spent WAITING. The
+ * readback's fence is the obvious suspect - and it is a suspect rather than
+ * a conclusion until the two halves are timed separately, because "obvious"
+ * has been wrong three times today. MGS_TIME_GPU=1. */
+static uint64_t s_ns_submit, s_ns_fence, s_ns_map, s_n_submit, s_n_fence;
+static int      s_time_gpu = -1;
+
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static int timing_on(void)
+{
+    if (s_time_gpu < 0) s_time_gpu = getenv("MGS_TIME_GPU") != NULL;
+    return s_time_gpu;
+}
 
 /* One pipeline per distinct state. There are only a handful in this game -
  * the histogram in the exit report shows two blend configurations and one
@@ -732,7 +756,11 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
         SDL_DrawGPUPrimitives(pass, count, 1, 0, 0);
         SDL_EndGPURenderPass(pass);
     }
-    SDL_SubmitGPUCommandBuffer(cmd);
+    {
+        uint64_t t0 = timing_on() ? now_ns() : 0ull;
+        SDL_SubmitGPUCommandBuffer(cmd);
+        if (timing_on()) { s_ns_submit += now_ns() - t0; ++s_n_submit; }
+    }
 
     /* The transfer buffers go; SDL keeps them alive until the command
      * buffer retires. The TEXTURE only goes when it was not cached - a
@@ -901,10 +929,14 @@ int mgs_gpu_read_back_rect(uint32_t* argb, unsigned rx, unsigned ry,
     /* A fence, not a guess. The download is on the GPU timeline and reading
      * the transfer buffer before it lands gives whatever was there before -
      * which would look exactly like a rendering bug. */
-    fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-    if (!fence) return 0;
-    SDL_WaitForGPUFences(s_dev, true, &fence, 1);
-    SDL_ReleaseGPUFence(s_dev, fence);
+    {
+        uint64_t t0 = timing_on() ? now_ns() : 0ull;
+        fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+        if (!fence) return 0;
+        SDL_WaitForGPUFences(s_dev, true, &fence, 1);
+        SDL_ReleaseGPUFence(s_dev, fence);
+        if (timing_on()) { s_ns_fence += now_ns() - t0; ++s_n_fence; }
+    }
 
     mapped = (const uint8_t*)SDL_MapGPUTransferBuffer(s_dev, s_readback, false);
     if (!mapped) return 0;
@@ -961,6 +993,17 @@ void mgs_gpu_batch_stats(uint64_t* tris, uint64_t* flushes,
     if (tris) *tris = 0; if (flushes) *flushes = 0;
     if (uploads) *uploads = 0; if (cache_hits) *cache_hits = 0;
 #endif
+}
+
+void mgs_gpu_timing(uint64_t* ns_submit, uint64_t* n_submit,
+                    uint64_t* ns_fence, uint64_t* n_fence);
+void mgs_gpu_timing(uint64_t* ns_submit, uint64_t* n_submit,
+                    uint64_t* ns_fence, uint64_t* n_fence)
+{
+    if (ns_submit) *ns_submit = s_ns_submit;
+    if (n_submit)  *n_submit  = s_n_submit;
+    if (ns_fence)  *ns_fence  = s_ns_fence;
+    if (n_fence)   *n_fence   = s_n_fence;
 }
 
 void mgs_gpu_stats(uint64_t* frames, uint64_t* readbacks, uint64_t* bytes)
