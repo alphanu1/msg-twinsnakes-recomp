@@ -1424,8 +1424,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       src-alpha.
 - [ ] **Indirect textures, lighting and fog** — configured by
       registers this reads but does not yet act on.
-- [ ] **Near-plane clipping** — a triangle straddling the camera is currently
-      dropped whole rather than split.
+- [x] **Near-plane clipping** — at GX's own near plane, z + w >= 0 (F347),
+      in one clip whether or not a vertex is behind the eye (F357). A
+      triangle running past the camera used to be cut at the eye and its
+      pieces then refused whole, which is how floors and walls beside the
+      camera vanished. `tests/test_gx.c` builds that triangle.
 - [ ] **Indirect texturing is CONFIRMED USED**, not hypothetical — the engine
       calls `GXSetTevIndirect`, `GXSetIndTexMtx`, `GXSetIndTexOrder`,
       `GXSetIndTexCoordScale` and `GXSetNumIndStages`. The design document

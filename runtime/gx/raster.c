@@ -1236,11 +1236,34 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             }
             return;
         }
-        if ((behind || before_near) && depth >= 1) { ++r->clipped; return; }
-        if (!behind && before_near) {
-            /* Crossing the near plane but entirely in front of the eye:
-             * clip against z + w >= 0. The distance is linear across the
-             * triangle, so the crossing point interpolates the vertex. */
+        /* A PIECE THIS CLIP PRODUCED. Its new vertices sit on z + w = 0 in
+         * exact arithmetic and a rounding either side of it in floats; one
+         * that lands a hair outside is still in front of the eye and is
+         * drawn, its depth clamped to the nearest value as the hardware
+         * clamps it. Only a vertex that is genuinely behind the eye is
+         * refused, and that means the arithmetic disagreed with itself. */
+        if (depth >= 1) {
+            if (behind) { ++r->clipped; ++r->near_plane_refused; return; }
+            before_near = 0u;
+        }
+        if (before_near) {
+            /* ONE CLIP, AGAINST THE NEAR PLANE, WHETHER OR NOT A VERTEX IS
+             * BEHIND THE EYE.
+             *
+             * This used to be two: a vertex behind the eye was cut at
+             * w = 0.001 first, and the pieces went round again. Every piece
+             * still had corners between the eye and the near plane - that
+             * is where a cut at the eye puts them - and the second round
+             * refused anything with such a corner, whole. So a floor or a
+             * wall that ran past the camera, the largest triangles in any
+             * room, vanished outright instead of being trimmed at the near
+             * plane. Ben saw it as the camera clipping into the scene.
+             *
+             * Behind the eye is always outside the near plane for a
+             * perspective projection (w < 0 makes z + w negative), so this
+             * one plane covers both: what it keeps has w >= near > 0. The
+             * distance z + w is linear across the triangle, so the crossing
+             * point interpolates the vertex. */
             MgsGxVertex poly[4];
             unsigned n = 0u;
             for (i = 0; i < 3u; ++i) {

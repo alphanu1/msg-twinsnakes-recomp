@@ -2443,9 +2443,11 @@ int main(int argc, char** argv)
                                 }
                                 printf("near plane: %llu triangles wholly "
                                        "in front of it rejected, %llu "
-                                       "crossing it clipped\n",
+                                       "crossing it clipped, %llu pieces "
+                                       "refused\n",
                                        (unsigned long long)rs->near_plane_rejected,
-                                       (unsigned long long)rs->near_plane_clipped);
+                                       (unsigned long long)rs->near_plane_clipped,
+                                       (unsigned long long)rs->near_plane_refused);
                                 printf("culled: mode 1 %llu, mode 2 %llu, "
                                        "all %llu\n",
                                        (unsigned long long)rs->culled[1],

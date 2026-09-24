@@ -459,6 +459,64 @@ int main(void)
         for (n = 0; n < 8u; ++n) gx.xf_texgen[n] = (5u + n) << 7;
     }
 
+    /* --- A TRIANGLE THAT RUNS PAST THE CAMERA ---------------------------
+     *
+     * One corner in front, two behind the eye: a floor or a wall beside the
+     * camera. It must be trimmed at the near plane and drawn. The renderer
+     * used to cut such a triangle at the eye first, and then refuse the
+     * pieces whole because their new corners lay between the eye and the
+     * near plane - so the biggest surfaces near the camera vanished. */
+    {
+        static const float identity3[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
+        /* GXSetPerspective-shaped: near 1, far 100. z/w runs -1 at the near
+         * plane to 0 at the far one, as GX's clip volume does. */
+        const float n = 1.0f, fa = 100.0f;
+        float persp[6] = { 1,0, 1,0, -n / (fa - n), -(fa * n) / (fa - n) };
+        float vp3[6];
+        uint64_t drawn0 = raster.drawn, clip0 = raster.near_plane_clipped;
+        uint64_t refused0 = raster.near_plane_refused;
+
+        gx.vcd_lo = (1u << 9) | (1u << 13);
+        gx.vcd_hi = 0;
+        gx.vat_a[0] = (1u << 0) | (4u << 1) | (1u << 13) | (5u << 14);
+        load_xf(0x0000, identity3, 12);
+        load_xf(0x1020, persp, 6);
+        {
+            put8(GX_OP_LOAD_XF);
+            put32((0u << 16) | 0x1026u);
+            put32(0u);                       /* perspective */
+        }
+        CHECK(gx.xf_projection_ortho == 0u);
+        vp3[0] = 320.0f; vp3[1] = -240.0f; vp3[2] = 16777215.0f;
+        vp3[3] = 320.0f + 342.0f; vp3[4] = 240.0f + 342.0f;
+        vp3[5] = 16777215.0f;
+        load_xf(0x101A, vp3, 6);
+        mgs_bp_write(&gx.bp, BP_SCISSOR_OFFSET, (171u << 10) | 171u);
+        mgs_bp_write(&gx.bp, BP_SCISSOR_TL, (342u << 12) | 342u);
+        mgs_bp_write(&gx.bp, BP_SCISSOR_BR, ((639u + 342u) << 12) | (479u + 342u));
+
+        put8(GX_OP_DRAW_FIRST | (GX_PRIM_TRIANGLES << 3) | 0u);
+        put16(3);
+        {
+            static const float xyz[3][3] = {
+                {  0.0f, -1.0f, -5.0f },     /* in front */
+                { -3.0f, -1.0f,  2.0f },     /* behind the eye */
+                {  3.0f, -1.0f,  2.0f },     /* behind the eye */
+            };
+            unsigned i, k;
+            for (i = 0; i < 3u; ++i) {
+                for (k = 0; k < 3u; ++k) {
+                    uint32_t bits; memcpy(&bits, &xyz[i][k], sizeof bits);
+                    put32(bits);
+                }
+                put32(0xFFFFFFFFu);
+            }
+        }
+        CHECK(raster.near_plane_clipped == clip0 + 1u);
+        CHECK(raster.near_plane_refused == refused0);
+        CHECK(raster.drawn == drawn0 + 1u);   /* one in, two out: a triangle */
+    }
+
     guest_memory_free(&mem);
     printf(failures ? "gx: FAILED\n" : "gx: ok\n");
     return failures ? 1 : 0;

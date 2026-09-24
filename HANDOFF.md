@@ -15222,3 +15222,25 @@ GXRuntime's own inline helpers (paired-single loads and the like), which
 call its accessors directly rather than through the chunks' names. Small
 enough to leave; the route to them is defining the accessors before
 GXRuntime's header is read.
+### F357 — a triangle that ran past the camera vanished whole
+
+Ben: *"camera clipping is still happening."* F347's near-plane clip was
+right, and the path in front of it was not. A triangle with a vertex BEHIND
+the eye was first cut at w = 0.001, and the pieces went round again - but a
+cut at the eye leaves new corners between the eye and the near plane, and
+the second round refused any piece with such a corner, whole. So a floor or
+a wall running past the camera - the largest triangles in any room - was
+not trimmed at the near plane; it disappeared.
+
+Behind the eye is always outside the near plane for a perspective
+projection (w < 0 makes z + w negative), so one clip against z + w >= 0
+covers both cases. Pieces it produces are drawn even when rounding leaves a
+new vertex a hair outside the plane; only a vertex genuinely behind the eye
+is refused, and that is counted (`near plane: ... pieces refused`) because
+it should be zero. `tests/test_gx.c` builds exactly this triangle, and it
+could not have passed before: the old path never counted it as clipped.
+
+**Measured** on the 420 s scripted run through the Codec into gameplay:
+390,525 triangles clipped at the near plane, 41,597 wholly in front of it
+rejected, **0 pieces refused**. Whether that is all of what Ben calls
+camera clipping is for his eyes, not a counter: ask.
