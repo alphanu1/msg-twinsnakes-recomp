@@ -568,7 +568,15 @@ int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
                 on = !(e && e[0] == '0');
             }
             ++seen_sends;            /* one frame produced, arrears kept */
-            if (on) mgs_ax_dsp_frame(cpu);
+            /* NOT WHEN THE MIXER HAS ITS OWN THREAD. Sound is 32 kHz and
+             * must not wait on the guest reaching an interrupt - see the
+             * note at mgs_ax_thread_start. The interrupt still happens,
+             * because the guest's own state machine needs it; only the
+             * MIXING has moved. */
+            {
+                int mgs_ax_thread_active(void);
+                if (on && !mgs_ax_thread_active()) mgs_ax_dsp_frame(cpu);
+            }
         }
         if (mail == 0xDCD10000u) { phase = 1; return 1; }
         /* A resume leaves the task alive, so the cycle stays in phase 1 and

@@ -1823,7 +1823,17 @@ int main(int argc, char** argv)
                         }
                         signal(SIGINT, on_interrupt);
                         signal(SIGTERM, on_interrupt);
-                        MgsRunResult r = mgs_module_run(&mod, cpu, limit);
+                        MgsRunResult r;
+                        /* The mixer gets its own thread and its own clock
+                         * before the guest starts: sound is 32 kHz and must
+                         * not be produced by whichever thread happens to be
+                         * drawing. See mgs_ax_thread_start. */
+                        {
+                            void mgs_ax_thread_start(void*);
+                            mgs_ax_thread_start(cpu);
+                        }
+                        r = mgs_module_run(&mod, cpu, limit);
+                        { void mgs_ax_thread_stop(void); mgs_ax_thread_stop(); }
                         static const char* why[] = {
                             "no code for that address",
                             "guest is spinning",

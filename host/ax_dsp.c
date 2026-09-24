@@ -338,6 +338,86 @@ static int no_playon(void)
 /* One AX frame: 5 ms of 32 kHz stereo. */
 #define AX_FRAME_SAMPLES AX_SAMPLES_PER_FRAME
 
+/* ---- THE MIXER'S OWN THREAD -------------------------------------------
+ *
+ * SOUND IS 32 kHz AND HAS NOTHING TO DO WITH HOW OFTEN WE DRAW.
+ *
+ * Until now the mixer was called from the DSP interrupt's delivery path, on
+ * the guest thread - so a frame of audio was produced only when the guest
+ * got round to being interrupted. When the guest slowed down, fewer samples
+ * came out per real second, and Ben heard exactly that: "as the video slows
+ * and speeds up so does the audio". Audio was a faithful reporter of the
+ * frame rate, which is precisely what it should never be.
+ *
+ * It also could not be fixed by making the guest faster, and Ben said so:
+ * "my PC resources are still really low, hardly anything used." Thirty-one
+ * cores idle while sound waited on the one that was busy.
+ *
+ * THE CONSOLE AGREES WITH HIM. The DSP is a separate processor. It reads
+ * ARAM and updates the voice parameter blocks concurrently with the CPU,
+ * and the game is written for that - so running the mixer on its own thread
+ * is MORE faithful than running it inside an interrupt, not less. The race
+ * on the parameter blocks is the race the hardware has.
+ *
+ * The clock it runs on is the sound card's: mix another 5 ms whenever the
+ * device holds less than the target, and otherwise wait. That is the only
+ * clock audio should ever have.
+ *
+ * MGS_AX_THREAD=0 puts it back on the interrupt, for bisecting.
+ */
+#include <pthread.h>
+
+static pthread_t  s_ax_thread;
+static int        s_ax_thread_on;
+static volatile int s_ax_stop;
+static void*      s_ax_cpu;
+
+int mgs_ax_thread_active(void);
+int mgs_ax_thread_active(void) { return s_ax_thread_on; }
+
+static void* ax_thread_main(void* arg)
+{
+    /* Roughly 120 ms of slack at 32 kHz. Deep enough that a slow frame on
+     * the guest thread cannot be heard, shallow enough that a sound follows
+     * its picture. */
+    const unsigned target = 3840u;
+    (void)arg;
+    while (!s_ax_stop) {
+        if (mgs_audio_queued() < target) {
+            mgs_ax_dsp_frame(s_ax_cpu);
+        } else {
+            struct timespec ts;
+            ts.tv_sec = 0; ts.tv_nsec = 1000000L;   /* 1 ms */
+            nanosleep(&ts, NULL);
+        }
+    }
+    return NULL;
+}
+
+void mgs_ax_thread_start(void* cpu);
+void mgs_ax_thread_start(void* cpu)
+{
+    const char* e = getenv("MGS_AX_THREAD");
+    if (s_ax_thread_on || (e && e[0] == '0')) return;
+    s_ax_cpu = cpu;
+    s_ax_stop = 0;
+    if (pthread_create(&s_ax_thread, NULL, ax_thread_main, NULL) == 0) {
+        s_ax_thread_on = 1;
+        fprintf(stderr, "[ax] mixing on its own thread, paced by the audio "
+                        "device (MGS_AX_THREAD=0 to put it back on the "
+                        "interrupt)\n");
+    }
+}
+
+void mgs_ax_thread_stop(void);
+void mgs_ax_thread_stop(void)
+{
+    if (!s_ax_thread_on) return;
+    s_ax_stop = 1;
+    pthread_join(s_ax_thread, NULL);
+    s_ax_thread_on = 0;
+}
+
 void mgs_ax_dsp_frame(void* cpu);
 void mgs_ax_dsp_frame(void* cpu)
 {
