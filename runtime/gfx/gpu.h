@@ -46,6 +46,18 @@ void mgs_gpu_clear(uint32_t argb);
 int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
                       unsigned stride);
 
+/* ONLY THE RECTANGLE THE COPY IS ABOUT TO READ.
+ *
+ * A readback is a fenced full-pipeline stall plus a download, and this game
+ * makes 19,202 of them in a run - most of them render-to-texture copies of
+ * a few dozen scanlines. Downloading 640x528 for a 64-line copy is 88% of
+ * that traffic spent on rows nobody is going to look at.
+ *
+ * Writes into `argb` at its own (x, y), so the caller's buffer stays whole
+ * and every other reader of it keeps working. */
+int mgs_gpu_read_back_rect(uint32_t* argb, unsigned x, unsigned y,
+                           unsigned w, unsigned h, unsigned stride);
+
 /* ONE HOST VERTEX, which is what the design document asks for: "Build one
  * converter that turns any GX vertex stream into a fixed host layout, then
  * the host renderer only ever sees one vertex format."

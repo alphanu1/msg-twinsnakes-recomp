@@ -2206,13 +2206,17 @@ int main(int argc, char** argv)
                             mgs_gpu_stats(&fr, &rb, &by);
                             printf("GPU: %llu triangles in %llu batches "
                                    "(%.0f per batch), %llu texture uploads, "
-                                   "%llu cache hits, %llu readbacks\n",
+                                   "%llu cache hits, %llu readbacks "
+                                   "(%.1f MB, %.0f rows each)\n",
                                    (unsigned long long)tris,
                                    (unsigned long long)fl,
                                    fl ? (double)tris / (double)fl : 0.0,
                                    (unsigned long long)up,
                                    (unsigned long long)hit,
-                                   (unsigned long long)rb);
+                                   (unsigned long long)rb,
+                                   (double)by / (1024.0 * 1024.0),
+                                   rb ? (double)by / (double)rb / (640.0 * 4.0)
+                                      : 0.0);
                         }
                         printf("GX draw-done: %llu offers, %llu delivered, "
                                "%llu acknowledged by the guest's handler\n",

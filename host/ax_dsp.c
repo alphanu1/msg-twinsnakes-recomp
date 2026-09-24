@@ -259,6 +259,18 @@ static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
 static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
 static uint64_t s_vol_zero, s_mix_zero;
+/* IS ANYTHING PANNED AT ALL?
+ *
+ * The two output channels come out bit-identical, correlating at exactly
+ * 1.000 at lag 0, and there are two very different explanations: the game
+ * mixes every voice dead centre (which for this game on GameCube would be
+ * right), or we are applying one volume to both channels. The difference is
+ * visible here and nowhere else, so it is counted here: how many mixes ask
+ * for different left and right levels, and the distinct pairs. */
+static uint64_t s_panned;
+static uint32_t s_pan_key[8];
+static uint64_t s_pan_hits[8];
+static unsigned s_pan_n;
 static uint64_t s_loop_has_data, s_loop_empty;
 static int      s_peak;
 static uint64_t s_clipped, s_out_samples;
@@ -420,6 +432,17 @@ void mgs_ax_dsp_frame(void* cpu)
          * silent, which leaves only the gain between them. */
         if (!vol) ++s_vol_zero;
         if (!vl && !vr) ++s_mix_zero;
+        if (vl != vr) ++s_panned;
+        {
+            uint32_t key = (vl << 16) | vr;
+            unsigned pi;
+            for (pi = 0; pi < s_pan_n; ++pi)
+                if (s_pan_key[pi] == key) break;
+            if (pi < 8u) {
+                if (pi == s_pan_n) { s_pan_key[pi] = key; ++s_pan_n; }
+                ++s_pan_hits[pi];
+            }
+        }
 
         /* MGS_TRACE_AXMIX: the first few voices as the mixer sees them.
          * "Silent output" has three very different causes - no samples, no
@@ -741,29 +764,65 @@ void mgs_ax_dsp_frame(void* cpu)
      * The clipped-sample counter stays: with a real compressor in place it
      * should read zero, and if it starts reading anything again that is the
      * signal that something upstream has changed. */
+    /* ONE FRAME OF LOOK-AHEAD, which is what makes it exact.
+     *
+     * The version above computed the gain from the frame it was about to
+     * emit and then ramped INTO it across that same frame - so a peak in
+     * the first few samples was multiplied by the gain the limiter had
+     * before it knew about the peak, and still hit the rails. That left
+     * 3,988 clipped samples of 9.3 million: not many, but every one of them
+     * is a splice, and "not many" is not the same as none.
+     *
+     * Delaying the output by one AX frame fixes it by construction rather
+     * than by tuning. Emitting frame N only once frame N+1 has been mixed
+     * means both `need[N]` and `need[N+1]` are known, and the gain at the
+     * END of frame N can be set to the smaller of the two. A linear ramp
+     * between two values never exceeds either of them, so if the ramp
+     * starts at a value that already fitted frame N and ends at one that
+     * fits both N and N+1, no sample in frame N can reach full scale.
+     * Induction does the rest.
+     *
+     * The cost is 5 ms of latency, against a pacing target that starts at
+     * 60 ms, and one silent frame at the very start.
+     *
+     * This is still NOT AX's compressor. The real machine runs a threshold
+     * test and attack/release ramps from a table the GAME supplies through
+     * a DSP command we do not parse (Dolphin: `AXUCode::RunCompressor`).
+     * This is a limiter with the same purpose, and the clipped-sample
+     * counter stays so that a return to non-zero is visible. */
     {
         static int32_t gain = 1 << 16;          /* 16.16, 1.0 = unity */
-        int32_t peak = 0, want, g0 = gain;
+        static int32_t held_l[AX_FRAME_SAMPLES], held_r[AX_FRAME_SAMPLES];
+        static int32_t need_held = 1 << 16;
+        static int     held_valid;
+        int32_t peak = 0, need_cur, g0 = gain, g1;
+
         for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
             int32_t a = acc_l[i] < 0 ? -acc_l[i] : acc_l[i];
             int32_t b = acc_r[i] < 0 ? -acc_r[i] : acc_r[i];
             if (a > peak) peak = a;
             if (b > peak) peak = b;
         }
-        /* The gain that would just fit this frame under full scale. */
-        want = peak > 32767
-             ? (int32_t)(((int64_t)32767 << 16) / peak)
-             : (1 << 16);
-        if (want < gain) gain = want;                       /* attack at once */
-        else gain += (want - gain) >> 6;                    /* release slowly */
+        /* The gain that would just fit THIS frame under full scale. */
+        need_cur = peak > 32767
+                 ? (int32_t)(((int64_t)32767 << 16) / peak)
+                 : (1 << 16);
+
+        /* Where the ramp across the HELD frame has to end: low enough for
+         * the held frame and for the one that follows it, and coming back
+         * up only slowly. */
+        g1 = (need_held < need_cur) ? need_held : need_cur;
+        if (g1 > gain) g1 = gain + ((g1 - gain) >> 6);       /* release */
+        if (g1 > need_held) g1 = need_held;                  /* never above */
+        if (g1 > need_cur)  g1 = need_cur;
 
         for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
-            /* Ramp from the previous frame's gain to this one's, so the
-             * correction itself never makes a step. */
-            int32_t g = g0 + (int32_t)(((int64_t)(gain - g0) * (int32_t)i)
+            int32_t g = g0 + (int32_t)(((int64_t)(g1 - g0) * (int32_t)i)
                                        / (int32_t)AX_FRAME_SAMPLES);
-            int32_t l = (int32_t)(((int64_t)acc_l[i] * g) >> 16);
-            int32_t r = (int32_t)(((int64_t)acc_r[i] * g) >> 16);
+            int32_t l = held_valid
+                      ? (int32_t)(((int64_t)held_l[i] * g) >> 16) : 0;
+            int32_t r = held_valid
+                      ? (int32_t)(((int64_t)held_r[i] * g) >> 16) : 0;
             ++s_out_samples;
             if (l > 32767 || l < -32768) ++s_clipped;
             if (r > 32767 || r < -32768) ++s_clipped;
@@ -772,6 +831,13 @@ void mgs_ax_dsp_frame(void* cpu)
             out[i * 2u] = (int16_t)l;
             out[i * 2u + 1u] = (int16_t)r;
         }
+        gain = g1;
+
+        for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+            held_l[i] = acc_l[i]; held_r[i] = acc_r[i];
+        }
+        need_held = need_cur;
+        held_valid = 1;
     }
     /* MGS_AUDIO_WAV=<path>: the mixed output, so it can be JUDGED.
      *
@@ -879,6 +945,19 @@ void mgs_ax_dsp_report(void)
            "ADPCM %llu of %llu non-zero\n",
            (unsigned long long)s_nz_pcm, (unsigned long long)s_rd_pcm,
            (unsigned long long)s_nz_adpcm, (unsigned long long)s_rd_adpcm);
+    printf("  panning: %llu of %llu voice-mixes asked for different left "
+           "and right levels\n",
+           (unsigned long long)s_panned, (unsigned long long)s_mixed_voices);
+    {
+        unsigned pi;
+        printf("   distinct (vL, vR):");
+        for (pi = 0; pi < s_pan_n; ++pi)
+            printf("  %04X/%04X x%llu",
+                   (unsigned)(s_pan_key[pi] >> 16),
+                   (unsigned)(s_pan_key[pi] & 0xFFFFu),
+                   (unsigned long long)s_pan_hits[pi]);
+        printf("%s\n", s_pan_n >= 8u ? "  (list full)" : "");
+    }
     printf("  gain: %llu voice-mixes had envelope volume 0, "
            "%llu had both mix levels 0, of %llu\n",
            (unsigned long long)s_vol_zero, (unsigned long long)s_mix_zero,

@@ -313,9 +313,37 @@ static void run_copy(uint32_t cmd)
      * It is also what makes the GPU comparable with the software rasteriser
      * pixel for pixel, which is the point. */
     if (mgs_gpu_ready()) {
+        /* ONLY THE RECTANGLE THIS COPY WILL READ.
+         *
+         * A copy names its source box in BP 0x49 and 0x4A, and most of
+         * them are render-to-texture passes of a few dozen scanlines. The
+         * readback used to download all 640x528 regardless, which for a
+         * 64-line copy is 88% of a fenced transfer spent on rows nothing
+         * was about to look at - and there are 19,202 of them in a run.
+         *
+         * THE UNION OF WHAT THE TWO READERS READ, not just the box.
+         * `mgs_efb_copy_tex` reads the box at its origin, but
+         * `mgs_efb_copy` - the copy to the framebuffer - reads from (0,0)
+         * with the box's WIDTH and HEIGHT and no origin at all. Reading
+         * back only the box would leave the framebuffer copy reading rows
+         * the GPU never wrote whenever the origin is not zero, which is
+         * rare enough to have shipped and looked like a flicker.
+         *
+         * So: from (0,0) out to the far corner of the box. With the usual
+         * origin of zero that is exactly the box.
+         *
+         * The whole-screen diagnostics (MGS_TRACE_DRAWNOISE and friends)
+         * read rows outside it and will see the previous copy's contents
+         * there. They are off by default and are measuring the copy's own
+         * region anyway. */
+        uint32_t box_tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
+        uint32_t box_wh = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_WH);
+        unsigned bx = box_tl & 0x3FFu, by = (box_tl >> 10) & 0x3FFu;
         mgs_gpu_batch_flush();
-        mgs_gpu_read_back(s_efb.pixels, MGS_EFB_WIDTH, MGS_EFB_HEIGHT,
-                          MGS_EFB_WIDTH);
+        mgs_gpu_read_back_rect(s_efb.pixels, 0u, 0u,
+                               bx + (box_wh & 0x3FFu) + 1u,
+                               by + ((box_wh >> 10) & 0x3FFu) + 1u,
+                               MGS_EFB_WIDTH);
     }
     {
         uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);

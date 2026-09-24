@@ -856,6 +856,12 @@ void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear)
 int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
                       unsigned stride)
 {
+    return mgs_gpu_read_back_rect(argb, 0u, 0u, width, height, stride);
+}
+
+int mgs_gpu_read_back_rect(uint32_t* argb, unsigned rx, unsigned ry,
+                           unsigned width, unsigned height, unsigned stride)
+{
     SDL_GPUCommandBuffer* cmd;
     SDL_GPUCopyPass* pass;
     SDL_GPUTextureRegion src;
@@ -865,20 +871,27 @@ int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
     unsigned y, x;
 
     if (!s_dev || !argb) return 0;
-    if (width > s_w) width = s_w;
-    if (height > s_h) height = s_h;
+    if (rx >= s_w || ry >= s_h) return 0;
+    if (width > s_w - rx) width = s_w - rx;
+    if (height > s_h - ry) height = s_h - ry;
+    if (!width || !height) return 0;
 
     cmd = SDL_AcquireGPUCommandBuffer(s_dev);
     if (!cmd) return 0;
 
     memset(&src, 0, sizeof src);
     src.texture = s_colour;
-    src.w = s_w; src.h = s_h; src.d = 1;
+    src.x = rx; src.y = ry;
+    src.w = width; src.h = height; src.d = 1;
 
+    /* The transfer buffer is laid out for the REGION, not for the target:
+     * `pixels_per_row` is the region's width, so row n starts at
+     * n * width * 4 and not at n * s_w * 4. Getting this wrong reads a
+     * sheared picture, which looks like a rasteriser fault. */
     memset(&dst, 0, sizeof dst);
     dst.transfer_buffer = s_readback;
-    dst.pixels_per_row = s_w;
-    dst.rows_per_layer = s_h;
+    dst.pixels_per_row = width;
+    dst.rows_per_layer = height;
 
     pass = SDL_BeginGPUCopyPass(cmd);
     if (!pass) { SDL_SubmitGPUCommandBuffer(cmd); return 0; }
@@ -897,8 +910,8 @@ int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
     if (!mapped) return 0;
     /* R8G8B8A8 on the wire, ARGB in the embedded buffer. */
     for (y = 0; y < height; ++y) {
-        const uint8_t* row = mapped + (size_t)y * s_w * 4u;
-        uint32_t* out = argb + (size_t)y * stride;
+        const uint8_t* row = mapped + (size_t)y * width * 4u;
+        uint32_t* out = argb + (size_t)(y + ry) * stride + rx;
         for (x = 0; x < width; ++x) {
             out[x] = ((uint32_t)row[x * 4u + 3u] << 24) |
                      ((uint32_t)row[x * 4u + 0u] << 16) |
@@ -921,6 +934,9 @@ int  mgs_gpu_ready(void) { return 0; }
 void mgs_gpu_clear(uint32_t argb) { (void)argb; }
 int  mgs_gpu_read_back(uint32_t* a, unsigned w, unsigned h, unsigned s)
 { (void)a; (void)w; (void)h; (void)s; return 0; }
+int  mgs_gpu_read_back_rect(uint32_t* a, unsigned x, unsigned y,
+                            unsigned w, unsigned h, unsigned s)
+{ (void)a; (void)x; (void)y; (void)w; (void)h; (void)s; return 0; }
 int  mgs_gpu_draw(const MgsGpuVertex* v, unsigned n, const uint32_t* t,
                   unsigned w, unsigned h)
 { (void)v; (void)n; (void)t; (void)w; (void)h; return 0; }

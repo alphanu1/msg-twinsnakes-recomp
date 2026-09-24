@@ -267,6 +267,20 @@ renderer.
 
 ## WHAT NOT TO RE-PROPOSE
 
+- **Looking for a panning bug in the AX mixer (F315).** The two output
+  channels are bit-identical because the game asks for that: 0 of 62,162
+  voice-mixes want different left and right levels, and the only pair it
+  ever writes is 7FFF/7FFF. `vL` and `vR` are read four bytes apart and both
+  applied. (This says nothing about in-game positional audio, which the run
+  does not reach, nor about AX's initial time delay or surround, which we do
+  not model at all.)
+- **Dumping the DSP ROM for AX's polyphase coefficients (F312).** Rule 9.
+  Linear interpolation removed the aliasing that was audible; the difference
+  between linear and four-tap is a gentle treble roll-off, and a
+  windowed-sinc of our own is allowed if it ever matters.
+- **Eight GPU texture units (F314).** Four covers every draw this game
+  makes: 0 overflows in 929,123 multi-texture draws, counted. Eight would
+  double the vertex for nothing.
 - **Skipping phase 1.** Running under the Dolphin-derived runtime first is
   deliberately throwaway work, and it is what makes every phase-2 bug have one
   possible cause instead of two.
@@ -13513,3 +13527,93 @@ about five points, and still comfortably ahead.
 
 **What not to re-propose:** eight texture units. Four covers every draw this
 game makes, counted, and eight would double the vertex for nothing.
+
+### F315 — the two channels are identical because the game asks for that, and our mixer is not at fault
+
+F310 left this open: "the two output channels are bit-identical, left
+against right correlates at exactly 1.000 at lag 0... identical to the last
+bit means the per-voice left and right volumes are not being applied
+separately, and that is worth a look."
+
+They are applied separately. The game does not use them. Counting every
+voice-mix of a 145.9 s run:
+
+    panning: 0 of 62162 voice-mixes asked for different left and right levels
+     distinct (vL, vR):  7FFF/7FFF x62162
+
+Every voice, every frame, dead centre at full level. `AXPBMIX.vL` is at
+0x12 and `vR` at 0x16 - `VolumeData` is {volume, delta}, so they are four
+bytes apart and not two - and both are read and applied. There is nothing
+to apply differently.
+
+**What this does NOT say.** The run reaches the opening cinematic and no
+further, and a cinematic mixed in mono is an ordinary thing. In-game
+positional audio may well pan, and if it does it will show here as a
+non-zero count. It also says nothing about AX's initial time delay or its
+surround channels, neither of which we model - those are separate fields
+and a separate question.
+
+**What not to re-propose:** looking for a panning bug in `host/ax_dsp.c`.
+The numbers are the game's own.
+
+### F317 — the limiter clipped because its attack started after the peak; one frame of look-ahead makes it exact
+
+The limiter from F285 computed its gain from the frame it was about to emit
+and then ramped INTO that gain across the same frame. A peak in the first
+few samples was therefore multiplied by the gain the limiter held BEFORE it
+knew about the peak, and still hit the rails: 3,988 clipped samples of 9.3
+million. Not many - and every one of them is a splice, which is what Ben
+has been hearing as "it still clips".
+
+Delaying the output by one AX frame fixes it by construction rather than by
+tuning. Emitting frame N only once frame N+1 has been mixed means both
+`need[N]` and `need[N+1]` are known, so the gain at the END of frame N can
+be set to the smaller of the two. A linear ramp between two values never
+exceeds either of them, so if it starts at a value that already fitted
+frame N and ends at one that fits both N and N+1, no sample in frame N can
+reach full scale. Induction does the rest - there is no tuning constant in
+that argument.
+
+Over the same 33.8 s window, the same binary with and without:
+
+    clipping     1,368 samples (0.06%)  ->  0 samples (0.00%)
+    peak                        32,768  ->  32,767
+    gaps >= 1 ms                     0  ->  0
+
+The cost is 5 ms of latency against a pacing target that starts at 60 ms,
+and one silent frame at the very beginning.
+
+**Still not AX's compressor.** The real machine runs a threshold test and
+attack/release ramps from a table the GAME supplies through a DSP command
+we do not parse (Dolphin: `AXUCode::RunCompressor`). This is a limiter with
+the same purpose. The clipped-sample counter stays so that a return to
+non-zero is visible.
+
+### F316 — the readback downloads the copy's rectangle, not the whole screen: 65% less traffic, 2 points of speed
+
+With the GPU filling triangles, `run_copy` reads the colour target back into
+the embedded buffer before anything looks at it. It downloaded all 640x528
+every time, and this game makes **9,264 readbacks in 700M steps** - most of
+them render-to-texture passes of a few dozen scanlines.
+
+A copy names its source box in BP 0x49 and 0x4A, so the readback can be that
+box. It is not QUITE the box, and the reason is worth keeping: the copy to a
+texture reads the box at its origin, but the copy to the FRAMEBUFFER -
+`mgs_efb_copy` - reads from (0,0) with the box's width and height and no
+origin at all. Reading back only the box would leave that one reading rows
+the GPU never wrote whenever the origin is non-zero. So it reads (0,0) out
+to the box's far corner, which with the usual origin of zero is the box.
+
+    readback volume   12,530 MB  ->  4,394 MB   (528 rows each -> 194)
+    frames identical to the software path, all five, unchanged
+    real time produced at 110 s          +25.42%  ->  +27.49%
+
+**Two points, not twenty.** 65% of the bytes went and 8% of the run came
+back, which says the cost of a readback here is mostly the FENCE - a full
+pipeline stall waiting for the GPU to catch up - and not the transfer. That
+is worth knowing before anyone spends a week on GPU-side EFB copies
+expecting the transfer to be the prize: the prize is not issuing the stall.
+
+The whole-screen diagnostics (`MGS_TRACE_DRAWNOISE` and friends) now read
+rows outside the box and will see the previous copy's contents there. They
+are off by default and measure the copy's own region anyway.
