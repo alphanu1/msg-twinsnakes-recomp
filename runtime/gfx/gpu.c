@@ -22,6 +22,13 @@ static SDL_GPUBuffer*         s_vbuf;
 static unsigned               s_vbuf_verts;
 static SDL_GPUTexture*        s_white;
 static SDL_GPUTextureFormat   s_depth_format;
+
+/* One sampler per (wrap_s, wrap_t, filter). Eighteen at most, built on
+ * first sight and kept - a sampler object is cheap and there is no reason
+ * to rebuild one. */
+#define SAMPLER_SLOTS 18u
+static SDL_GPUSampler* s_samplers[SAMPLER_SLOTS];
+
 static int                    s_tev_shader;  /* gxtev.frag, not gx.frag */
 
 /* One pipeline per distinct state. There are only a handful in this game -
@@ -46,7 +53,8 @@ static int state_eq(const MgsGpuState* a, const MgsGpuState* b)
            a->depth_test == b->depth_test &&
            a->depth_write == b->depth_write &&
            a->depth_func == b->depth_func &&
-           a->colour_write == b->colour_write;
+           a->colour_write == b->colour_write &&
+           a->alpha_write == b->alpha_write;
 }
 
 
@@ -143,6 +151,14 @@ void mgs_gpu_shutdown(void)
         memset(s_pipes, 0, sizeof s_pipes);
     }
     if (s_vs) SDL_ReleaseGPUShader(s_dev, s_vs);
+    {   unsigned si;
+        for (si = 0; si < SAMPLER_SLOTS; ++si)
+            if (s_samplers[si]) {
+                SDL_ReleaseGPUSampler(s_dev, s_samplers[si]);
+                s_samplers[si] = NULL;
+            }
+    }
+    if (s_white) SDL_ReleaseGPUTexture(s_dev, s_white);
     if (s_fs) SDL_ReleaseGPUShader(s_dev, s_fs);
     if (s_readback) SDL_ReleaseGPUTransferBuffer(s_dev, s_readback);
     if (s_depth) SDL_ReleaseGPUTexture(s_dev, s_depth);
@@ -283,18 +299,19 @@ static int build_pipeline(void)
     s_tev_shader = getenv("MGS_GPU_NOTEV") == NULL;
     s_fs = s_tev_shader
          ? load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_tev_spv,
-                       sizeof k_tev_spv, 1, 1)
+                       sizeof k_tev_spv, MGS_GPU_TEX_UNITS, 1)
          : load_shader(SDL_GPU_SHADERSTAGE_FRAGMENT, k_frag_spv,
-                       sizeof k_frag_spv, 1, 0);
+                       sizeof k_frag_spv, MGS_GPU_TEX_UNITS, 0);
     if (!s_vs || !s_fs) {
         fprintf(stderr, "[gpu] shader: %s\n", SDL_GetError());
         return 0;
     }
 
     memset(&sa, 0, sizeof sa);
-    /* NEAREST, because that is what the GameCube does unless the game asks
-     * otherwise, and a bilinear default would quietly make every comparison
-     * against the software rasteriser fail by a little. */
+    /* NEAREST and REPEAT is the DEFAULT sampler, used where a draw binds
+     * nothing. Every bound texture gets one chosen from its own wrap modes
+     * and filter - see sampler_for. A single device-wide sampler made a
+     * clamped texture wrap at its edges. */
     sa.min_filter = SDL_GPU_FILTER_NEAREST;
     sa.mag_filter = SDL_GPU_FILTER_NEAREST;
     sa.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
@@ -306,6 +323,41 @@ static int build_pipeline(void)
 #endif
 }
 
+/* GX's wrap modes: 0 clamp, 1 repeat, 2 mirror. Anything else is repeat,
+ * which is the hardware's own behaviour for the unused fourth value. */
+static SDL_GPUSamplerAddressMode gx_wrap(unsigned m)
+{
+    switch (m) {
+        case 0u: return SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE;
+        case 2u: return SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT;
+        default: return SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+    }
+}
+
+static SDL_GPUSampler* sampler_for(unsigned ws, unsigned wt, int bilinear)
+{
+    unsigned idx;
+    if (ws > 2u) ws = 1u;
+    if (wt > 2u) wt = 1u;
+    idx = (ws * 3u + wt) * 2u + (bilinear ? 1u : 0u);
+    if (idx >= SAMPLER_SLOTS) return s_sampler;
+    if (!s_samplers[idx]) {
+        SDL_GPUSamplerCreateInfo sa;
+        SDL_GPUFilter f = bilinear ? SDL_GPU_FILTER_LINEAR
+                                   : SDL_GPU_FILTER_NEAREST;
+        memset(&sa, 0, sizeof sa);
+        sa.min_filter = f;
+        sa.mag_filter = f;
+        sa.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST;
+        sa.address_mode_u = gx_wrap(ws);
+        sa.address_mode_v = gx_wrap(wt);
+        sa.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT;
+        s_samplers[idx] = SDL_CreateGPUSampler(s_dev, &sa);
+        if (!s_samplers[idx]) return s_sampler;
+    }
+    return s_samplers[idx];
+}
+
 /* The pipeline for one draw state, built on first sight and kept. */
 static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
 {
@@ -314,7 +366,7 @@ static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
 #else
     SDL_GPUGraphicsPipelineCreateInfo pi;
     SDL_GPUVertexBufferDescription vb;
-    SDL_GPUVertexAttribute at[3];
+    SDL_GPUVertexAttribute at[6];
     SDL_GPUColorTargetDescription ct;
     unsigned i, victim = PIPE_SLOTS;
 
@@ -337,6 +389,12 @@ static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
     at[1].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4; at[1].offset = 16;
     at[2].location = 2; at[2].buffer_slot = 0;
     at[2].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2; at[2].offset = 32;
+    at[3].location = 3; at[3].buffer_slot = 0;
+    at[3].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2; at[3].offset = 40;
+    at[4].location = 4; at[4].buffer_slot = 0;
+    at[4].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2; at[4].offset = 48;
+    at[5].location = 5; at[5].buffer_slot = 0;
+    at[5].format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2; at[5].offset = 56;
 
     memset(&ct, 0, sizeof ct);
     ct.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -353,11 +411,18 @@ static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
         ct.blend_state.alpha_blend_op = st->blend_sub
             ? SDL_GPU_BLENDOP_REVERSE_SUBTRACT : SDL_GPU_BLENDOP_ADD;
     }
-    if (!st->colour_write) {
-        /* The game turns colour writes off to lay down depth only. Without
-         * this those draws paint over the picture. */
+    if (!st->colour_write || !st->alpha_write) {
+        /* The game turns colour writes off to lay down depth only, and
+         * masks alpha separately - GX has two bits, not one. Without this
+         * the depth-only draws paint over the picture, and a colour-only
+         * draw overwrites the alpha that the next blend reads. */
+        Uint8 m = 0;
+        if (st->colour_write) m |= (Uint8)(SDL_GPU_COLORCOMPONENT_R |
+                                           SDL_GPU_COLORCOMPONENT_G |
+                                           SDL_GPU_COLORCOMPONENT_B);
+        if (st->alpha_write)  m |= (Uint8)SDL_GPU_COLORCOMPONENT_A;
         ct.blend_state.enable_color_write_mask = true;
-        ct.blend_state.color_write_mask = 0;
+        ct.blend_state.color_write_mask = m;
     }
 
     memset(&pi, 0, sizeof pi);
@@ -366,7 +431,7 @@ static SDL_GPUGraphicsPipeline* pipeline_for(const MgsGpuState* st)
     pi.vertex_input_state.vertex_buffer_descriptions = &vb;
     pi.vertex_input_state.num_vertex_buffers = 1;
     pi.vertex_input_state.vertex_attributes = at;
-    pi.vertex_input_state.num_vertex_attributes = 3;
+    pi.vertex_input_state.num_vertex_attributes = 6;
     pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
     /* GX culls by the sign of the triangle's area and the rasteriser has
      * already expanded strips and fans with the hardware's winding, so the
@@ -494,6 +559,23 @@ static SDL_GPUTexture* cached_texture(SDL_GPUCopyPass* pass,
     uint64_t oldest = ~0ull;
 
     *xfer_out = NULL;
+    /* NOTHING BOUND: one white texel, made once.
+     *
+     * The shader samples all four units unconditionally, so an untextured
+     * unit still needs a texture - and uploading a fresh 1x1 for each of
+     * them on every draw is what took the upload count from 9,748 to
+     * 85,591 the moment there were four units instead of one. It is the
+     * same texel every time; there is no reason for it to be a different
+     * object every time. */
+    if (!px || !w || !h) {
+        if (!s_white) {
+            SDL_GPUTransferBuffer* wx = NULL;
+            s_white = upload_texture(pass, &wx, NULL, 0, 0);
+            if (wx) SDL_ReleaseGPUTransferBuffer(s_dev, wx);
+            ++s_uploads;
+        }
+        return s_white;
+    }
     if (key) {
         for (i = 0; i < GPU_TEX_SLOTS; ++i) {
             if (s_gtex[i].tex && s_gtex[i].key == key) {
@@ -523,8 +605,7 @@ static SDL_GPUTexture* cached_texture(SDL_GPUCopyPass* pass,
 }
 
 static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
-                              const uint32_t* tex, unsigned tex_w,
-                              unsigned tex_h, uint64_t key,
+                              const MgsGpuBind* binds,
                               const MgsGpuState* st, const MgsGpuTev* tv)
 {
     SDL_GPUGraphicsPipeline* pipe;
@@ -533,11 +614,13 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
     SDL_GPURenderPass* pass;
     SDL_GPUCopyPass* cp;
     SDL_GPUBufferBinding bind;
-    SDL_GPUTextureSamplerBinding tsb;
-    SDL_GPUTexture* t;
-    SDL_GPUTransferBuffer* tex_xfer = NULL;
+    SDL_GPUTextureSamplerBinding tsb[MGS_GPU_TEX_UNITS];
+    SDL_GPUTexture* t[MGS_GPU_TEX_UNITS];
+    SDL_GPUTransferBuffer* tex_xfer[MGS_GPU_TEX_UNITS];
     SDL_GPUTransferBuffer* vtx_xfer = NULL;
     Uint32 vbytes;
+    unsigned u;
+    int all_bound = 1;
 
     if (!s_dev || !verts || count < 3u) return 0;
     if (!build_pipeline()) return 0;
@@ -586,13 +669,25 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
             SDL_UploadToGPUBuffer(cp, &src, &dst, false);
         }
     }
-    t = cached_texture(cp, &tex_xfer, tex, tex_w, tex_h, key);
+    /* Every unit is uploaded or resolved from the cache in the SAME copy
+     * pass, because they are all needed by the one draw that follows. A
+     * unit nothing is bound to gets the 1x1 white texel, so the shader can
+     * sample all four unconditionally. */
+    for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+        tex_xfer[u] = NULL;
+        t[u] = cached_texture(cp, &tex_xfer[u], binds[u].texels,
+                              binds[u].w, binds[u].h, binds[u].key);
+        if (!t[u]) all_bound = 0;
+    }
     SDL_EndGPUCopyPass(cp);
 
-    if (!t || !vtx_xfer) {
+    if (!all_bound || !vtx_xfer) {
         SDL_SubmitGPUCommandBuffer(cmd);
-        if (t && !key) SDL_ReleaseGPUTexture(s_dev, t);
-        if (tex_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer);
+        for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+            if (t[u] && t[u] != s_white && !binds[u].key)
+                SDL_ReleaseGPUTexture(s_dev, t[u]);
+            if (tex_xfer[u]) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer[u]);
+        }
         if (vtx_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, vtx_xfer);
         return 0;
     }
@@ -616,10 +711,15 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
         memset(&bind, 0, sizeof bind);
         bind.buffer = s_vbuf;
         SDL_BindGPUVertexBuffers(pass, 0, &bind, 1);
-        memset(&tsb, 0, sizeof tsb);
-        tsb.texture = t;
-        tsb.sampler = s_sampler;
-        SDL_BindGPUFragmentSamplers(pass, 0, &tsb, 1);
+        memset(tsb, 0, sizeof tsb);
+        for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+            tsb[u].texture = t[u];
+            tsb[u].sampler = binds[u].texels
+                           ? sampler_for(binds[u].wrap_s, binds[u].wrap_t,
+                                         binds[u].bilinear)
+                           : s_sampler;
+        }
+        SDL_BindGPUFragmentSamplers(pass, 0, tsb, MGS_GPU_TEX_UNITS);
         /* THE COMBINER STATE, pushed on the COMMAND BUFFER rather than
          * bound in the pass: SDL's uniform data is per-command-buffer and
          * takes effect for draws issued after it. One push per draw, which
@@ -638,8 +738,13 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
      * buffer retires. The TEXTURE only goes when it was not cached - a
      * cached one is owned by the cache and releasing it here would free
      * something the next draw expects to find. */
-    if (!key) SDL_ReleaseGPUTexture(s_dev, t);
-    if (tex_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer);
+    for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+        /* Released only when it is OURS: a cached texture belongs to the
+         * cache, and the white stand-in is shared by every unbound unit. */
+        if (t[u] && t[u] != s_white && !binds[u].key)
+            SDL_ReleaseGPUTexture(s_dev, t[u]);
+        if (tex_xfer[u]) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer[u]);
+    }
     if (vtx_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, vtx_xfer);
     ++s_frames;
     return 1;
@@ -651,10 +756,13 @@ int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
     /* The plain entry point, for the test: opaque, depth on, less-or-equal,
      * which is the power-on state. */
     MgsGpuState st;
+    MgsGpuBind  binds[MGS_GPU_TEX_UNITS];
     memset(&st, 0, sizeof st);
+    memset(binds, 0, sizeof binds);
+    binds[0].texels = tex; binds[0].w = tex_w; binds[0].h = tex_h;
     st.depth_test = 1; st.depth_write = 1; st.depth_func = 3;
-    st.colour_write = 1;
-    return mgs_gpu_draw_keyed(verts, count, tex, tex_w, tex_h, 0, &st, NULL);
+    st.colour_write = 1; st.alpha_write = 1;
+    return mgs_gpu_draw_keyed(verts, count, binds, &st, NULL);
 }
 
 /* ---- batching --------------------------------------------------------- */
@@ -663,9 +771,7 @@ int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
 
 static MgsGpuVertex* s_batch;
 static unsigned      s_batch_n;
-static const uint32_t* s_batch_tex;
-static unsigned      s_batch_tw, s_batch_th;
-static uint64_t      s_batch_key;
+static MgsGpuBind    s_batch_binds[MGS_GPU_TEX_UNITS];
 static MgsGpuState   s_batch_state;
 static int           s_batch_has;
 static uint64_t      s_batch_tris, s_batch_flushes;
@@ -673,11 +779,29 @@ static MgsGpuTev     s_batch_tev;
 static uint64_t      s_batch_tev_key;
 static int           s_batch_tev_has;
 
+static int binds_eq(const MgsGpuBind* a, const MgsGpuBind* b)
+{
+    unsigned u;
+    for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+        /* The KEY, not the pointer: the same art bound twice is one upload,
+         * and a re-decoded video frame is a different one at the same
+         * address. A key of 0 means nothing is bound, and then the pointer
+         * has to agree too - both NULL - or two different untextured units
+         * would look equal. */
+        if (a[u].key != b[u].key) return 0;
+        if (!a[u].key && a[u].texels != b[u].texels) return 0;
+        /* And how it is sampled: the sampler is bound with the texture, so
+         * the same art with a different wrap mode is a different draw. */
+        if (a[u].wrap_s != b[u].wrap_s || a[u].wrap_t != b[u].wrap_t ||
+            a[u].bilinear != b[u].bilinear) return 0;
+    }
+    return 1;
+}
+
 void mgs_gpu_batch_flush(void)
 {
     if (!s_dev || !s_batch_n) { s_batch_n = 0; s_batch_has = 0; return; }
-    mgs_gpu_draw_keyed(s_batch, s_batch_n, s_batch_tex,
-                       s_batch_tw, s_batch_th, s_batch_key, &s_batch_state,
+    mgs_gpu_draw_keyed(s_batch, s_batch_n, s_batch_binds, &s_batch_state,
                        s_batch_tev_has ? &s_batch_tev : NULL);
     s_batch_tris += s_batch_n / 3u;
     ++s_batch_flushes;
@@ -687,8 +811,7 @@ void mgs_gpu_batch_flush(void)
 
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
-                       const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key, const MgsGpuState* state,
+                       const MgsGpuBind* binds, const MgsGpuState* state,
                        const MgsGpuTev* tev, uint64_t tev_key)
 {
     if (!s_dev) return;
@@ -696,25 +819,23 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
         s_batch = (MgsGpuVertex*)malloc(BATCH_MAX * sizeof(MgsGpuVertex));
         if (!s_batch) return;
     }
-    /* A different texture, or a full batch, ends this one. Comparing the
-     * KEY rather than the pointer is what lets a re-decoded video frame end
-     * the batch while identical art carries on. */
-    /* A different texture, a different DRAW STATE, or a full batch ends
-     * this one. The state has to be part of that test: blending and the
-     * depth comparison are baked into the pipeline, so carrying triangles
-     * across a change of either would draw them with the wrong one. */
-    /* And a different COMBINER ends it too, by its key. Comparing the
-     * block itself would be 700 bytes against twelve million triangles a
-     * run; the key comes from the BP state that produced it, so equal keys
-     * mean equal blocks by construction rather than by luck. */
-    if (s_batch_has && (key != s_batch_key ||
+    /* ANY of the four textures changing ends this batch, as does a change
+     * of draw state, of combiner, or a full batch.
+     *
+     * The state has to be part of that test because blending and the depth
+     * comparison are baked into the pipeline object; the combiner has to be
+     * because it is pushed once per draw. Comparing the combiner BLOCK
+     * would be 900 bytes against twelve million triangles a run, so it is
+     * compared by a key hashed from the block itself - equal keys mean
+     * equal blocks by construction rather than by luck. */
+    if (s_batch_has && (!binds_eq(s_batch_binds, binds) ||
                         !state_eq(&s_batch_state, state) ||
                         tev_key != s_batch_tev_key ||
                         s_batch_n + 3u > BATCH_MAX))
         mgs_gpu_batch_flush();
 
-    s_batch_tex = tex; s_batch_tw = tex_w; s_batch_th = tex_h;
-    s_batch_key = key; s_batch_state = *state; s_batch_has = 1;
+    memcpy(s_batch_binds, binds, sizeof s_batch_binds);
+    s_batch_state = *state; s_batch_has = 1;
     if (tev_key != s_batch_tev_key || !s_batch_tev_has) {
         if (tev) { s_batch_tev = *tev; s_batch_tev_has = 1; }
         else     { s_batch_tev_has = 0; }
@@ -804,11 +925,9 @@ int  mgs_gpu_draw(const MgsGpuVertex* v, unsigned n, const uint32_t* t,
                   unsigned w, unsigned h)
 { (void)v; (void)n; (void)t; (void)w; (void)h; return 0; }
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
-                       const MgsGpuVertex* c, const uint32_t* t,
-                       unsigned w, unsigned h, uint64_t k,
+                       const MgsGpuVertex* c, const MgsGpuBind* bi,
                        const MgsGpuState* st, const MgsGpuTev* tv, uint64_t tk)
-{ (void)a; (void)b; (void)c; (void)t; (void)w; (void)h; (void)k; (void)st;
-  (void)tv; (void)tk; }
+{ (void)a; (void)b; (void)c; (void)bi; (void)st; (void)tv; (void)tk; }
 void mgs_gpu_batch_flush(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
 

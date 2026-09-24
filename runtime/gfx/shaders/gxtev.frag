@@ -29,17 +29,22 @@
 #version 450
 
 layout(location = 0) in vec4 v_colour;
-layout(location = 1) in vec2 v_uv;
+layout(location = 1) in vec2 v_uv[4];
 
 layout(location = 0) out vec4 out_colour;
 
-layout(set = 2, binding = 0) uniform sampler2D u_tex;
+/* FOUR SAMPLERS, because a stage names its own map. Indexing them by
+ * `T.unit[s].x` is dynamic but UNIFORM - it comes from the uniform block,
+ * so it is the same for every fragment in the draw, which is what GLSL 4.50
+ * requires of a sampler array index without an extension. */
+layout(set = 2, binding = 0) uniform sampler2D u_tex[4];
 
 layout(set = 3, binding = 0) uniform TevState {
     ivec4 reg[4];     /* the four TEV registers as the draw starts, r,g,b,a */
     uvec4 env[16];    /* x = colour environment, y = alpha environment      */
     ivec4 konst[16];  /* xyz = the stage's konst colour, w = its konst alpha*/
     ivec4 swap[4];    /* the four swap tables, as source channel indices    */
+    ivec4 unit[16];   /* x = which texture unit this stage samples          */
     ivec4 ctl;        /* x stages, y configured, z has_texture, w swap_set  */
     ivec4 atest;      /* x ref0, y ref1, z op0, w op1                       */
     ivec4 atest2;     /* x logic, y enabled                                 */
@@ -136,8 +141,7 @@ bool atest_one(int a, int op, int ref)
 
 void main()
 {
-    vec4  t = texture(u_tex, v_uv);
-    ivec4 texc = ivec4(round(t * 255.0));
+    vec4  t = texture(u_tex[0], v_uv[0]);
     ivec4 rasc = ivec4(round(v_colour * 255.0));
     int s;
 
@@ -153,6 +157,17 @@ void main()
 
     for (s = 0; s < T.ctl.x; ++s) {
         uint  ce = T.env[s].x, ae = T.env[s].y;
+        /* THIS STAGE'S OWN TEXEL. Feeding every stage stage zero's is what
+         * made the movie green-and-magenta striped on the software path
+         * (tev.c) and too bright on this one: its video frame is a
+         * luminance plane and two chroma planes in three stages, and with
+         * one texel for all three, two of them read luma. */
+        /* Clamped although the C side cannot produce anything else: an
+         * out-of-range index into a sampler array is undefined on the
+         * GPU, and "undefined" here would mean a driver-dependent
+         * picture that reproduces on one machine and not another. */
+        int   un = clamp(T.unit[s].x, 0, 3);
+        ivec4 texc = ivec4(round(texture(u_tex[un], v_uv[un]) * 255.0));
         ivec4 tc = texc, rc = rasc;
         ivec3 kc = T.konst[s].rgb;
         int   ka = T.konst[s].w;

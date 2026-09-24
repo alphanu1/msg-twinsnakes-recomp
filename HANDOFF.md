@@ -13450,3 +13450,66 @@ changes the shader cannot see.
 **Not yet done, in order:** per-stage texture units (above), and the
 `compare` bias mode (bias == 3), which neither this shader nor `tev.c`
 implements - both treat it as bias 0.
+
+### F314 — four texture units, per-texture samplers, and the GPU path lands within rounding of the rasteriser
+
+F313 left the whole remaining difference inside the letterboxed movie
+region, and named the cause: one sampler for every TEV stage. This is that,
+and two things found on the way.
+
+**Four texture units, deduplicated by (map, coordinate).** A stage names its
+own texture map AND its own coordinate generator, so the vertex carries four
+coordinate sets and the shader four samplers, indexed per stage from the
+uniform block. Four rather than eight, and rather than "stage k gets unit
+k": five-stage draws are common here and would overflow four units without
+needing to, because stages share maps. Deduplicating first makes the
+overflow count **0 of 929,123 multi-texture draws** - so four is enough, and
+that is measured rather than hoped.
+
+**Per-texture samplers, which was the larger of the two.** GX gives every
+map its own wrap mode on each axis and its own magnification filter, and the
+software path has always honoured them; the GPU path used one device-wide
+NEAREST/REPEAT sampler. A clamped texture therefore wrapped at its edges -
+which looks like a seam, not like a sampler fault, and would have been very
+hard to find by eye. Eighteen samplers at most, built on first sight.
+
+**The measurement, against the software rasteriser, five sampled frames of
+one boot.** All three runs stop at the same PC after 700,000,000 steps, so
+they are the same frames:
+
+                           base shader   + combiner   + 4 units   + samplers
+      frame 3  > 8 counts      71.21%       23.39%      12.40%       0.07%
+               mean error      105.30        14.17        2.64        0.72
+      frame 4  > 8 counts      71.21%       26.63%      20.13%       0.56%
+               mean error      105.52        17.71        3.33        0.65
+
+Frames 0-2 are byte-identical throughout. The two scene frames end at
+**0.07% and 0.56% of pixels differing by more than 8 counts**, from 71.21%.
+What is left is rounding: GX blends in truncating integer arithmetic and the
+GPU in UNORM with round-to-nearest, which is a ±1 disagreement on any
+blended pixel, and 40-47% of pixels differ by that much.
+
+**The upload count, and a trap worth recording.** Four units took texture
+uploads from 9,748 to **85,591** in one step. The cause was not the extra
+textures: the shader samples all four units unconditionally, so an unbound
+unit still needs a texture, and `cached_texture` was uploading a fresh 1x1
+white for each of them on every draw - three per flush, 29,369 flushes.
+Making that one white texel once brings it to 16,951. The lesson is the
+ordinary one: a per-draw allocation that was invisible at one unit is three
+times per draw at four.
+
+**Also done here, and honestly it measured nothing.** GX masks colour and
+alpha writes separately (CMODE1 against CMODE0) and the GPU path applied one
+mask to all four channels. That is a real divergence - the embedded buffer's
+alpha is read by later blends and carried out by an EFB copy - but adding
+the separate mask changed these five frames **not at all**, because this
+game leaves `alpha_update` set. It stays because it is what the hardware
+does, not because it fixed anything.
+
+**Cost.** 29,369 batches against 21,865, a 64-byte vertex against 40, and
+four samplers bound per draw instead of one. Against the same 40 seconds of
+sound produced, the port runs **+59.9% over real time against +64.6%** -
+about five points, and still comfortably ahead.
+
+**What not to re-propose:** eight texture units. Four covers every draw this
+game makes, counted, and eight would double the vertex for nothing.

@@ -129,6 +129,10 @@ typedef struct MgsGxRaster {
      * assumed - an early boot showed 64 such triangles and a full run
      * shows rather more. */
     uint64_t multi_tex_tris;
+    /* Draws with more distinct (map, coordinate) pairs than the GPU
+     * path has texture units. Those stages fall back to unit zero and
+     * are wrong; the number says whether four units is enough. */
+    uint64_t tex_units_overflowed;
     /* WHAT THE UNTEXTURED MAJORITY ACTUALLY ASKS THE COMBINER FOR.
      *
      * 514,048 triangles are drawn with no texture and come out black, and no

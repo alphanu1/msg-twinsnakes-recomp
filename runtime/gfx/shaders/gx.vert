@@ -16,14 +16,23 @@
 
 layout(location = 0) in vec4 in_pos;    /* clip space: x, y, z, w */
 layout(location = 1) in vec4 in_colour; /* rgba, 0-1 */
-layout(location = 2) in vec2 in_uv;
+/* FOUR coordinate sets, one per texture unit. A TEV stage names its own
+ * map and its own coordinate generator, so a three-plane composite reads
+ * three different sets - see gpu.h. */
+layout(location = 2) in vec2 in_uv0;
+layout(location = 3) in vec2 in_uv1;
+layout(location = 4) in vec2 in_uv2;
+layout(location = 5) in vec2 in_uv3;
 
 layout(location = 0) out vec4 v_colour;
-layout(location = 1) out vec2 v_uv;
+layout(location = 1) out vec2 v_uv[4];
 
 void main()
 {
     gl_Position = in_pos;
     v_colour = in_colour;
-    v_uv = in_uv;
+    v_uv[0] = in_uv0;
+    v_uv[1] = in_uv1;
+    v_uv[2] = in_uv2;
+    v_uv[3] = in_uv3;
 }

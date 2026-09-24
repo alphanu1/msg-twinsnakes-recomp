@@ -52,15 +52,45 @@ int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
  *
  * Position arrives in CLIP space - the transform stays on the CPU for now,
  * where it is already verified against Dolphin. See gx.vert. */
+/* FOUR TEXTURE COORDINATE SETS, because TEV stages do not share one.
+ *
+ * Each stage names its own texture map AND its own coordinate generator, so
+ * a composite that reads three planes reads them at three different sets of
+ * coordinates. One `u, v` per vertex is right for the 92% of this game's
+ * triangles that run a single stage and wrong for the rest - and the rest
+ * is the cinematic.
+ *
+ * Four rather than eight: the hardware allows eight maps, and this game's
+ * multi-stage draws bind at most four distinct ones (counted, see
+ * `units_overflowed` in the exit report). Eight would double the vertex for
+ * nothing. */
+#define MGS_GPU_TEX_UNITS 4u
+
 typedef struct MgsGpuVertex {
     float    x, y, z, w;
     float    r, g, b, a;
-    float    u, v;
+    float    uv[MGS_GPU_TEX_UNITS][2];
 } MgsGpuVertex;
+
+/* One texture unit's binding: the decoded texels and the key that says
+ * whether the GPU already holds them. */
+typedef struct MgsGpuBind {
+    const uint32_t* texels;
+    unsigned        w, h;
+    uint64_t        key;       /* 0 = nothing bound; a 1x1 white stands in */
+    /* HOW THIS ONE IS SAMPLED, which is per texture and not per device.
+     * GX gives every map its own wrap mode on each axis (0 clamp, 1 repeat,
+     * 2 mirror) and its own magnification filter, and the software path has
+     * always honoured them. Sampling everything with REPEAT and NEAREST
+     * made a clamped texture wrap at its edges - a thin band of the
+     * opposite side bleeding in, which looks like a seam rather than like a
+     * sampler fault. */
+    unsigned char   wrap_s, wrap_t, bilinear;
+} MgsGpuBind;
 
 /* Draw a triangle list into the colour target. `tex` is ARGB in the host's
  * layout, or NULL for untextured, in which case a 1x1 white texel stands in
- * so one pipeline covers both. */
+ * so one pipeline covers both. Unit 0 only; the test's entry point. */
 int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
                  const uint32_t* tex, unsigned tex_w, unsigned tex_h);
 
@@ -79,7 +109,11 @@ typedef struct MgsGpuState {
     unsigned char blend_enable;
     unsigned char blend_src, blend_dst, blend_sub;
     unsigned char depth_test, depth_write, depth_func;
-    unsigned char colour_write;
+    /* GX MASKS COLOUR AND ALPHA SEPARATELY (CMODE1 against CMODE0), and
+     * the embedded buffer's alpha is not decoration: later draws blend
+     * against it and an EFB copy carries it into a texture. Writing alpha
+     * on a draw that asked for colour only is a quiet corruption of both. */
+    unsigned char colour_write, alpha_write;
 } MgsGpuState;
 
 /* THE COMBINER STATE, IN THE LAYOUT THE SHADER READS IT.
@@ -99,6 +133,7 @@ typedef struct MgsGpuTev {
     uint32_t env[16][4];     /* [0] colour environment, [1] alpha, 2 unused */
     int32_t  konst[16][4];   /* xyz the stage's konst colour, w its alpha   */
     int32_t  swap[4][4];     /* the four swap tables, as channel indices    */
+    int32_t  unit[16][4];    /* [0] which texture unit this stage samples   */
     int32_t  ctl[4];         /* stages, configured, has_texture, swap_set   */
     int32_t  atest[4];       /* ref0, ref1, op0, op1                        */
     int32_t  atest2[4];      /* logic, enabled                              */
@@ -119,8 +154,7 @@ typedef struct MgsGpuTev {
  * the batch without comparing 700 bytes twelve million times a run. */
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuVertex* c,
-                       const uint32_t* tex, unsigned tex_w, unsigned tex_h,
-                       uint64_t key, const MgsGpuState* state,
+                       const MgsGpuBind* binds, const MgsGpuState* state,
                        const MgsGpuTev* tev, uint64_t tev_key);
 
 /* Draw whatever is gathered. Called when the state changes and before the

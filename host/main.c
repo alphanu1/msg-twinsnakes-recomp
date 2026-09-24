@@ -1911,10 +1911,11 @@ int main(int argc, char** argv)
                                        "at a later stage: %llu\n",
                                        (unsigned long long)rs->tex_on_later_stage);
                                 printf("  a LATER stage binds its own texture "
-                                       "map: %llu  <- the GPU path binds one "
-                                       "sampler, so these are drawn with stage "
-                                       "zero's texel\n",
-                                       (unsigned long long)rs->multi_tex_tris);
+                                       "map: %llu  (stages needing more than "
+                                       "%u texture units: %llu)\n",
+                                       (unsigned long long)rs->multi_tex_tris,
+                                       MGS_GPU_TEX_UNITS,
+                                       (unsigned long long)rs->tex_units_overflowed);
                                 printf("  triangles asking for a texture: %llu"
                                        "  of those, bind failed: %llu\n",
                                        (unsigned long long)rs->tex_wanted,

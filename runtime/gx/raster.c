@@ -1856,8 +1856,71 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
      * GPU path is checkable but not correct for multi-stage draws. */
     if (r->gpu) {
         MgsGpuVertex gv[3];
+        MgsGpuBind   binds[MGS_GPU_TEX_UNITS];
         unsigned k;
+        unsigned unit_of_stage[16];
+        unsigned unit_coord[MGS_GPU_TEX_UNITS];
+        unsigned units = 0u;
         float tw = (float)r->width, th = (float)r->height;
+
+        /* WHICH TEXTURE EACH STAGE SAMPLES, resolved into at most four
+         * units.
+         *
+         * A TEV stage names its own map AND its own coordinate generator,
+         * and the movie's composite is three stages over three maps. Two
+         * stages naming the same (map, coordinate) pair share a unit -
+         * which is why this deduplicates rather than handing stage k unit
+         * k: five-stage draws are common in this game and would otherwise
+         * overflow four units without needing to. */
+        memset(binds, 0, sizeof binds);
+        for (k = 0; k < 16u; ++k) unit_of_stage[k] = 0u;
+        if (stage_n) {
+            unsigned st;
+            for (st = 0; st < stage_n && st < 16u; ++st) {
+                const MgsTexture* sx = stage_tex[st];
+                unsigned c = stage_coord[st], u;
+                if (!sx) { unit_of_stage[st] = 0u; continue; }
+                /* The pointer as well as the key: a content hash of zero
+                 * means "not cacheable", and two such textures must not be
+                 * folded into one unit by both hashing to nothing. */
+                for (u = 0; u < units; ++u)
+                    if (binds[u].key == sx->hash &&
+                        binds[u].texels == sx->texels &&
+                        unit_coord[u] == c) break;
+                if (u == units) {
+                    if (units >= MGS_GPU_TEX_UNITS) {
+                        /* More distinct maps than units. Counted, not
+                         * silently folded onto unit 0 and forgotten. */
+                        ++r->tex_units_overflowed;
+                        unit_of_stage[st] = 0u;
+                        continue;
+                    }
+                    binds[u].texels = sx->texels;
+                    binds[u].w = sx->width; binds[u].h = sx->height;
+                    binds[u].key = sx->hash;
+                    binds[u].wrap_s = (unsigned char)stage_ws[st];
+                    binds[u].wrap_t = (unsigned char)stage_wt[st];
+                    binds[u].bilinear = stage_bil[st];
+                    unit_coord[u] = c;
+                    ++units;
+                }
+                unit_of_stage[st] = u;
+            }
+        }
+        if (!units) {
+            /* Single-stage, or no stage bound one: stage zero's texture on
+             * unit zero, which is what every other draw here does. */
+            binds[0].texels = tex ? tex->texels : NULL;
+            binds[0].w = tex ? tex->width : 0u;
+            binds[0].h = tex ? tex->height : 0u;
+            binds[0].key = tex ? tex->hash : 0ull;
+            binds[0].wrap_s = (unsigned char)wrap_s;
+            binds[0].wrap_t = (unsigned char)wrap_t;
+            binds[0].bilinear = (unsigned char)(bilinear ? 1 : 0);
+            unit_coord[0] = tex_coord;
+            units = 1u;
+        }
+        for (k = units; k < MGS_GPU_TEX_UNITS; ++k) unit_coord[k] = tex_coord;
         for (k = 0; k < 3u; ++k) {
             float w1 = (iw[k] != 0.0f) ? 1.0f / iw[k] : 1.0f;
             float ndx = (sx[k] / tw) * 2.0f - 1.0f;
@@ -1875,8 +1938,16 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             gv[k].g = (float)((col >> 8) & 0xFFu) / 255.0f;
             gv[k].b = (float)(col & 0xFFu) / 255.0f;
             gv[k].a = (float)((col >> 24) & 0xFFu) / 255.0f;
-            gv[k].u = tex ? vin[k]->u[tex_coord] : 0.0f;
-            gv[k].v = tex ? vin[k]->v[tex_coord] : 0.0f;
+            {   /* One set of coordinates per unit, each read from the
+                 * generator that unit's stage named. */
+                unsigned u;
+                for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
+                    unsigned c = unit_coord[u] < 8u ? unit_coord[u] : 0u;
+                    int have = binds[u].texels != NULL;
+                    gv[k].uv[u][0] = have ? vin[k]->u[c] : 0.0f;
+                    gv[k].uv[u][1] = have ? vin[k]->v[c] : 0.0f;
+                }
+            }
         }
         {   /* The draw state the game asked for, which the pipeline has
              * to bake in. Leaving it out drew everything opaque with one
@@ -1896,9 +1967,21 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                 s_tev_rev = gx->bp.rev;
                 s_tev_tex = -1;
             }
-            {
+            {   /* `has_texture` and the stage-to-unit map are the two
+                 * fields that change with the DRAW rather than with the BP
+                 * state, so they are written after the cache and the hash
+                 * is taken over the result. */
                 int32_t has = tex ? 1 : 0;
-                if (has != s_tev_tex) {
+                int changed = (has != s_tev_tex);
+                unsigned st;
+                for (st = 0; st < 16u; ++st) {
+                    int32_t v = (int32_t)unit_of_stage[st];
+                    if (s_tev_block.unit[st][0] != v) {
+                        s_tev_block.unit[st][0] = v;
+                        changed = 1;
+                    }
+                }
+                if (changed) {
                     s_tev_block.ctl[2] = has;
                     s_tev_tex = has;
                     s_tev_hash = tev_block_hash(&s_tev_block);
@@ -1913,10 +1996,8 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             st.depth_write = r->depth_update ? 1u : 0u;
             st.depth_func = (unsigned char)r->depth_func;
             st.colour_write = r->color_update ? 1u : 0u;
-            mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2],
-                              tex ? tex->texels : NULL,
-                              tex ? tex->width : 0u, tex ? tex->height : 0u,
-                              tex ? tex->hash : 0ull, &st,
+            st.alpha_write = r->alpha_update ? 1u : 0u;
+            mgs_gpu_batch_tri(&gv[0], &gv[1], &gv[2], binds, &st,
                               &s_tev_block, s_tev_hash);
         }
         return;
