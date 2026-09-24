@@ -479,7 +479,23 @@ static uint64_t content_hash(const uint8_t* p, unsigned bytes)
      *
      * An odd stride is coprime with every power of two, so the walk covers
      * all byte positions within a tile. */
-    if (bytes > 4096u) step = (bytes / 4096u) | 1u;   /* ~4 KB, odd stride */
+    /* ~1 KB, odd stride. It was 4 KB, and with the vertex arrays fixed the
+     * game samples textures on 1.7 million triangles a run instead of
+     * 400,000 - this became the most expensive function in the program at
+     * 5.5%, hashing four kilobytes per TRIANGLE.
+     *
+     * A quarter of the samples is still ample for what this has to catch. A
+     * changed video frame differs in a large fraction of its bytes, so the
+     * chance of 1,024 samples missing it is negligible; the regression test
+     * in tests/test_texture.c changes one byte per tile across the whole
+     * image - 14,336 bytes of 917,504 - and still fails on every tile
+     * offset with the old stride and passes with this one.
+     *
+     * Memoising the lookup instead was tried and does not pay: the game
+     * rewrites the texture registers per primitive, so a "nothing has
+     * changed" test keyed on those registers hit 82,466 times against
+     * 4,425,556 misses. Removed rather than left in. */
+    if (bytes > 1024u) step = (bytes / 1024u) | 1u;
 
     for (i = 0; i < bytes; i += step) {
         h ^= p[i];
@@ -817,6 +833,7 @@ no_dump:
     }
     t->hash = hash;
     t->efb_serial = serial;
+
     t->addr = addr; t->format = format;
     t->width = (uint16_t)width; t->height = (uint16_t)height;
     t->tlut_addr = tlut_addr; t->tlut_format = tlut_format;

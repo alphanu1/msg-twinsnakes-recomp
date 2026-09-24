@@ -12924,3 +12924,51 @@ geometry was never straddling the plane; it was at w == 0. The first version
 recursed without bound - a replacement vertex sits exactly ON the plane and
 can land a hair behind it in floating point - and the run died silently with
 no exit report. It is now depth-limited to one level.
+
+### F303 — correct geometry costs more than the software rasteriser can deliver
+
+F302 was worth it and it is not free. With the vertex arrays fixed the
+renderer is doing the work it should have been doing all along:
+
+                                    before F302      after
+    pixels inside a triangle       1,371,544,904  2,363,492,029
+    pixels blended                   883,360,775  1,324,725,615
+    rejected by the depth test                 0    437,222,962  (18.5%)
+    triangles sampling a texture         400,880      1,699,314
+
+The depth test rejecting 18.5% is itself a sign of health - before, nothing
+was ever occluded because almost nothing was drawn.
+
+**What it costs.** The port was running a few per cent faster than real time
+after F296/F297; in the heavy cinematic it now runs **40% slower**, and the
+audio device starves again there. The instantaneous rate swings between
++2.7% in light scenes and -43% in heavy ones.
+
+**Where the time goes.** 53.6% of all pixels come from 12,038 triangles, and
+2.36 billion pixels at 358% CPU is about 150 ns a pixel - slow for a span
+that samples one texture and blends. The machine has 32 cores and the
+renderer is using three and a half: work is split by SCANLINE BANDS within
+one triangle, with a barrier per triangle, so twelve million small triangles
+run serially on the calling thread and only the large ones parallelise.
+
+**Two things tried on the way, both measured, one kept:**
+
+- *Memoising the texture lookup* to stop `content_hash` re-hashing per
+  TRIANGLE (it was the hottest function in the program at 5.5%). It does not
+  pay: the game rewrites the texture registers per primitive, so a
+  "nothing has changed" test keyed on those registers hit 82,466 times
+  against 4,425,556 misses, eight-way or one-way. **Removed rather than left
+  in.**
+- *Hashing 1 KB instead of 4 KB.* Kept. The regression test still fails on
+  every tile offset with the old stride and passes with the new one, so the
+  detection it exists for is intact.
+
+**What not to re-propose:** reverting F302 to get the speed back. The
+geometry is correct now and the frames prove it; the renderer is what has to
+get faster, and the design document already says the software rasteriser is
+a stopgap for phases 1-2 rather than the answer.
+
+**The next lever, measured and not taken:** parallelism. Three and a half
+cores of thirty-two, with the split inside a triangle rather than across
+triangles. Batching triangles and banding the whole batch would use the
+machine; it is a larger change than tonight had room for.
