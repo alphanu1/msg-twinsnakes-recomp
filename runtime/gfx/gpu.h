@@ -46,6 +46,24 @@ void mgs_gpu_clear(uint32_t argb);
 int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
                       unsigned stride);
 
+/* ONE HOST VERTEX, which is what the design document asks for: "Build one
+ * converter that turns any GX vertex stream into a fixed host layout, then
+ * the host renderer only ever sees one vertex format."
+ *
+ * Position arrives in CLIP space - the transform stays on the CPU for now,
+ * where it is already verified against Dolphin. See gx.vert. */
+typedef struct MgsGpuVertex {
+    float    x, y, z, w;
+    float    r, g, b, a;
+    float    u, v;
+} MgsGpuVertex;
+
+/* Draw a triangle list into the colour target. `tex` is RGBA8 in the host's
+ * layout, or NULL for untextured, in which case a 1x1 white texel stands in
+ * so one pipeline covers both. */
+int mgs_gpu_draw(const MgsGpuVertex* verts, unsigned count,
+                 const uint32_t* tex, unsigned tex_w, unsigned tex_h);
+
 /* Counters for the exit report. */
 void mgs_gpu_stats(uint64_t* frames, uint64_t* readbacks, uint64_t* bytes);
 

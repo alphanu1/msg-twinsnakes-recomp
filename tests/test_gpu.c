@@ -77,6 +77,58 @@ int main(void)
         } else ++failures;
     }
 
+    /* --- A TRIANGLE, AND WHERE IT LANDS ------------------------------
+     *
+     * Clip space with w = 1, so the GPU's divide is the identity and the
+     * only thing being tested is the viewport mapping and the winding. The
+     * triangle covers the LEFT half: x from -1 to 0 across the full height.
+     * Checking a pixel inside AND one outside is what separates "it drew"
+     * from "it cleared the whole target to the vertex colour", which looks
+     * identical if you only sample one pixel.
+     *
+     * The colour is the vertex colour times a white texel, which is the
+     * base shader's whole job. */
+    {
+        MgsGpuVertex tri[3];
+        memset(tri, 0, sizeof tri);
+        /* Clockwise in clip space, covering x <= 0. */
+        tri[0].x = -1.0f; tri[0].y = -1.0f;
+        tri[1].x =  0.0f; tri[1].y = -1.0f;
+        tri[2].x = -1.0f; tri[2].y =  1.0f;
+        for (i = 0; i < 3u; ++i) {
+            tri[i].z = 0.0f; tri[i].w = 1.0f;
+            tri[i].r = 1.0f; tri[i].g = 0.0f; tri[i].b = 0.0f; tri[i].a = 1.0f;
+        }
+        /* An explicit all-white 2x2, rather than the NULL shorthand: if
+         * this works and NULL does not, the stand-in texel is the fault
+         * and not the sampler. */
+        static const uint32_t tex2[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu,
+                                          0xFFFFFFFFu, 0xFFFFFFFFu };
+        mgs_gpu_clear(0xFF000000u);            /* opaque black */
+        if (!mgs_gpu_draw(tri, 3u, tex2, 2u, 2u)) {
+            printf("FAIL: draw refused\n");
+            ++failures;
+        } else if (!mgs_gpu_read_back(px, W, H, W)) {
+            printf("FAIL: read back nothing after the draw\n");
+            ++failures;
+        } else {
+            /* A point well inside the left half, and one well outside it.
+             * Row H/2, columns W/8 and W*7/8. */
+            uint32_t inside  = px[(H / 2u) * W + (W / 8u)];
+            uint32_t outside = px[(H / 2u) * W + (W * 7u / 8u)];
+            if (inside != 0xFFFF0000u) {
+                printf("FAIL: inside the triangle is 0x%08X, "
+                       "expected 0xFFFF0000\n", inside);
+                ++failures;
+            }
+            if (outside != 0xFF000000u) {
+                printf("FAIL: outside the triangle is 0x%08X, "
+                       "expected the clear 0xFF000000\n", outside);
+                ++failures;
+            }
+        }
+    }
+
     mgs_gpu_shutdown();
     printf(failures ? "gpu: FAILED\n" : "gpu: ok\n");
     return failures ? 1 : 0;

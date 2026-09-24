@@ -13032,3 +13032,50 @@ generator (shaderc is installed and is the right tool - shaders are
 generated from TEV state and cached by hash, as the design document
 describes), texture upload, GPU-side EFB copies, and the frame comparison
 against Dolphin that is the real exit criterion.
+
+### F305 — the GPU draws: pipeline, vertex layout, texture and readback, with two traps recorded
+
+The base pipeline works. `tests/test_gpu.c` now covers a clear, a second
+clear that must replace it, a stride wider than the region, and a textured
+triangle checked at a pixel INSIDE it and a pixel OUTSIDE - which is what
+separates "it drew" from "it cleared the target to the vertex colour".
+
+`runtime/gfx/shaders/gx.vert` and `gx.frag` are compiled to SPIR-V at build
+time by glslc and embedded. The TEV-to-shader generator will use shaderc at
+RUNTIME instead, because a shader is generated from combiner state and
+cached by hash; these two are fixed, so building them here keeps shaderc off
+the runtime's critical path.
+
+**Trap one, and it cost most of the time: SDL_gpu.h gives the SPIR-V binding
+tables TWICE and they are different.** The table beside
+`SDL_CreateGPUComputePipeline` says "set 0: sampled textures". The one
+beside `SDL_CreateGPUShader` - the graphics one - says vertex shaders use
+set 0 and **fragment shaders use SET 2**, with set 3 for their uniform
+buffers. Using set 0 in a fragment shader is quiet: the pipeline is created,
+the draw is accepted, the geometry rasterises, and `texture()` returns
+vec4(0), so the triangle appears in black and reads as a vertex-colour or
+upload fault. Isolating it by removing the texture from the shader said
+"vertex colours are fine", which was true and pointed nowhere.
+
+**What actually named it** was the debug device:
+
+    uses descriptor [Set 0, Binding 0, variable "u_tex"] but the binding was
+    not declared in VkPipelineLayoutCreateInfo::pSetLayouts[0]
+
+**Trap two: the debug device opens a MODAL DIALOG on the user's desktop.**
+SDL turns its internal assertions into a window, and one appeared during a
+test run - "For 2D textures: the format is unsupported for the given usage",
+from asking for a D24S8 depth target and reading the failure. Both halves
+are fixed: `SDL_SetHint(SDL_HINT_ASSERT, "ignore")` so it never opens a
+dialog again, and `SDL_GPUTextureSupportsFormat` to ASK whether a format is
+supported rather than creating one and interpreting NULL.
+
+**What not to re-propose:** debugging a GPU problem without the debug
+device. Two hours of reasoning about upload ordering, command buffer
+ordering and stale embedded SPIR-V produced nothing; the validation layer
+named it in one line. Turn it on FIRST.
+
+**Also worth keeping:** the first version uploaded the texture in its own
+command buffer and submitted it before the draw's. That is not the
+documented pattern and the texture sampled as zero. Upload and draw now
+share one command buffer, with a copy pass then a render pass.
