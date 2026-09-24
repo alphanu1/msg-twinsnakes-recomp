@@ -184,6 +184,9 @@ typedef struct MgsGxRaster {
     uint64_t tri_by_texfmt[16];
     uint64_t tri_tex_tiny;    /* bound texture <= 4x4 */
     uint64_t tri_tex_small;   /* <= 16x16 */
+    /* Triangles wholly in front of GX's near plane (z < -w), and those
+     * crossing it and cut back to it. See the clipping in raster.c. */
+    uint64_t near_plane_rejected, near_plane_clipped;
 
     /* Returns non-zero when drawing should stop - the host has been asked to
      * quit and is waiting for this call to come back. Optional; NULL means

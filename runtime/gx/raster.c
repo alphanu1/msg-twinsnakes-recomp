@@ -1157,15 +1157,33 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
          * there is both safe and rare. */
         static int depth;
         const float near_w = 0.001f;
-        float wv[3];
-        unsigned behind = 0u;
+        float wv[3], zv[3];
+        unsigned behind = 0u, before_near = 0u;
 
         for (i = 0; i < 3u; ++i) {
             float view[3], clipv[3];
             transform(position_matrix(gx, vin[i]->pos_matrix),
                       vin[i]->x, vin[i]->y, vin[i]->z, view);
             project(gx, view, clipv, &wv[i]);
+            zv[i] = clipv[2];
             if (wv[i] < near_w) ++behind;
+            /* THE NEAR PLANE, which is not the eye.
+             *
+             * GX's clip volume puts the near plane at z = -w: screen depth
+             * is farZ + zRange * z/w, and z/w = -1 is depth 0. Geometry
+             * between the eye and that plane is CLIPPED by the hardware -
+             * Dolphin's software clipper does it as NEG_Z, the plane
+             * z + w >= 0. We only ever clipped at w = 0.001, the eye
+             * itself, so anything closer than the near plane was drawn
+             * anyway, its depth clamped to the nearest value, and a hull
+             * the camera had passed through filled the screen. Ben saw it
+             * as "camera clipping". There is no far-plane clip: Dolphin
+             * does not clip there either, and depth is clamped instead. */
+            if (zv[i] + wv[i] < 0.0f) ++before_near;
+        }
+        if (before_near == 3u && behind < 3u) {
+            ++r->clipped; ++r->near_plane_rejected;
+            return;
         }
         if (behind == 3u) {
             /* HOW FAR behind, and whether it is scene geometry.
@@ -1218,7 +1236,35 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             }
             return;
         }
-        if (behind && depth >= 1) { ++r->clipped; return; }
+        if ((behind || before_near) && depth >= 1) { ++r->clipped; return; }
+        if (!behind && before_near) {
+            /* Crossing the near plane but entirely in front of the eye:
+             * clip against z + w >= 0. The distance is linear across the
+             * triangle, so the crossing point interpolates the vertex. */
+            MgsGxVertex poly[4];
+            unsigned n = 0u;
+            for (i = 0; i < 3u; ++i) {
+                unsigned j = (i + 1u) % 3u;
+                float di = zv[i] + wv[i], dj = zv[j] + wv[j];
+                int in_i = di >= 0.0f, in_j = dj >= 0.0f;
+                if (in_i && n < 4u) poly[n++] = *vin[i];
+                if (in_i != in_j && n < 4u) {
+                    float t = di / (di - dj);
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+                    poly[n++] = lerp_vertex(vin[i], vin[j], t);
+                }
+            }
+            ++r->near_plane_clipped;
+            ++depth;
+            if (n >= 3u) {
+                mgs_raster_triangle(gx, &poly[0], &poly[1], &poly[2]);
+                if (n == 4u)
+                    mgs_raster_triangle(gx, &poly[0], &poly[2], &poly[3]);
+            }
+            --depth;
+            return;
+        }
         if (behind) {
             MgsGxVertex poly[4];
             unsigned n = 0u;

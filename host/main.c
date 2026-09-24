@@ -2381,6 +2381,11 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused_decode);
                             {
                                 unsigned k;
+                                printf("near plane: %llu triangles wholly "
+                                       "in front of it rejected, %llu "
+                                       "crossing it clipped\n",
+                                       (unsigned long long)rs->near_plane_rejected,
+                                       (unsigned long long)rs->near_plane_clipped);
                                 printf("TEXTURED TRIANGLES BY THE FORMAT "
                                        "THEY BOUND:\n");
                                 for (k = 0; k < 16u; ++k)

@@ -14897,3 +14897,26 @@ intro - captions, the scene composite, the name cards - renders correctly.
 **How to measure when the machine is shared:** fix `MGS_STEPS` on
 `MGS_GUEST_CLOCK=steps`, run the two variants concurrently, and compare
 CPU time. Wall-clock fps from a shared machine is not evidence.
+
+### F347 — nothing was clipped at the near plane, only at the eye
+
+GX's clip volume puts the near plane at z = -w (screen depth is
+farZ + zRange * z/w, and z/w = -1 is depth 0). Dolphin's software clipper
+clips there (NEG_Z, the plane z + w >= 0) and against w >= 0 for anything
+behind the eye, and does NOT clip at the far plane - depth is clamped
+instead. We clipped only at w = 0.001, the eye itself, so geometry between
+the eye and the near plane was drawn, its depth clamped to the nearest
+value by F342's normalisation.
+
+Now triangles wholly in front of the near plane are rejected and those
+crossing it are cut back to it, with the same one-level recursion guard
+the eye clip already had. In a 200 s run: **219,735 rejected and 123,619
+clipped** that were previously drawn.
+
+**It did not visibly change the shot Ben reported as "camera clipping"** -
+the SDV sequence where a hull fills the left of the frame looks the same
+with and without it (step clock, same shot). Either that framing is the
+game's own (the camera passing along the hull), or the fault he means is
+elsewhere; it needs his description or a Dolphin frame of the same moment
+before anything more is claimed. The clip itself is what the hardware does
+and is kept on that basis.
