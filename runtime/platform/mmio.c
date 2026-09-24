@@ -1332,19 +1332,45 @@ static uint32_t as_guest(uint32_t physical)
     return physical ? (0x80000000u | (physical & 0x03FFFFFFu)) : 0u;
 }
 
+/* A CPU FIFO IN THE SECOND WINDOW (0x7E000000-0x7FFFFFFF).
+ *
+ * GXSetCPUFifo writes the base as `addr & 0x3FFFFFFF`, and the hardware
+ * keeps 26 bits of it - fine for MEM1, where the game's buffers live on a
+ * console. Here they do not all: the recompiled engine's .bss is linked into
+ * the second window (0x7F499BA0, not the 0x8054A180 the game would choose),
+ * and its display lists are recorded there. Rebuilt from 26 bits, the base
+ * 0x7F4AD180 came back as 0x834AD180 - past the end of RAM - so every byte
+ * of every such list was recorded to nowhere, and the list the game later
+ * called was whatever was in the buffer before. Geometry that is never drawn.
+ *
+ * The register storage holds the full value the game wrote, and for this
+ * window that value still carries the bits that say so (0x3Exxxxxx or
+ * 0x3Fxxxxxx), so our own accessors can rebuild the real address. What the
+ * GUEST reads back is unchanged. The write pointer carries only 26 bits, and
+ * takes the window from the base it belongs to. */
+static int in_vmem_window(uint32_t v)
+{
+    return (v & 0x3E000000u) == 0x3E000000u;
+}
+
 uint32_t mgs_mmio_cpu_fifo_base(const MgsMmio* m)
 {
-    return as_guest(reg32(m, MMIO_PI + PI_FIFO_BASE));
+    uint32_t v = reg32(m, MMIO_PI + PI_FIFO_BASE);
+    return in_vmem_window(v) ? (v | 0x40000000u) : as_guest(v);
 }
 
 uint32_t mgs_mmio_cpu_fifo_end(const MgsMmio* m)
 {
-    return as_guest(reg32(m, MMIO_PI + PI_FIFO_END));
+    uint32_t v = reg32(m, MMIO_PI + PI_FIFO_END);
+    return in_vmem_window(v) ? (v | 0x40000000u) : as_guest(v);
 }
 
 uint32_t mgs_mmio_cpu_fifo_wrptr(const MgsMmio* m)
 {
-    return as_guest(reg32(m, MMIO_PI + PI_FIFO_WRPTR));
+    uint32_t w = reg32(m, MMIO_PI + PI_FIFO_WRPTR);
+    if (in_vmem_window(reg32(m, MMIO_PI + PI_FIFO_BASE)))
+        return 0x7C000000u | (w & 0x03FFFFFFu);
+    return as_guest(w);
 }
 
 void mgs_mmio_set_cpu_fifo_wrptr(MgsMmio* m, uint32_t v)

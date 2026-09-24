@@ -15050,3 +15050,34 @@ Dock cutscene returns from 0x7F0FC334 to 0x4E923A7C (a float, not code)
 after an insert into that same hash table - a saved return address
 overwritten, i.e. memory corruption. Reproduced twice headless at the same
 address; Ben's windowed runs do not hit it.
+
+### F352 — display lists the engine recorded were thrown away: its .bss lives in the second window
+
+The recompiled engine's .bss is linked at 0x7F499BA0 in the 0x7E000000
+window (the recompiled code has that address baked in), not at 0x8054A180
+where the game would put it in MEM1. Its display lists are recorded there.
+
+`GXSetCPUFifo` writes the FIFO base as `addr & 0x3FFFFFFF` and the hardware
+keeps 26 bits; our accessors rebuilt it as `0x80000000 | (reg & 0x03FFFFFF)`.
+For 0x7F4AD180 that is 0x834AD180 - past the end of RAM - so `guest_ptr`
+rejected every recorded byte: **the lists were never written**, and the list
+the game later called was whatever the buffer held before.
+
+`GXEndDisplayList` returns `OSPhysicalToCached(wrPtr) - base` =
+0x834AD1A5 - 0x7F4AD180 = **0x04000025**: the real size plus 0x04000000,
+the distance between the window and where the physical form lands. That is
+the "display list is implausibly large" desync: 64-113 a run, all at
+0x7F4AD180 / 0x7F4A9180 (`[gx] display list CALL of 67108901 bytes`).
+
+**Fix, in two parts.** The register storage keeps the full value the game
+wrote, and for this window it still carries the bits (0x3Exxxxxx /
+0x3Fxxxxxx), so `mgs_mmio_cpu_fifo_base/end/wrptr` rebuild the virtual
+address from them - the write pointer takes the window from its base. What
+the guest reads back is unchanged. And a list called in the window with the
+0x04000000 artefact has it removed. **Desyncs 113 -> 0; 113 lists corrected
+and drawn** in a run into the Dock cutscene, which renders through
+Ocelot's first line.
+
+**Not the crash.** The run still ends at 0x4E923A7C. Next suspect: DMA into
+the same relocated .bss (ARAM transfers, audio), whose addresses are folded
+the same way - and a DMA WRITES, where a recorded list was only dropped.

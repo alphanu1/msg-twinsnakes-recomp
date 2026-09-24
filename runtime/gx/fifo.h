@@ -245,6 +245,9 @@ typedef struct MgsGx {
     /* Display lists are executed inline, and may nest. A depth limit turns a
      * corrupt pointer into a refusal rather than a hang. */
     unsigned dl_depth;
+    /* Display lists in the second window whose recorded size carried the
+     * 0x04000000 artefact and was corrected. See run_dl. */
+    uint64_t dl_vmem_size_fixed;
 
     MgsGxTriangleFn triangle;
     void* user;

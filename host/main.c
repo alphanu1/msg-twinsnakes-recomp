@@ -1996,6 +1996,9 @@ int main(int argc, char** argv)
                                        (unsigned long long)g->dl_calls,
                                        (unsigned long long)g->dl_ragged,
                                        (unsigned long long)g->dl_truncated);
+                                printf("  display lists in the second window "
+                                       "whose size was corrected: %llu\n",
+                                       (unsigned long long)g->dl_vmem_size_fixed);
                             }
                             {
                                 unsigned k; uint64_t tot = 0;

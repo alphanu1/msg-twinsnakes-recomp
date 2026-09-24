@@ -278,11 +278,17 @@ void mgs_profile_report(void)
                     obj = b;
                 }
             }
-            fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx  %s%s%s\n",
+            /* And the offset WITHIN that object, so a local symbol - every
+             * generated guest function in the recompiled module is one,
+             * and dladdr cannot name them - can be resolved offline
+             * against that object's own symbol table with nm. */
+            fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx  %s%s%s  @0x%lx\n",
                     100.0 * (double)prof_hits[s] /
                     (double)(prof_total ? prof_total : 1ul),
                     prof_hits[s], prof_pc[s] - prof_base,
-                    obj ? obj : "?", sym ? "!" : "", sym ? sym : "");
+                    obj ? obj : "?", sym ? "!" : "", sym ? sym : "",
+                    obj ? (unsigned long)(prof_pc[s] -
+                                          (unsigned long)di.dli_fbase) : 0ul);
         }
         return;
     }

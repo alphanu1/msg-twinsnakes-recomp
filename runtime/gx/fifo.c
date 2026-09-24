@@ -845,7 +845,36 @@ static void run_dl(MgsGx* gx, uint32_t addr, uint32_t size)
          * was the variable. */
         addr &= ~0x1Fu;
     }
+    /* THE SIZE OF A LIST RECORDED IN THE SECOND WINDOW IS OFF BY 64 MB.
+     *
+     * GXEndDisplayList returns wrPtr - base, with wrPtr rebuilt by
+     * OSPhysicalToCached from a 26-bit register: for a list at 0x7F4AD180
+     * that is 0x834AD1A5 - 0x7F4AD180 = 0x04000025, the real 0x25 plus the
+     * distance between the window (0x7C000000 upwards) and where the
+     * physical form lands (0x80000000). On a console the list is in MEM1 and
+     * the two agree. Every list in this window carries exactly that
+     * 0x04000000, so it is removed here, where the list is called. See
+     * mgs_mmio_cpu_fifo_base for why the lists are in this window at all. */
+    if (addr - 0x7E000000u < 0x02000000u && size >= 0x04000000u &&
+        (size & 0x03FFFFFFu) <= MGS_GX_DL_MAX) {
+        size &= 0x03FFFFFFu;
+        ++gx->dl_vmem_size_fixed;
+    }
     if (size > MGS_GX_DL_MAX) {
+        /* A size no display list has - so the pointer and size the game
+         * handed over are not a display list at all. That is a symptom of
+         * memory the game relies on having been overwritten, and the same
+         * runs end with a return address overwritten by a float. Say what
+         * was asked for, and from how deep, so the structure it came from
+         * can be found. */
+        static unsigned said;
+        if (said < 12u) {
+            ++said;
+            fprintf(stderr, "[gx] display list CALL of %u bytes at 0x%08X "
+                            "refused (nesting %u, command %llu)\n",
+                    size, addr, gx->dl_depth,
+                    (unsigned long long)gx->commands);
+        }
         desync(gx, "display list is implausibly large", GX_OP_CALL_DL, size);
         return;
     }
