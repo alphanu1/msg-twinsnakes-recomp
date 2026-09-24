@@ -13,6 +13,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     memset(r, 0, sizeof *r);
     mgs_tex_cache_init(&r->tex);
     r->efb = efb;
+    r->tev_rev = 0xFFFFFFFFu;               /* nothing compiled yet */
     r->width = MGS_EFB_WIDTH;
     r->height = MGS_EFB_HEIGHT;
     r->depth_test = 1;
@@ -1123,6 +1124,13 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
     vin[0] = a; vin[1] = b; vin[2] = c;
 
+    /* Each vertex is transformed ONCE. The clip test below needs view and
+     * clip space, and so does the screen mapping after it; they used to be
+     * computed twice, for every vertex of every triangle. A triangle that is
+     * clipped returns before the second use, so what is kept here is always
+     * for these three vertices. */
+    float kept_view[3][3], kept_clip[3][3], kept_w[3];
+
     /* NEAR-PLANE CLIPPING, instead of dropping the triangle whole.
      *
      * A vertex at or behind the eye cannot be divided by w, and what this
@@ -1165,6 +1173,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             transform(position_matrix(gx, vin[i]->pos_matrix),
                       vin[i]->x, vin[i]->y, vin[i]->z, view);
             project(gx, view, clipv, &wv[i]);
+            memcpy(kept_view[i], view, sizeof view);
+            memcpy(kept_clip[i], clipv, sizeof clipv);
+            kept_w[i] = wv[i];
             zv[i] = clipv[2];
             if (wv[i] < near_w) ++behind;
             /* THE NEAR PLANE, which is not the eye.
@@ -1316,10 +1327,9 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     }
 
     for (i = 0; i < 3u; ++i) {
-        float view[3], clip[3], w;
-        transform(position_matrix(gx, vin[i]->pos_matrix),
-                  vin[i]->x, vin[i]->y, vin[i]->z, view);
-        project(gx, view, clip, &w);
+        const float* view = kept_view[i];
+        const float* clip = kept_clip[i];
+        float w = kept_w[i];
 
         /* Anything at or behind the eye cannot be divided by w. Proper
          * near-plane clipping splits the triangle; rejecting it whole is
@@ -1554,8 +1564,11 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         }
 
         /* Sampled here, once per triangle, while the registers still hold
-         * what this draw used. */
-        if (!tex_enabled) {
+         * what this draw used. ONLY UNDER MGS_TRACE_CENV: it compiled and
+         * ran the whole combiner again for every untextured triangle, on
+         * the game's thread, for a census that is read only when that
+         * diagnostic is asked for. */
+        if (!tex_enabled && r->note_pixels) {
             note_value(r->cenv_key, r->cenv_hits, &r->cenv_n,
                        mgs_bp_get(&gx->bp, BP_TEV_COLOR_ENV));
             note_value(r->rascol_key, r->rascol_hits, &r->rascol_n,
@@ -1952,7 +1965,19 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     }
 
     alpha_always = mgs_tev_alpha_test_always(&gx->bp);
-    mgs_tev_compile(&gx->bp, &tev);
+    /* The GPU path needs the compiled combiner only when the BP state has
+     * changed - it caches the block it builds from it by revision, below -
+     * so compiling it for every triangle was work thrown away on all but
+     * the first of each state. The software path and the blend trace
+     * still read it every time. */
+    {
+        static int trace_blend = -1;
+        if (trace_blend < 0) trace_blend = getenv("MGS_TRACE_BLENDDRAW") != NULL;
+        if (!r->gpu || trace_blend || r->tev_rev != gx->bp.rev) {
+            mgs_tev_compile(&gx->bp, &tev);
+            r->tev_rev = gx->bp.rev;
+        }
+    }
 
     /* MGS_TRACE_BLENDDRAW: WHY IS A CHARACTER SEE-THROUGH?
      *

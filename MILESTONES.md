@@ -1490,6 +1490,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
         the patched-call round trip through the host loop (~5%, recompiler
         structure), per-primitive draw state (~5%), and presenting the frame
         copy from the GPU instead of reading it back.
+      - **Gameplay measured (F359): a steady 33 fps at the Dock**, ~30 ms
+        a frame, of which ~28 ms is guest code, parsing and our triangle
+        path. `MGS_PROFILE_AFTER` profiles gameplay alone, game thread only.
       - Presentation shows a frame once, when VI flips to the buffer
         holding it (F358); a headless run prints its `presentation
         cadence` beside the game's own, so a cutscene shown at 48 fps

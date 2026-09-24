@@ -686,7 +686,17 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
 
         {
             int need_more = 0;
-            unsigned len = command_length(gx, gx->opcode, gx->buf, gx->have,
+            /* ONCE KNOWN, THE LENGTH IS KEPT. The gather pipe delivers at
+             * most four bytes per write, so the "rest in one go" below only
+             * ever saw four, and the length - for a draw, a full decode of
+             * the vertex format - was re-derived every four bytes of every
+             * vertex run: mgs_gx_vertex_format and mgs_gx_vertex_size were
+             * 2% of the game's thread between them. `want` was 1 for "not
+             * known yet"; every real command is at least two bytes long, so
+             * a larger value is the length itself. */
+            unsigned len = gx->want > 1u
+                         ? gx->want
+                         : command_length(gx, gx->opcode, gx->buf, gx->have,
                                           &need_more);
             if (need_more) continue;
             if (!len) {
@@ -730,6 +740,7 @@ static void feed(MgsGx* gx, const uint8_t* data, unsigned n)
              *
              * The bytes land in the buffer in the same order either way, so
              * this changes nothing about what is parsed. */
+            gx->want = len;
             if (gx->have < len) {
                 unsigned need  = len - gx->have;
                 unsigned avail = n - (i + 1u);

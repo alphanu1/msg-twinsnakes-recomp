@@ -27,6 +27,8 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <dlfcn.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 
 #define PROF_SLOTS 65536u
 
@@ -36,6 +38,20 @@ static volatile unsigned long prof_total;
 static volatile unsigned long prof_lost;
 static int            prof_on;
 static unsigned long  prof_base;             /* load address of the binary */
+
+/* THE GAME'S THREAD ONLY, unless MGS_PROFILE=all.
+ *
+ * The timer runs on PROCESS CPU time, and the kernel delivers each tick to
+ * whichever thread was using it - the mixer, the disc workers, the audio
+ * device's own thread. All of them were counted as if the game had been
+ * running them. A gameplay profile put `clock_gettime` at 6.7% and the
+ * guest loop was the obvious suspect; it cannot be told apart from the
+ * mixer's pacing without knowing which thread was sampled. So the thread
+ * that starts the profiler - the one that runs the guest - is the one
+ * profiled, and every other thread's samples are counted and set aside. */
+static long           prof_tid;
+static int            prof_all_threads;
+static volatile unsigned long prof_other;
 
 /* Open addressing. The handler must not allocate, lock or call anything that
  * is not async-signal-safe, so the table is fixed and collisions probe. */
@@ -55,6 +71,10 @@ static void prof_tick(int sig, siginfo_t* si, void* uc)
 {
     ucontext_t* c = (ucontext_t*)uc;
     (void)sig; (void)si;
+    if (!prof_all_threads && syscall(SYS_gettid) != prof_tid) {
+        prof_other += 1ul;
+        return;
+    }
     prof_total += 1ul;
 #if defined(__x86_64__)
     prof_record((unsigned long)c->uc_mcontext.gregs[REG_RIP]);
@@ -84,6 +104,8 @@ void mgs_profile_start(void)
     if (!e || !*e || *e == '0') return;
 
     prof_find_base();
+    prof_tid = syscall(SYS_gettid);
+    prof_all_threads = !strcmp(e, "all");
 
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = prof_tick;
@@ -95,10 +117,21 @@ void mgs_profile_start(void)
      * 40-second run, slow enough that the handler is not itself the cost. */
     it.it_interval.tv_sec = 0; it.it_interval.tv_usec = 1000;
     it.it_value = it.it_interval;
+    /* MGS_PROFILE_AFTER=<seconds of CPU time> starts sampling late, so one
+     * part of a run - gameplay, after a scripted walk through the menus and
+     * a cutscene - can be profiled on its own rather than averaged with
+     * everything before it. */
+    {
+        const char* after = getenv("MGS_PROFILE_AFTER");
+        long sec = after ? strtol(after, NULL, 0) : 0;
+        if (sec > 0) { it.it_value.tv_sec = sec; it.it_value.tv_usec = 0; }
+    }
     if (setitimer(ITIMER_PROF, &it, NULL) != 0) return;
 
     prof_on = 1;
-    fprintf(stderr, "[profile] sampling at 1 kHz of CPU time, base 0x%lx\n", prof_base);
+    fprintf(stderr, "[profile] sampling at 1 kHz of CPU time, base 0x%lx, %s\n",
+            prof_base, prof_all_threads ? "every thread"
+                                        : "the game's thread only (MGS_PROFILE=all for every thread)");
 }
 
 static int prof_cmp(const void* a, const void* b)
@@ -125,6 +158,13 @@ void mgs_profile_report(void)
 
     fprintf(stderr, "[profile] %lu samples over %u addresses (%lu lost to collisions)\n",
             prof_total, n, prof_lost);
+    if (!prof_all_threads)
+        fprintf(stderr, "[profile] %lu more samples landed on other threads "
+                        "(mixer, disc, audio device) and are not in this "
+                        "profile: %.1f%% of the process\n", prof_other,
+                prof_total + prof_other
+                    ? 100.0 * (double)prof_other / (double)(prof_total + prof_other)
+                    : 0.0);
     fprintf(stderr, "[profile] base 0x%lx - subtract it to look an address up\n", prof_base);
 
     /* WHERE THE TIME GOES, OVER EVERY SAMPLE AND NOT JUST THE TOP FORTY.

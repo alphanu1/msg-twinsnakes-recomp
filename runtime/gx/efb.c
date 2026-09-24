@@ -403,6 +403,24 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
              * Y0 Cb Y1 Cr. Averaging the two chroma samples is what the
              * hardware's filter does, and taking only the first would tint
              * every vertical edge. */
+            /* One bounds check per LINE when the whole line is in memory,
+             * which it always is in practice; the per-pair route below
+             * stays for a line that runs off the end. Same bytes. */
+            uint8_t* row = width >= 2u
+                         ? guest_ptr(mem, addr, (width & ~1u) * 2u) : NULL;
+            if (row) {
+                for (x = 0; x + 1u < width; x += 2u) {
+                    int y0, cb0, cr0, y1, cb1, cr1;
+                    uint8_t* p = row + x * 2u;
+                    rgb_to_ycbcr(src[x], &y0, &cb0, &cr0);
+                    rgb_to_ycbcr(src[x + 1u], &y1, &cb1, &cr1);
+                    p[0] = clamp8(y0);
+                    p[1] = clamp8((cb0 + cb1) / 2);
+                    p[2] = clamp8(y1);
+                    p[3] = clamp8((cr0 + cr1) / 2);
+                }
+                continue;
+            }
             for (x = 0; x + 1u < width; x += 2u) {
                 int y0, cb0, cr0, y1, cb1, cr1;
                 uint8_t* p;

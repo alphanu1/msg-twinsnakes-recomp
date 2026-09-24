@@ -1744,7 +1744,18 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * longer than the 13 guest cycles this was tuned for, and 64 of
              * them can exceed the 2 ms clamp - which would drop real time
              * on the floor and run the guest slow. */
-            if (++tick_batch >= 4u) {
+            /* AND ONLY WHEN THE POOL HAS RUN DRY, or every 32 steps.
+             *
+             * Reading every 4 steps unconditionally put `clock_gettime` at
+             * 6.7% of the game's thread in a gameplay profile - more than
+             * the rasteriser. While the pool still holds time there is
+             * nothing a fresh reading could change this step: the payout
+             * below is bounded by the next deadline, not by the clock. So
+             * the clock is read when the guest has used up the real time
+             * already read (it is then ahead, and waiting on time is what it
+             * is doing), and on a stride otherwise so a long busy stretch
+             * cannot outrun the 2 ms clamp. */
+            if (tick_pool == 0u ? ++tick_batch >= 4u : ++tick_batch >= 32u) {
                 uint64_t delta;
                 {
                 uint64_t now_t = mgs_wall_ticks();

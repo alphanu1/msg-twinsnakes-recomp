@@ -190,6 +190,9 @@ typedef struct MgsGxRaster {
     /* Pieces of a near-plane clip that still had a vertex behind the eye:
      * should be zero, and is counted so that stays checked. */
     uint64_t near_plane_refused;
+    /* The BP revision the combiner was last compiled at (raster.c): the GPU
+     * path recompiles only when it moves. */
+    uint32_t tev_rev;
     uint64_t culled[4];       /* by GEN_MODE cull mode, 1..3 */
 
     /* Returns non-zero when drawing should stop - the host has been asked to

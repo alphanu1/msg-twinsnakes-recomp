@@ -47,9 +47,15 @@ static uint32_t r32(Reader* r)
  */
 static float component(Reader* r, unsigned format, unsigned shift)
 {
-    float scale = 1.0f;
-    unsigned i;
-    for (i = 0; i < shift; ++i) scale *= 0.5f;
+    /* 2^-shift, built in the exponent rather than by halving in a loop
+     * once per component of every vertex. Exact either way: every halving
+     * of a power of two is exact, and shift is at most 31, well inside the
+     * normal range. */
+    float scale;
+    {
+        uint32_t bits = (127u - (shift & 31u)) << 23;
+        memcpy(&scale, &bits, sizeof scale);
+    }
 
     switch (format) {
         case 0: return (float)(uint8_t)r8(r) * scale;

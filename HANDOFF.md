@@ -15269,3 +15269,48 @@ presented against 26.19 drawn - never more often than the game draws, and
 fewer where two copies land in one field, of which only the last can be
 seen. **Not yet confirmed by eye on the cutscene Ben saw**; the counter is
 the instrument for it when it recurs.
+
+### F359 — gameplay runs at a steady 33 fps, and where its 30 ms go
+
+Measured for the first time on gameplay itself: the scripted run reaches the
+Dock with Snake standing still, and `MGS_TIME_FRAME=1` reads **33.3 fps,
+steady** across 70 samples (the Codec before it runs at 50; the Dock
+cutscene at 17-25 against a correct 25). Per frame about 30 ms: readback
+0.9, frame copy 0.8, and **28.3 ms of guest code, command parsing and our
+triangle path** for ~20,000 triangles submitted and ~11,600 drawn.
+
+`MGS_PROFILE_AFTER=<cpu seconds>` now starts the profiler late, and the
+profiler records the game's thread only (it was counting the mixer and disc
+threads as game time; `MGS_PROFILE=all` restores that). Gameplay alone:
+
+| | share of the game's thread |
+|---|---|
+| translated game code | ~35% |
+| GXRuntime float helpers it calls | ~12% |
+| our renderer: triangle setup 6.4, vertex decode 6.8, parse, textures | ~19% |
+| frame copies: YCbCr encode, readbacks | ~4.4% |
+| GPU driver | ~3.2% |
+| dispatch loop, clock | ~5% |
+
+**Taken off already (host):** the wall clock is read when the pool of real
+time runs dry rather than every 4 steps (`clock_gettime` 6.7% -> 1.3%); a
+draw command's length is kept once known instead of re-deriving the vertex
+format every 4 bytes the gather pipe delivers; each vertex is transformed
+once per triangle, not twice; the vertex component scale is built in the
+exponent rather than by a loop of halvings; the combiner is compiled only
+when the BP state changes on the GPU path; the untextured-draw colour census
+runs only under `MGS_TRACE_CENV`; the XFB encode resolves one pointer per
+line. **Checked:** on the step clock, frames against the previous build
+are byte-identical everywhere two runs of the previous build agree with
+each other (they diverge from ~copy 1,200 on disc timing, both ways); CPU
+time over identical guest work 71.1 s against 72.0 s on intro content,
+which is mostly movie decode - the renderer savings are for gameplay.
+
+**Next, in the module:** GXRuntime's float helpers are layered - `ppc_fmuls`
+calls `force_25bit_c`, `ni_mul`, `force_single`, `fp_write_single`,
+`classify_f32`, `set_fprf` - and a `-fPIC` build with default visibility
+may not inline any of them into another, so every guest float instruction
+paid about seven calls. `-fno-semantic-interposition` lets them inline (the
+version script already fixes the exports), and the float-available check and
+paired-single load/store get always-inline versions in `mgs_cpu.h`, since
+GCC was emitting its `static inline` ones out of line in the largest chunks.
