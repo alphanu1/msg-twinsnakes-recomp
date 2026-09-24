@@ -14997,3 +14997,56 @@ raise, 25.0 fps for every 50-frame window of a 75 s run; without it, the
 same stretch fell to 21.6 and then 12.0 (load changed during that run as a
 fit finished, so the "without" number is indicative, the "with" number is
 the evidence).
+
+### F351 — every loop in the game returned to the host on every iteration: `downcount` is 64 bits and we wrote 32
+
+`downcount` in DolRecomp's CPUState is an `s64` (src/cpu/cpu.h). The run
+loop refilled it by copying a `uint32_t` budget into its low half. The first
+dispatch to come back with the count negative left the high half all ones,
+and nothing rewrote it: every refill after that left the count near
+-4.29 billion. The generated back-branch yields when
+`downcount <= -DOLRECOMP_C_LOOP_CYCLE_BUDGET` (256), so **every loop
+iteration in the game returned to the host loop and was dispatched again**.
+Found from a crash trace whose "path in" showed one loop head
+(0x7F0FC198, a 512-entry hash-table probe) dispatched thirteen times
+running. That is where "21 million dispatches a second at 13 guest cycles
+each" (F343) came from.
+
+Fixed at all three writes (init, run loop, the call helper) and at the
+census read, which had the same truncation.
+
+**The payout had to change with it.** Guest time was paid at most 128 ticks
+a step - a quarter of the shortest hook period, so nothing could be stepped
+over - and the clock was read every 64 steps. Both were tuned to 13-cycle
+steps; with real-length steps they run guest time slow. Now the payout is
+bounded by the distance to the EARLIEST hook deadline (`next_due`, F343), so
+guest time lands exactly on it and no hook can be skipped, and the clock is
+read every 4 steps.
+
+**Measured:** dispatches 21.3M/s at 13.1 cycles -> 10.5M/s at 23.0 cycles.
+Audio 2,563,680 samples in 80 s = 32,046 Hz (guest time still tracks the
+wall clock). The intro progresses identically. Old and new builds side by
+side both hold exactly 25.0 fps through the heavy intro - it is no longer
+CPU-bound on either - so the gain has to be judged in gameplay (50 fps).
+
+**Why dispatches are still short, and why that is not the frame-rate
+problem:** ~75% of dispatch samples are the game's IDLE thread (priority
+31): OSDisableInterrupts, a check, OSRestoreInterrupts, yield - waiting for
+the next field. Where the idle thread runs, the guest has headroom.
+
+**Side effect on the step clock:** `MGS_GUEST_CLOCK=steps` pays a fixed
+number of ticks per step, and a step can now run up to the 100,000-cycle
+budget, so the deterministic harness's guest time per guest cycle changed.
+Frames from before and after this commit are not comparable on that clock.
+
+**Also found:** the recompiled module (`gGGSPA4_recomp.so`) was last built
+2026-09-19 01:41, before `game/module/CMakeLists.txt` enforced `-O2
+-fno-fast-math -ffp-contract=off` that evening. Every run since has used
+the `-O3` build the design document forbids. Not yet rebuilt - it needs a
+measured before/after of its own.
+
+**And a crash, still open:** a headless run through the menus into the
+Dock cutscene returns from 0x7F0FC334 to 0x4E923A7C (a float, not code)
+after an insert into that same hash table - a saved return address
+overwritten, i.e. memory corruption. Reproduced twice headless at the same
+address; Ben's windowed runs do not hit it.

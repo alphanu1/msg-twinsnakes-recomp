@@ -138,7 +138,9 @@ void* mgs_module_new_cpu_state(const MgsModule* mod, uint8_t* ram, uint32_t ram_
      * reached. Zero would return immediately and look like a hang.
      */
     {
-        uint32_t budget = 1000000u;
+        /* ALL EIGHT BYTES: downcount is an s64 in DolRecomp's CPUState. See
+         * the refill in mgs_module_run for what writing four cost. */
+        int64_t budget = 1000000;
         memcpy(state + CPU_DOWNCOUNT, &budget, sizeof budget);
     }
     return state;
@@ -1720,7 +1722,12 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * one hook-period's worth out of it. Guest time still tracks
              * real time; it just cannot arrive in a lump big enough to step
              * over a hook. */
-            if (++tick_batch >= 64u) {
+            /* Every few steps, not every 64: with loops no longer yielding
+             * on every iteration (see the downcount refill), a step is far
+             * longer than the 13 guest cycles this was tuned for, and 64 of
+             * them can exceed the 2 ms clamp - which would drop real time
+             * on the floor and run the guest slow. */
+            if (++tick_batch >= 4u) {
                 uint64_t delta;
                 {
                 uint64_t now_t = mgs_wall_ticks();
@@ -1750,11 +1757,23 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
                 tick_batch = 0;
                 }
             }
-            /* Pay out at most a quarter of the SHORTEST hook period - 512
-             * ticks for the graphics completion - so no hook can be stepped
-             * over, however far behind the pool has fallen. */
+            /* PAY UP TO THE NEXT DEADLINE, NOT A FIXED 128.
+             *
+             * The cap existed so a payout could never step over a hook:
+             * a quarter of the shortest period (the 512-tick graphics
+             * completion). It only worked because steps were tiny - 13
+             * guest cycles, from a refill bug that made every loop yield.
+             * With real-length steps a fixed 128 per step runs guest time
+             * far slower than the wall clock.
+             *
+             * Bounding the payout by the distance to the EARLIEST hook
+             * deadline keeps the property exactly - guest time lands on
+             * that deadline, the hook fires on the next step, the next
+             * deadline is computed - while paying out everything real time
+             * has accumulated whenever no hook is near. */
             {
-                uint64_t pay = tick_pool < 128ull ? tick_pool : 128ull;
+                uint64_t room = next_due > gt ? next_due - gt : 1ull;
+                uint64_t pay = tick_pool < room ? tick_pool : room;
                 if (pay) {
                     tick_pool -= pay;
                     gt += pay;
@@ -2138,7 +2157,20 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * dispatch call or not decrementing the counter at all. Lowering
              * this tells the two apart: if a small budget makes the host
              * responsive, it was the former. */
-            uint32_t budget = s_budget;
+            /* ALL EIGHT BYTES OF IT.
+             *
+             * `downcount` is an s64 (DolRecomp src/cpu/cpu.h), and this
+             * refill copied a uint32_t into its low half. The first time a
+             * dispatch came back with the count negative, the high half
+             * became all ones and nothing ever rewrote it: every "refill"
+             * after that left the count near -4.29 billion. The recompiled
+             * loops yield when downcount <= -DOLRECOMP_C_LOOP_CYCLE_BUDGET,
+             * so from then on EVERY backward branch in the game returned to
+             * this loop and was dispatched again - 21 million round trips a
+             * second at 13 guest cycles each, a loop iteration apiece (a
+             * crash trace showed the same loop head dispatched thirteen
+             * times running). */
+            int64_t budget = (int64_t)s_budget;
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
         }
 
@@ -2181,8 +2213,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * translated code decrements the downcount, so what it did not use
          * is what it did not run. */
         if (s_cycle_census) {
-            uint32_t before = s_budget;
-            uint32_t after;
+            int64_t before = (int64_t)s_budget;
+            int64_t after;
             int ok = mod->dispatch(cpu, pc);
             memcpy(&after, (uint8_t*)cpu + CPU_DOWNCOUNT, sizeof after);
             s_cycles_run += (uint64_t)(before - after);
@@ -2353,7 +2385,7 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
          * the trace is off in every normal run. */
         if (s_fntrace_n) fntrace_step(cpu, pc);
         {
-            uint32_t budget = 100000u;
+            int64_t budget = 100000;       /* all eight bytes; see above */
             memcpy((uint8_t*)cpu + CPU_DOWNCOUNT, &budget, sizeof budget);
         }
         {
