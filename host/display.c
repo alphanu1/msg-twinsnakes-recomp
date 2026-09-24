@@ -475,13 +475,15 @@ static void run_copy(uint32_t cmd)
                     const MgsGxRaster* rr = &s_raster;
                     unsigned i2 = (rr->drawlog_at - 1u) & 63u;
                     printf("[video] frame %5u  %ux%u  roughness %3u %-5s  "
-                           "rgb %3u,%3u,%3u  lit %3u%%  movie %u  "
+                           "rgb %3u,%3u,%3u  lit %3u%%  clear %06X  "
+                           "movie %u  "
                            "xfb 0x%08X",
                            vn, copy_w, copy_h, r, noisy ? "NOISE" : "ok",
                            cnt ? (unsigned)(sum_r / cnt) : 0u,
                            cnt ? (unsigned)(sum_g / cnt) : 0u,
                            cnt ? (unsigned)(sum_b / cnt) : 0u,
                            cnt ? lit * 100u / cnt : 0u,
+                           s_efb.clear_argb & 0xFFFFFFu,
                            movie_frames(),
                            mgs_mmio_xfb_address(mgs_host_mmio()));
                     if (rr->drawlog_w[i2])

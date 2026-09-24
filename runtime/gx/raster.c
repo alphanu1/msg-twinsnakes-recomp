@@ -1641,6 +1641,39 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                         r->scissor_box[0], r->scissor_box[2],
                         r->scissor_box[1], r->scissor_box[3],
                         r->scissor_seen ? "set" : "none");
+            /* The triangle's own screen coordinates and its texture
+             * coordinates. A composite quad that should cover the movie
+             * rectangle and instead covers a sliver is either being placed
+             * wrongly or scaled wrongly, and the vertices say which. */
+            fprintf(stderr, "[drawcolour]   screen (%.1f,%.1f) (%.1f,%.1f) "
+                    "(%.1f,%.1f)   uv (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f)\n",
+                    sx[0], sy[0], sx[1], sy[1], sx[2], sy[2],
+                    vin[0]->u[tex_coord], vin[0]->v[tex_coord],
+                    vin[1]->u[tex_coord], vin[1]->v[tex_coord],
+                    vin[2]->u[tex_coord], vin[2]->v[tex_coord]);
+            /* ...and where the vertices started, and which matrix moved
+             * them. A quad that should cover the screen and lands off the
+             * right edge is either given the wrong positions or the wrong
+             * matrix, and only the object-space values tell them apart. */
+            {
+                const float* m = position_matrix(gx, vin[0]->pos_matrix);
+                fprintf(stderr, "[drawcolour]   object (%.2f,%.2f,%.2f) "
+                        "(%.2f,%.2f,%.2f) (%.2f,%.2f,%.2f)  mtx %u  "
+                        "ortho %u\n"
+                        "[drawcolour]   matrix  %.3f %.3f %.3f %.3f / "
+                        "%.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f\n"
+                        "[drawcolour]   proj    %.4f %.4f %.4f %.4f "
+                        "%.4f %.4f\n",
+                        vin[0]->x, vin[0]->y, vin[0]->z,
+                        vin[1]->x, vin[1]->y, vin[1]->z,
+                        vin[2]->x, vin[2]->y, vin[2]->z,
+                        vin[0]->pos_matrix, gx->xf_projection_ortho,
+                        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+                        m[8], m[9], m[10], m[11],
+                        gx->xf_projection[0], gx->xf_projection[1],
+                        gx->xf_projection[2], gx->xf_projection[3],
+                        gx->xf_projection[4], gx->xf_projection[5]);
+            }
             }
         }
         r->col_armed = 0;

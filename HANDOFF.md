@@ -12738,3 +12738,64 @@ that compares against the monotonic clock and never touches the device.
 underruns during loading are real. Both want more speed, and the structural
 one is that a dispatch call runs 13.5 guest instructions, so the run loop is
 entered every thirteen.
+
+### F299 — the logos are perfect, the cinematic is a 3D-placed quad, and that is where the video still fails (OPEN)
+
+The user: "video is better but still not right. Subtitles are the only
+thing working correctly." Both halves are true and the second is precise.
+
+**What works.** A contact sheet of the boot shows the Konami logo, Konami
+Computer Entertainment Japan, the Silicon Knights logo with all its detail,
+Dolby Surround Pro Logic II and the PRESENTS card - all correct. The low
+"lit" percentages there are a logo on black, not a fault; reading them as
+one was my mistake.
+
+**Where it breaks.** At the opening cinematic. The frame is 512x448 and
+contains **304 distinct colours**: 70.4% is one flat dark teal (1,30,39),
+28.8% is the letterbox, and 0.1% is the subtitle at (189,189,189). The
+scene contributes about two hundred pixels.
+
+**The clear colour is 000000**, so that teal is DRAWN, not cleared. And the
+rasteriser is busy: 1.37 billion pixels written in the run, 832 million of
+them lit. The pixels go somewhere; almost none of them survive.
+
+**What the composite is doing.** The movie's planes are perfect - the luma
+plane holds a legible tactical display, measured min 19 max 129 mean 42.2 -
+and the composite binds them correctly. But it draws them onto a quad at
+
+    screen (491.8,157.7) (674.9,155.8) (659.7,291.9) (484.8,268.2)
+    uv     (0,1) (1,1) (1,0) (0,0)            - the whole texture
+    object (-1310,2122,-4050) (682,2122,-4050) (682,620,-4050)
+    matrix  0.796 0 -0.606 2257.785 / -0.076 0.992 -0.099 -1723.355
+            / 0.601 0.125 0.790 -2452.256
+    proj    1.5500 0 2.0667 0 0 -50.0019   perspective
+
+on a screen 512 wide. Most of it is off the right edge, and it is tilted,
+so it is a 3D-transformed quad and not a full-screen blit.
+
+**The transform is self-consistent.** Working vertex 0 by hand: view
+(3669.3, 882.2, -6173.8), clip.x = 1.55 x 3669.3 = 5687.4, w = 6173.8,
+ndc.x = 0.9212, screen.x = 256 + 256 x 0.9212 = **491.8** - exactly what the
+renderer produced. The packed projection also matches Dolphin's
+`ProjectionType::Perspective` field for field. So nothing here is arithmetic.
+
+**The open question is whether that placement is RIGHT.** MGS's intro does
+fly tactical displays past the camera, so a moving 3D quad is not
+self-evidently wrong; but the scene around it is missing, and that is what
+makes the screen empty. Of 10.7 million triangles drawn, only **400,880 ask
+for a texture at all** (bind failures: 0), and every one of the 10.3 million
+untextured ones has vertex colour 0xFFFFFFFF with a combiner
+(TEV_COLOR_ENV 0x08FACF: a=zero b=rasc c=one d=zero) that outputs the
+rasterised colour. That should paint white. The screen is not white, so
+they are drawn and then covered, or never reach the buffer.
+
+**What would settle it: the oracle, and it is not working for frames yet.**
+Dolphin boots the extracted disc through `sys/main.dol` (F294) but
+`Dolphin.Movie.DumpFrames` produced nothing in 260 s under `-v Software`,
+which is too slow to reach the intro. Either give it far longer, or use a
+hardware backend with a display.
+
+**What not to re-propose:** concluding anything from the `lit` percentage
+alone. A logo on black reads 8% and is perfect; the broken cinematic reads
+71% and is empty. It measures how much is non-black, which is not the same
+as how much is drawn.
