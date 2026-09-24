@@ -264,6 +264,21 @@ static uint64_t s_clipped, s_out_samples;
 static int      s_trace = -1;
 static unsigned s_traced, s_ovr_logged;
 
+/* Where each voice was left at the end of the last frame, so a rewind by
+ * the game can be seen rather than inferred. */
+static uint32_t s_left_curr[64];
+static uint8_t  s_left_curr_valid[64];
+static uint64_t s_rewinds, s_rewind_total;
+static uint32_t s_rewind_max, s_rewind_samples[8];
+static unsigned s_rewind_n;
+
+static int no_playon(void)
+{
+    static int v = -1;
+    if (v < 0) v = getenv("MGS_NO_PLAYON") != NULL;
+    return v;
+}
+
 /* One AX frame: 5 ms of 32 kHz stereo. */
 #define AX_FRAME_SAMPLES AX_SAMPLES_PER_FRAME
 
@@ -294,6 +309,32 @@ void mgs_ax_dsp_frame(void* cpu)
         format  = rd16(cpu, pb + PB_ADDR_FORMAT);
         looping = rd16(cpu, pb + PB_ADDR_LOOPFLAG);
         curr    = rd32pair(cpu, pb + PB_ADDR_CURR_HI);
+
+        /* DID THE GAME REWIND US?
+         *
+         * Playing on past `end` into a block the game has already filled
+         * stops the gaps, and it measures as an ECHO - a repeat at a
+         * constant 3,040 samples through the whole cinematic, which
+         * disappears when the play-on is withdrawn. The obvious mechanism
+         * is that we read ahead and the game then writes `currentAddress`
+         * back to where IT thinks the voice is, so the same samples are
+         * played twice.
+         *
+         * That is a guess until it is counted, and this counts it: what we
+         * left the voice at last frame against what it holds now. */
+        {
+            unsigned vi = i;
+            if (vi < 64u && s_left_curr_valid[vi] &&
+                curr < s_left_curr[vi]) {
+                uint32_t back = s_left_curr[vi] - curr;
+                ++s_rewinds;
+                s_rewind_total += back;
+                if (back > s_rewind_max) s_rewind_max = back;
+                if (s_rewind_n < 8u) {
+                    s_rewind_samples[s_rewind_n++] = back;
+                }
+            }
+        }
         end     = rd32pair(cpu, pb + PB_ADDR_END_HI);
         loop    = rd32pair(cpu, pb + PB_ADDR_LOOP_HI);
         frac    = rd16(cpu, pb + PB_SRC_FRAC);
@@ -480,7 +521,6 @@ void mgs_ax_dsp_frame(void* cpu)
                         ++s_loop_has_data;
                     else
                         ++s_loop_empty;
-                    curr = loop;
                     ++s_starved;
                     if (!s_starve_at[i]) s_starve_at[i] = s_frames;
                     /* PLAY ON IF THE NEXT BLOCK IS ALREADY THERE.
@@ -508,13 +548,49 @@ void mgs_ax_dsp_frame(void* cpu)
                      * the voice stops as before, because then the data
                      * really is absent and reading on would be inventing
                      * sound. */
-                    if (probe_ok) {
+                    /* MGS_NO_PLAYON=1 withdraws this, for bisecting.
+                     *
+                     * Ben reports an echo through the cinematic, and it
+                     * measures as a repeat at a CONSTANT 3,040 samples -
+                     * 95.00 ms - in twelve of nineteen windows, with no
+                     * harmonics, so it is a real repeat and not a bass
+                     * note. A fixed delay points at a buffer, and this is
+                     * the one place the mixer plays data the game has not
+                     * yet told it to. Withdrawing it is the A/B that says
+                     * whether this is the cause. */
+                    if (probe_ok && !no_playon()) {
+                        /* KEEP `curr` WHERE IT IS. This is what caused the
+                         * echo, and it is an ordering mistake rather than a
+                         * mistaken idea.
+                         *
+                         * `curr = loop` used to run BEFORE this branch. A
+                         * streaming voice holds `loop == end + 1`, so on
+                         * the first overrun of a block that assignment is
+                         * nearly a no-op. But `end` is re-read from the
+                         * parameter block every frame, and the play-on only
+                         * moves the LOCAL copy - so the next frame overruns
+                         * again with `curr` now a couple of hundred samples
+                         * past `end`, and `curr = loop` drags it back to
+                         * `end + 1`. The same samples are played again, once
+                         * per frame, until the game finally extends `end`.
+                         *
+                         * Measured: a repeat at a constant 3,040 samples -
+                         * 95.00 ms - through the cinematic, with no
+                         * harmonics, gone entirely when the play-on is
+                         * withdrawn. Ben heard it as an echo and it was only
+                         * audible once the GPU stopped the judder from
+                         * masking it.
+                         *
+                         * The data is contiguous - `loop` IS `end + 1` - so
+                         * carrying on from where the resampler actually got
+                         * to is both correct and what the hardware does. */
                         uint32_t left = (uint32_t)(AX_FRAME_SAMPLES - k);
                         end = curr + (uint32_t)((((uint64_t)left * ratio)
                                                  + frac) >> 16) + 1u;
                         ++s_played_on;
                         continue;
                     }
+                    curr = loop;
                     /* AND STOP FOR THIS FRAME.
                      *
                      * `loop` is `end + 1` here - the console shows the same
@@ -553,6 +629,7 @@ void mgs_ax_dsp_frame(void* cpu)
         wr16(cpu, pb + PB_SRC_FRAC, frac);
         wr16(cpu, pb + PB_VE_VOLUME, vol);        /* the ramp's new level */
         wr32pair(cpu, pb + PB_ADDR_CURR_HI, curr);
+        if (i < 64u) { s_left_curr[i] = curr; s_left_curr_valid[i] = 1u; }
     }
 
     /* PUSHED EVEN WHEN SILENT. The device is the guest's pacing partner; a
@@ -754,6 +831,17 @@ void mgs_ax_dsp_report(void)
            (unsigned long long)under);
     printf("  played on into an already-filled block: %llu of %llu overruns\n",
            (unsigned long long)s_played_on, (unsigned long long)s_starved);
+    if (s_rewinds) {
+        unsigned q;
+        printf("  the game REWOUND a voice %llu times, by %.0f samples on "
+               "average, worst %u\n    first few: ",
+               (unsigned long long)s_rewinds,
+               (double)s_rewind_total / (double)s_rewinds, s_rewind_max);
+        for (q = 0; q < s_rewind_n; ++q) printf("%u ", s_rewind_samples[q]);
+        printf("\n");
+    } else {
+        printf("  the game never rewound a voice\n");
+    }
     printf("  runway: first %u samples, mean %.0f, min %u  (a frame consumes "
            "about 220)\n",
            s_head_first,

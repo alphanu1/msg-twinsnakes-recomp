@@ -13238,3 +13238,66 @@ produce exactly this symptom, and the new one is not.
 else reached from an interrupt. The clipping Ben also reports is a separate
 thing - the limiter stands in for AX's compressor (F285) and the real one
 needs the DSP command list parsed.
+
+### F310 — the echo was `curr = loop` running BEFORE the play-on, replaying the same samples every frame
+
+Ben, on the GPU build: "audio still has a echo." And then the piece that
+made it findable: "its ok except judder and clipping with gpu off... maybe
+there is a echo on no gpu, but its hard to hear with the judder and
+clipping." The echo was always there; the GPU removed the judder that was
+masking it.
+
+**Measuring it took three wrong tests, which are worth recording:**
+
+1. *Autocorrelation of one window from the middle of the run* - peaked at
+   0.17 and I called it clean. The echo is in the CINEMATIC, and the middle
+   of the run is not the cinematic. Scanning every two-second window instead
+   found peaks past 0.97.
+2. *Raw autocorrelation cannot tell an echo from a bass note.* A 72 Hz tone
+   peaks at 13.9 ms exactly as an echo would. The discriminator is
+   HARMONICS: a periodic tone repeats at 2x and 3x the lag, an echo does
+   not. At 66s and 90s the peak is 95.0 ms with x2 at 0.03 - a real repeat.
+3. *An envelope test that searched from its own smallest lag* and duly
+   reported that lag. Autocorrelation is naturally high at small lags; that
+   found nothing and looked like it had.
+
+**What it measured to.** A repeat at a CONSTANT 3,040 samples - 95.00 ms -
+in twelve of nineteen windows across the cinematic, r ~ 0.44. A fixed delay
+means a buffer, not a timing wobble.
+
+**The cause, and it is an ordering mistake in my own F283 fix.** On overrun
+the code did:
+
+    curr = loop;                       <- rewind
+    ++s_starved;
+    if (probe_ok) { end = curr + ...; continue; }   <- play on
+
+A streaming voice holds `loop == end + 1`, so on the FIRST overrun of a
+block `curr = loop` is nearly a no-op. But `end` is re-read from the
+parameter block every frame and the play-on only moves the LOCAL copy - so
+the next frame overruns again with `curr` a couple of hundred samples past
+`end`, and `curr = loop` drags it back to `end + 1`. The same samples play
+again, once per frame, until the game extends `end` about two frames later.
+
+Moving `curr = loop` to AFTER the play-on branch keeps the position the
+resampler actually reached. The data is contiguous - `loop` IS `end + 1` -
+so carrying on is both correct and what the hardware does.
+
+    commonest lag   3,040 samples in 12 of 19 windows  ->  no lag repeats
+    mean r                                    +0.380   ->  +0.227
+    gaps >= 1 ms                                   0   ->  0
+    verdict                                    clean   ->  clean
+
+**What not to re-propose:** withdrawing the play-on to kill the echo. That
+was measured too: it removes the repeat and brings back **1,954 gaps
+totalling 7.2 seconds**, which is the judder. Both symptoms come from the
+voice starving 4,664 times a run, and THAT is still unexplained - the
+runway sawtooths from 4,095 samples to nearly nothing and the game refills
+a mean of 2.0 AX frames after the starve. Play-on covers it correctly now
+rather than incorrectly.
+
+**Also noticed, not chased:** the two output channels are bit-identical -
+left against right correlates at exactly 1.000 at lag 0. Every voice mixing
+to both channels is right for this game on GameCube (F285), but identical
+to the last bit means the per-voice left and right volumes are not being
+applied separately, and that is worth a look.
