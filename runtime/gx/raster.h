@@ -128,6 +128,15 @@ typedef struct MgsGxRaster {
      * every stage there sees stage zero's texel. Counted rather than
      * assumed - an early boot showed 64 such triangles and a full run
      * shows rather more. */
+    /* HOW FAR THE TEXTURE COORDINATES SPAN ACROSS A TEXTURED TRIANGLE,
+     * in texels, bucketed by power of two. A triangle whose three
+     * vertices share one texel is drawn in one flat colour however
+     * good the texture is - which is what "no textures on the 3d
+     * models" looks like from the outside, and what a wrong texture
+     * coordinate produces. Counted because the decode and the bind
+     * both already report success, so the fault is downstream of
+     * them or it is not there at all. */
+    uint64_t uv_span[12];
     uint64_t multi_tex_tris;
     /* Draws with more distinct (map, coordinate) pairs than the GPU
      * path has texture units. Those stages fall back to unit zero and

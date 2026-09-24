@@ -1816,6 +1816,29 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
             if (tex) {
                 texture_wrap(&gx->bp, map, &wrap_s, &wrap_t, &bilinear);
                 ++r->textured;
+                {   /* The span in TEXELS, not in normalised units: a
+                     * coordinate range of 0.01 is a whole texel on a 128-wide
+                     * texture and a tenth of one on a 16-wide. */
+                    float u0 = vin[0]->u[tex_coord], u1 = vin[1]->u[tex_coord];
+                    float u2 = vin[2]->u[tex_coord];
+                    float v0 = vin[0]->v[tex_coord], v1 = vin[1]->v[tex_coord];
+                    float v2 = vin[2]->v[tex_coord];
+                    float umin = u0 < u1 ? (u0 < u2 ? u0 : u2)
+                                         : (u1 < u2 ? u1 : u2);
+                    float umax = u0 > u1 ? (u0 > u2 ? u0 : u2)
+                                         : (u1 > u2 ? u1 : u2);
+                    float vmin = v0 < v1 ? (v0 < v2 ? v0 : v2)
+                                         : (v1 < v2 ? v1 : v2);
+                    float vmax = v0 > v1 ? (v0 > v2 ? v0 : v2)
+                                         : (v1 > v2 ? v1 : v2);
+                    float du = (umax - umin) * (float)tex->width;
+                    float dv = (vmax - vmin) * (float)tex->height;
+                    float d = du > dv ? du : dv;
+                    unsigned b = 0;
+                    if (d < 0.0f) d = -d;
+                    while (d >= 1.0f && b < 11u) { d *= 0.5f; ++b; }
+                    r->uv_span[b] += 1u;
+                }
             }
         }
     }

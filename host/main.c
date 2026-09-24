@@ -2003,6 +2003,40 @@ int main(int argc, char** argv)
                                         (unsigned long long)(g ? g->indexed_xf_no_array : 0),
                                         (unsigned long long)(g ? g->indexed_xf_bad_addr : 0));
                                 }
+                                {
+                                    unsigned k;
+                                    {
+                                    unsigned k;
+                                    printf("  decodes by format: source "
+                                           "variation -> decoded variation "
+                                           "(both mean |step| x1000)\n");
+                                    for (k = 0; k < 16u; ++k)
+                                        if (rs->tex.dec_n[k])
+                                            printf("    fmt 0x%X  %6llu "
+                                                   "decodes   src %7.1f  "
+                                                   "out %7.1f\n", k,
+                                                (unsigned long long)rs->tex.dec_n[k],
+                                                (double)rs->tex.dec_src_var[k]
+                                                    / rs->tex.dec_n[k] / 1000.0,
+                                                (double)rs->tex.dec_out_var[k]
+                                                    / rs->tex.dec_n[k] / 1000.0);
+                                }
+                                printf("  texture lookup memo: %llu hits, "
+                                       "%llu misses (a miss content-hashes "
+                                       "the texture)\n",
+                                       (unsigned long long)rs->tex.memo_hits,
+                                       (unsigned long long)rs->tex.memo_misses);
+                                printf("  textured triangles by how many "
+                                           "TEXELS their coordinates span "
+                                           "(<1 means one flat colour):");
+                                    for (k = 0; k < 12u; ++k)
+                                        if (rs->uv_span[k])
+                                            printf("  %s%u:%llu",
+                                                   k ? "" : "<1 ",
+                                                   k ? (1u << (k - 1u)) : 0u,
+                                                   (unsigned long long)rs->uv_span[k]);
+                                    printf("\n");
+                                }
                                 printf("  a LATER stage binds its own texture "
                                        "map: %llu  (stages needing more than "
                                        "%u texture units: %llu)\n",

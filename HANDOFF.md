@@ -14139,3 +14139,77 @@ which is F322 landing. What Ben reports as remaining is "no textures on the
 3d models". The counters say binds succeed (3,157,577 triangles ask for a
 texture, 0 fail) and 3,684 textures decode with 0 refusals, so whatever it
 is, it is not a decode or a bind failure.
+
+### F326 — the flat textures are not the sampler, not the coordinates and not the combiner: proved with a checkerboard
+
+Ben, repeatedly and correctly: "there are no textures on the 3d models."
+Every counter said the textures were fine, which is why it took so long to
+take seriously:
+
+    triangles asking for a texture   7,960,687     bind failed            0
+    textures decoded                     6,585     refused                0
+    coordinate span, textured triangles: 4-64 texels for 85% of them
+
+Those cannot all be true of a flat picture, so one step between "decoded"
+and "on screen" was dropping it. **`MGS_TEX_CHECKER=1` replaces every
+decoded texture with a magenta/green checkerboard**, and it is the kind of
+test worth more than another theory: it can only come back two ways and both
+are informative.
+
+    checkerboard appears -> sampler, coordinates and combiner all work,
+                            and the DECODE is producing flat texels
+    picture stays flat   -> the texel never reaches the pixel
+
+It appeared, over **70-83% of the screen** (33.9% magenta and 33.9% green of
+sampled pixels in one frame, 41.6/41.6 in another - near-equal, which also
+says the coordinates vary properly rather than sticking to one texel).
+
+So the texels themselves are flat, and there are exactly two ways that
+happens: the bytes read were already flat - a data or address fault upstream
+of the renderer - or the decoder flattened them. `dec_src_var` and
+`dec_out_var` per format now measure source-byte variation against decoded
+variation, which is the only thing that tells those apart.
+
+**Early signal from the per-frame log**, small sample and not yet
+conclusive: format 0x0 (I4) decodes with real detail (roughness 3-17),
+while 0xE (CMPR) reads 0-2 in five of six samples and 0x6 (RGBA8, which is
+what the EFB copies use) reads 0-1 as expected of a render target.
+
+### F327 — the per-triangle texture hash was 97 million content hashes a run, and removing it changed nothing
+
+`mgs_tex_get` content-hashes about a thousand strided bytes of texture to
+notice a game rewriting texels in place, and `bind_texture` calls it ONCE
+PER TRIANGLE. A sampling profile put it at **18.0% of host CPU** (13.46 +
+4.13 + 0.43 across three addresses), the largest single function.
+
+A memo scoped to the EFB copy - the guest cannot alter texels between two
+triangles of one copy without an invalidate, which real hardware requires
+too - takes it from 97 million hashes to 261 thousand:
+
+    texture lookup memo: 96,907,935 hits, 261,446 misses   (99.7%)
+
+**And the frame time did not move**: 2.374 us/triangle against 2.35 before,
+42.0 fps against 44.4. So the hashing was never the cost, whatever the
+profile said, and the 18% must be elsewhere inside that function. The fix
+stays - 97 million pointless hashes is worth removing on its own - but it is
+recorded as **not** the frame rate.
+
+**`tests/test_texture.c` caught a real bug in it within a minute**, which is
+the part worth keeping: `mgs_tex_cache_invalidate` marks every entry invalid
+and the memo holds POINTERS to those entries, so without dropping the memo
+there too, a game calling `GXInvalidateTexAll` and re-uploading to the same
+address keeps drawing the old texture. That is exactly the fault the
+invalidate exists to prevent, and it would not have been visible in a
+screenshot.
+
+**What the frame rate actually scales with.** Ben: "it's when there is a
+busy screen." The measurements agree and say it is triangle count, not a
+leak over time:
+
+    205,200 triangles / 50 frames   86 fps   2.37 us/triangle
+    308,000 triangles / 50 frames   42 fps   3.47 us/triangle
+
+Triangles up 1.5x, time up 2.1x. 3.5 microseconds is about seventeen
+thousand cycles to submit one triangle, on a machine where the whole
+GameCube did 6,160 of them in a frame. Ben is right that this is not a
+hardware limit.

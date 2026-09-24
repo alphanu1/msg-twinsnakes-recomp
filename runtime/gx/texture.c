@@ -414,6 +414,14 @@ void mgs_tex_cache_invalidate(MgsTexCache* c)
 {
     unsigned i;
     for (i = 0; i < MGS_TEX_CACHE_ENTRIES; ++i) c->entry[i].valid = 0;
+    /* AND THE MEMO, or an invalidate does not invalidate. It holds POINTERS
+     * to entries that have just been marked invalid, so without this a game
+     * calling GXInvalidateTexAll and re-uploading to the same address keeps
+     * drawing the old texture - which is precisely the fault the cache
+     * invalidate exists to prevent. tests/test_texture.c caught this within
+     * a minute of the memo being written; it would not have been obvious
+     * from a screenshot. */
+    mgs_tex_memo_reset(c);
 }
 
 static MgsTexture* find_slot(MgsTexCache* c)
@@ -506,12 +514,61 @@ static uint64_t content_hash(const uint8_t* p, unsigned bytes)
     return h;
 }
 
+/* Remember this answer for the rest of the parse. Round-robin over a few
+ * slots because a multi-stage draw binds several maps in turn and a single
+ * slot would thrash between them. */
+static const MgsTexture* memo_put(MgsTexCache* c, uint32_t addr,
+                                  uint32_t format, unsigned width,
+                                  unsigned height, uint32_t tlut_addr,
+                                  uint32_t tlut_format,
+                                  const MgsTexture* result)
+{
+    unsigned k = c->memo_next % MGS_TEX_MEMO;
+    c->memo_next = k + 1u;
+    c->memo[k].addr = addr;
+    c->memo[k].format = format;
+    c->memo[k].width = (uint16_t)width;
+    c->memo[k].height = (uint16_t)height;
+    c->memo[k].tlut_addr = tlut_addr;
+    c->memo[k].tlut_format = tlut_format;
+    c->memo[k].result = result;
+    c->memo[k].valid = 1;
+    return result;
+}
+
+void mgs_tex_memo_reset(MgsTexCache* c)
+{
+    unsigned i;
+    if (!c) return;
+    for (i = 0; i < MGS_TEX_MEMO; ++i) c->memo[i].valid = 0;
+    c->memo_next = 0u;
+}
+
 const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
                               uint32_t addr, uint32_t format,
                               unsigned width, unsigned height,
                               uint32_t tlut_addr, uint32_t tlut_format)
 {
     unsigned i;
+
+    /* THE SAME TEXTURE, ASKED FOR AGAIN INSIDE ONE PARSE. See the note in
+     * texture.h: the guest cannot run between two triangles of one FIFO
+     * write, so the answer cannot have changed. */
+    for (i = 0; i < MGS_TEX_MEMO; ++i) {
+        if (c->memo[i].valid && c->memo[i].addr == addr &&
+            c->memo[i].format == format && c->memo[i].width == width &&
+            c->memo[i].height == height &&
+            c->memo[i].tlut_addr == tlut_addr &&
+            c->memo[i].tlut_format == tlut_format) {
+            /* A memo hit IS a cache hit, just a cheaper one, so the
+             * existing accounting stays meaningful and a run's hit rate
+             * still means what it always meant. */
+            ++c->memo_hits;
+            ++c->hits;
+            return c->memo[i].result;
+        }
+    }
+    ++c->memo_misses;
     MgsTexture* t;
     uint16_t* palette = NULL;
     uint16_t palette_copy[16384];
@@ -605,7 +662,8 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
                                 (unsigned long long)hash, sum);
                     }
                 }
-                return e;
+                return memo_put(c, addr, format, width, height,
+                                tlut_addr, tlut_format, e);
             }
             /* Same texture, new contents: take this slot back. */
             free(e->texels);
@@ -831,6 +889,69 @@ no_dump:
                     addr, width, height, format, cnt ? rough / cnt : 0u);
         }
     }
+    /* MGS_TEX_CHECKER=1: every decoded texture becomes a loud checkerboard.
+     *
+     * Ben reports no textures on the 3D models while every counter says the
+     * textures are fine - 7,960,687 triangles ask for one, none fail to
+     * bind, 6,585 decode, none are refused, and their coordinates span 4 to
+     * 64 texels. Those numbers cannot all be true of a flat picture, so one
+     * of the steps between "decoded" and "on screen" is dropping it, and
+     * this says WHICH SIDE of the decode the fault is on in one run:
+     *
+     *   checkerboard appears  -> sampling and the combiner are fine, and
+     *                            the DECODE is producing flat texels
+     *   picture stays flat    -> the texel never reaches the pixel, and the
+     *                            decode was never the problem
+     *
+     * A test that can only come back one of two ways, and both ways are
+     * informative. */
+    {
+        static int checker = -1;
+        if (checker < 0) checker = getenv("MGS_TEX_CHECKER") != NULL;
+        if (checker && t->texels) {
+            unsigned yy, xx;
+            for (yy = 0; yy < height; ++yy)
+                for (xx = 0; xx < width; ++xx)
+                    t->texels[yy * width + xx] =
+                        (((xx >> 3) ^ (yy >> 3)) & 1u) ? 0xFFFF00FFu
+                                                       : 0xFF00FF00u;
+        }
+    }
+    /* SOURCE VARIATION AGAINST DECODED VARIATION. See the note in
+     * texture.h: this is what separates "the bytes were flat" from "we
+     * flattened them", and nothing else does. */
+    if (format < 16u) {
+        unsigned nb = texture_bytes(format, width, height);
+        const uint8_t* sp = guest_ptr(mem, addr, nb);
+        unsigned q, cnt = 0u;
+        unsigned long long sv = 0, ov = 0;
+        if (sp && nb > 16u) {
+            unsigned step = nb > 4096u ? (nb / 4096u) | 1u : 1u;
+            for (q = step; q < nb; q += step) {
+                int d = (int)sp[q] - (int)sp[q - step];
+                sv += (unsigned)(d < 0 ? -d : d);
+                ++cnt;
+            }
+            if (cnt) c->dec_src_var[format] += 1000ull * sv / cnt;
+        }
+        cnt = 0u;
+        if (t->texels) {
+            unsigned npx = width * height;
+            unsigned step = npx > 4096u ? (npx / 4096u) | 1u : 1u;
+            for (q = step; q < npx; q += step) {
+                uint32_t a1 = t->texels[q], b1 = t->texels[q - step];
+                int la = (int)(((a1 >> 16) & 0xFF) + ((a1 >> 8) & 0xFF)
+                               + (a1 & 0xFF)) / 3;
+                int lb = (int)(((b1 >> 16) & 0xFF) + ((b1 >> 8) & 0xFF)
+                               + (b1 & 0xFF)) / 3;
+                int d = la - lb;
+                ov += (unsigned)(d < 0 ? -d : d);
+                ++cnt;
+            }
+            if (cnt) c->dec_out_var[format] += 1000ull * ov / cnt;
+        }
+        ++c->dec_n[format];
+    }
     t->hash = hash;
     t->efb_serial = serial;
 
@@ -840,7 +961,7 @@ no_dump:
     t->generation = ++c->clock;
     t->valid = 1;
     ++c->decodes;
-    return t;
+    return memo_put(c, addr, format, width, height, tlut_addr, tlut_format, t);
 }
 
 /* ---- sampling ---------------------------------------------------------- */

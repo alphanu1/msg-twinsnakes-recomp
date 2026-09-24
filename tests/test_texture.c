@@ -193,6 +193,12 @@ int main(void)
                 guest_write8(&mem, ADDR + k,
                              (uint8_t)(guest_read8(&mem, ADDR + k) ^ 0xFFu));
 
+            /* THE MEMO IS SCOPED TO AN EFB COPY, so a test that changes
+             * the texels and asks again is asking across that boundary and
+             * has to say so - exactly as host/display.c does in run_copy.
+             * Without this the memo answers from before the change, which
+             * is correct behaviour and a failing test. */
+            mgs_tex_memo_reset(&cache);
             after = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
             if (!after) { printf("FAIL: no texture\n"); ++failures; break; }
             for (q = 0; q < w * h; q += 97u) sum_after += after->texels[q];
@@ -201,6 +207,45 @@ int main(void)
                 printf("FAIL: every tile changed at offset %u of 64 and the "
                        "%ux%u RGBA8 texture did not re-decode\n",
                        off, w, h);
+                ++failures;
+            }
+        }
+        mgs_tex_cache_free(&cache);
+    }
+
+    /* AND THE MEMO ITSELF, because it is a deliberate weakening of the
+     * guarantee above and an untested weakening is just a bug waiting. */
+    {
+        MgsTexCache cache;
+        const MgsTexture* a;
+        const MgsTexture* b;
+        uint32_t sum_a = 0, sum_b = 0, q;
+        unsigned w = 64u, h = 64u;
+
+        mgs_tex_cache_init(&cache);
+        a = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
+        if (!a) { printf("FAIL: memo test got no texture\n"); ++failures; }
+        else {
+            for (q = 0; q < w * h; q += 13u) sum_a += a->texels[q];
+            /* Change every byte, and DO NOT reset the memo. */
+            for (q = 0; q < w * h * 4u; q += 4u)
+                guest_write8(&mem, ADDR + q,
+                             (uint8_t)(guest_read8(&mem, ADDR + q) ^ 0xFFu));
+            b = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
+            for (q = 0; q < w * h; q += 13u) sum_b += b->texels[q];
+            if (sum_a != sum_b) {
+                printf("FAIL: the memo re-decoded inside one copy; it is "
+                       "meant to answer from before the change\n");
+                ++failures;
+            }
+            /* After the boundary it must notice. */
+            mgs_tex_memo_reset(&cache);
+            b = mgs_tex_get(&cache, &mem, ADDR, 0x6u, w, h, 0, 0);
+            sum_b = 0;
+            for (q = 0; q < w * h; q += 13u) sum_b += b->texels[q];
+            if (sum_a == sum_b) {
+                printf("FAIL: the memo was reset and the texture still did "
+                       "not re-decode\n");
                 ++failures;
             }
         }

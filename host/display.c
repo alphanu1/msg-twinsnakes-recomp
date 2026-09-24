@@ -68,6 +68,7 @@ static int       s_frame_timing = -1;
  * once the measured pieces are taken out of the wall clock, which is the
  * only honest way to name it: it is everything this file does not time. */
 static long long s_t_readback, s_t_copy, s_t_present, s_t_cap, s_t_last;
+static uint64_t  s_t_tri, s_t_sub, s_t_dec;
 static unsigned  s_t_frames;
 
 void mgs_display_add_present_ns(long long ns);
@@ -346,6 +347,9 @@ static void run_copy(uint32_t cmd)
      * MGS_TIME_FRAME=1 prints a decomposition every 50 framebuffer copies,
      * so the answer comes from the run that has the problem. */
     if (s_frame_timing < 0) s_frame_timing = getenv("MGS_TIME_FRAME") != NULL;
+    /* Drop the texture lookup memo: this is the boundary it is scoped to.
+     * See runtime/gx/texture.h for what that trades away. */
+    mgs_tex_memo_reset(&s_raster.tex);
     if (mgs_gpu_ready()) {
         /* ONLY THE RECTANGLE THIS COPY WILL READ.
          *
@@ -713,16 +717,34 @@ static void run_copy(uint32_t cmd)
                         double cp = (double)s_t_copy / 1e6;
                         double pr = (double)s_t_present / 1e6;
                         double ca = (double)s_t_cap / 1e6;
+                        /* AND WHAT THE WORK WAS, not just how long it
+                         * took. A frame that slows down because the scene
+                         * grew is a different fault from one that slows
+                         * down at constant work, and only the ratio tells
+                         * them apart - Ben reports the intro getting worse
+                         * OVER TIME, which is the shape of something
+                         * growing rather than of something expensive. */
+                        unsigned long long tri = s_raster.drawn - s_t_tri;
+                        unsigned long long sub = s_raster.submitted - s_t_sub;
+                        unsigned long long dec = s_raster.tex.decodes - s_t_dec;
                         if (s_t_last)
                             fprintf(stderr,
                                 "[frametime] %u frames in %7.1f ms "
                                 "(%5.1f fps): readback %6.1f, efb copy %6.1f,"
                                 " present %6.1f, fps-cap sleep %6.1f, "
-                                "everything else %6.1f ms\n",
+                                "everything else %7.1f ms   "
+                                "| %llu drawn, %llu submitted, %llu decodes"
+                                "  = %6.3f us/triangle\n",
                                 s_t_frames, span,
                                 span > 0.0 ? 1000.0 * s_t_frames / span : 0.0,
                                 rb, cp, pr, ca,
-                                span - rb - cp - pr - ca);
+                                span - rb - cp - pr - ca,
+                                tri, sub, dec,
+                                tri ? 1000.0 * (span - rb - cp - pr - ca)
+                                      / (double)tri : 0.0);
+                        s_t_tri = s_raster.drawn;
+                        s_t_sub = s_raster.submitted;
+                        s_t_dec = s_raster.tex.decodes;
                         s_t_last = nowt;
                         s_t_readback = s_t_copy = s_t_present = s_t_cap = 0;
                         s_t_frames = 0;

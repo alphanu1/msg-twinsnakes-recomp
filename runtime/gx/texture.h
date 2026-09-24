@@ -42,6 +42,8 @@ typedef struct MgsTexture {
     int      valid;
 } MgsTexture;
 
+#define MGS_TEX_MEMO 8u
+
 typedef struct MgsTexCache {
     MgsTexture entry[MGS_TEX_CACHE_ENTRIES];
     uint32_t shape_key[16]; uint64_t shape_hit[16]; unsigned shape_n;
@@ -57,7 +59,58 @@ typedef struct MgsTexCache {
     uint64_t refused_alloc, refused_decode;
     int      trace_refusals;   /* MGS_TRACE_TEXREFUSE */
 
+    /* See mgs_tex_memo_reset. Keyed on everything that selects a texture. */
+    struct {
+        uint32_t addr, format, tlut_addr, tlut_format;
+        uint16_t width, height;
+        const MgsTexture* result;
+        int      valid;
+    } memo[MGS_TEX_MEMO];
+    unsigned memo_next;
+    uint64_t memo_hits, memo_misses;
+
+    /* FOR EVERY DECODE: how varied the SOURCE bytes were against how
+     * varied the DECODED texels came out, per format.
+     *
+     * The checkerboard test (MGS_TEX_CHECKER) proved the sampler, the
+     * coordinates and the combiner all work - forcing a checkerboard
+     * puts a checkerboard on 70-83% of the screen. So the texels
+     * themselves are flat, and there are only two ways that happens:
+     * the bytes we read were already flat (a data or address fault) or
+     * the decoder flattened them (a decoder fault). One is upstream of
+     * us and one is ours, and these two numbers tell them apart. */
+    uint64_t dec_n[16];      /* decodes, by format */
+    uint64_t dec_src_var[16];/* mean |byte - previous byte| x1000 */
+    uint64_t dec_out_var[16];/* the same over decoded luminance */
+
 } MgsTexCache;
+
+/* THE LOOKUP MEMO, and why it is safe.
+ *
+ * `mgs_tex_get` content-hashes the texture on every call so that a game
+ * rewriting texels in place is noticed. `bind_texture` calls it ONCE PER
+ * TRIANGLE, so a scene of 6,160 triangles a frame performs six million
+ * strided, cache-missing reads a frame purely to discover that the same
+ * texture is still the same texture. That is the whole of the frame time:
+ * 3.3 microseconds a triangle, about seventeen thousand cycles, to submit
+ * one triangle.
+ *
+ * The memo returns the previous answer when the same texture is asked for
+ * again, and it is dropped at every EFB copy - so a texture is hashed at
+ * most once per copy rather than once per triangle. This game makes about
+ * nine copies a frame and binds a few dozen distinct textures, so the
+ * hashing goes from thousands of times a frame to tens.
+ *
+ * WHAT THIS GIVES UP, stated plainly: a texture whose texels the CPU
+ * rewrites IN PLACE, between two binds inside the same copy, is drawn with
+ * the previous contents until the next copy. Real hardware needs an
+ * explicit invalidate for that case and would behave the same way; the
+ * per-triangle hash was belt and braces beyond the console, and it cost the
+ * entire frame budget. If a texture is ever seen one frame stale, this is
+ * the first thing to suspect and `mgs_tex_memo_reset` is where to look.
+ */
+
+void mgs_tex_memo_reset(MgsTexCache* c);
 
 void mgs_tex_cache_init(MgsTexCache* c);
 void mgs_tex_cache_free(MgsTexCache* c);
