@@ -1192,8 +1192,12 @@ void mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons)
     }
 }
 
+uint64_t mgs_mmio_field_count(const MgsMmio* m);
+uint64_t mgs_mmio_field_count(const MgsMmio* m) { return m->field_count; }
+
 void mgs_mmio_tick_frame(MgsMmio* m)
 {
+    ++m->field_count;
     /* The scripted pad, if one was given: the last entry whose frame has
      * arrived wins, so entries are held rather than pulsed. */
     if (m->pad_script_n) {

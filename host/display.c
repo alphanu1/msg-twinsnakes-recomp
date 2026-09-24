@@ -69,6 +69,16 @@ static int       s_frame_timing = -1;
  * only honest way to name it: it is everything this file does not time. */
 static long long s_t_readback, s_t_copy, s_t_present, s_t_cap, s_t_last;
 static uint64_t  s_t_tri, s_t_sub, s_t_dec;
+/* HOW MANY VIDEO FIELDS EACH DRAWN FRAME TOOK.
+ *
+ * A PAL field is exactly 810,000 ticks of a 40.5 MHz clock, so 20 ms
+ * and 50.000 fields a second; a cutscene drawing one frame per two
+ * fields is therefore exactly 25.000 fps, not 'about 25'. Measuring
+ * 23.7 and calling it the game's own rate rounded away a 5% shortfall
+ * twice. A shortfall means frames that took THREE fields instead of
+ * two, and counting them says how many and how often - which is a
+ * different and answerable question from 'we are a bit slow'. */
+static uint64_t  s_fields_at_frame, s_field_hist[8];
 static unsigned  s_t_frames;
 
 void mgs_display_add_present_ns(long long ns);
@@ -84,6 +94,15 @@ static long long frame_now_ns(void)
     return (long long)ts.tv_sec * 1000000000ll + ts.tv_nsec;
 }
 static uint64_t s_presented;
+
+uint64_t mgs_mmio_field_count(const MgsMmio* m);
+
+void mgs_display_field_hist(uint64_t* out8);
+void mgs_display_field_hist(uint64_t* out8)
+{
+    unsigned i;
+    for (i = 0; i < 8u; ++i) out8[i] = s_field_hist[i];
+}
 
 MgsEfb* mgs_display_efb(void);
 MgsEfb* mgs_display_efb(void) { return &s_efb; }
@@ -708,6 +727,13 @@ static void run_copy(uint32_t cmd)
                 if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
+                {   /* Fields since the previous drawn frame. */
+                    uint64_t now_f = mgs_mmio_field_count(mgs_host_mmio());
+                    uint64_t d = now_f - s_fields_at_frame;
+                    s_fields_at_frame = now_f;
+                    if (d > 7ull) d = 7ull;
+                    ++s_field_hist[d];
+                }
                 if (s_frame_timing) {
                     s_t_copy += frame_now_ns() - tc;
                     if (++s_t_frames >= 50u) {

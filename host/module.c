@@ -1332,53 +1332,6 @@ static void frame_snapshot(void* cpu)
     }
 }
 
-/* ---- SCRIPTED INPUT ----------------------------------------------------
- *
- * EVERY PERFORMANCE NUMBER IN THIS PROJECT HAS BEEN OF A CUTSCENE, because
- * a headless run cannot press Start. That is not a small caveat: Ben points
- * out that this game targets 50 fps in GAMEPLAY on PAL and caps cutscenes
- * at 25 for cinematic quality, so the 24.8 fps the intro measures is
- * CORRECT there and says nothing at all about the case that matters. Months
- * of benchmarks, all of the wrong scene, and the conclusion drawn from them
- * - "we are at the game's own rate" - was true of the cutscene and false in
- * general.
- *
- * MGS_PAD_SCRIPT=<frame>:<buttons>[,<frame>:<buttons>...] holds the named
- * buttons from that retrace onward for eight frames - long enough for the
- * game to see a press and a release. Buttons are the SDK's own bits, so
- * 0x1000 is Start and 0x0100 is A.
- *
- *   MGS_PAD_SCRIPT=600:0x1000,900:0x1000,1400:0x0100
- *
- * It is ORed with the real pad, so a windowed run can still be driven by
- * hand while a script gets it past the title.
- */
-static uint16_t scripted_pad(uint64_t frame)
-{
-    static int checked;
-    static uint64_t at[16];
-    static uint16_t btn[16];
-    static unsigned n;
-    uint16_t held = 0u;
-    unsigned i;
-
-    if (!checked) {
-        const char* e = getenv("MGS_PAD_SCRIPT");
-        checked = 1;
-        while (e && *e && n < 16u) {
-            at[n] = strtoull(e, (char**)&e, 0);
-            if (*e == ':') ++e;
-            btn[n] = (uint16_t)strtoul(e, (char**)&e, 0);
-            ++n;
-            while (*e == ',' || *e == ' ') ++e;
-        }
-        if (n) fprintf(stderr, "[pad] %u scripted presses\n", n);
-    }
-    for (i = 0; i < n; ++i)
-        if (frame >= at[i] && frame < at[i] + 8ull) held |= btn[i];
-    return held;
-}
-
 /* Called once per retrace, to put the external framebuffer on the screen. */
 void mgs_module_set_frame(void (*fn)(void));
 void mgs_module_set_frame(void (*fn)(void)) { s_frame = fn; }
@@ -1822,7 +1775,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * 675,000, and the guest can change which. */
             if (!forced_retrace)
                 due_vi = gt + (uint64_t)mgs_mmio_vi_field_ticks(mmio_p);
-            mgs_mmio_set_pad(mmio_p, (uint16_t)(mgs_video_pad() | scripted_pad(r.frames)));
+            mgs_mmio_set_pad(mmio_p, mgs_video_pad());
             mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);
             frame_snapshot(cpu);

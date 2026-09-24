@@ -2886,6 +2886,28 @@ int main(int argc, char** argv)
                         printf("interrupts re-offered because they were still "
                                "asserted: %llu\n",
                                (unsigned long long)mgs_interrupt_redelivered());
+                        {   /* THE CADENCE, EXACTLY. PAL is 50.000 fields a
+                             * second, so a cutscene drawing one frame per
+                             * two fields is 25.000 fps and not "about 25".
+                             * Anything slower is frames that took three
+                             * fields, and this counts them rather than
+                             * rounding them away - which I did twice. */
+                            void mgs_display_field_hist(uint64_t*);
+                            uint64_t h[8]; unsigned k; uint64_t tot = 0, wf = 0;
+                            mgs_display_field_hist(h);
+                            for (k = 0; k < 8u; ++k) { tot += h[k]; wf += h[k]*k; }
+                            if (tot) {
+                                printf("frame cadence: ");
+                                for (k = 0; k < 8u; ++k)
+                                    if (h[k]) printf(" %u field%s:%llu", k,
+                                                     k == 1u ? "" : "s",
+                                                     (unsigned long long)h[k]);
+                                printf("   mean %.3f fields/frame = %.2f fps "
+                                       "at 50.000 Hz\n",
+                                       (double)wf / (double)tot,
+                                       wf ? 50.0 * (double)tot / (double)wf : 0.0);
+                            }
+                        }
                         printf("retrace ticks: %llu   interrupts delivered: %llu  "
                                "(refused while masked: %llu, handler failed: %llu)\n",
                                (unsigned long long)r.frames,

@@ -157,6 +157,10 @@ typedef struct MgsMmio {
     uint64_t si_polls;       /* vblank polls delivered */
     uint16_t pad_buttons;    /* what port 1 is holding down now */
     uint16_t pad_forced;     /* MGS_PAD_BUTTONS: a floor under it */
+    /* Video fields since the run began. A PAL field is exactly 810,000
+     * ticks of a 40.5 MHz clock - 20 ms, 50.000 a second - so this is
+     * the denominator for any honest statement about frame rate. */
+    uint64_t field_count;
     uint32_t pad_script_frame[16];   /* MGS_PAD_SCRIPT */
     uint16_t pad_script_btn[16];
     unsigned pad_script_n;
