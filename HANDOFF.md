@@ -13884,3 +13884,97 @@ instrument here would have found**, and it is worth saying why: 8.7 MB of
 wrong content in the game's own heap produces no error, no log line and no
 visible fault until something reads it back. Only a second implementation
 running the same game says it should not be there.
+
+### F321 — the gargle was mine: the resampler's history did not survive a frame boundary
+
+Ben, on the build after F312: "voices still sound wrong, like a gargling
+sound."
+
+**F312 introduced it.** Interpolating needs the sample AFTER the one being
+played, so the reader runs one input sample ahead. At the end of an AX frame
+the ADPCM predictor in the parameter block therefore sits at `curr + 1` -
+but the two-sample history was a LOCAL, so the next frame re-seeded it by
+decoding `curr` again, with a predictor that had already consumed `curr + 1`.
+Wrong history, wrong output, and then `curr + 1` decoded a second time on
+top. Once per frame is **two hundred times a second**, which is a gargle,
+and only ADPCM voices are affected because only they carry state - and the
+dialogue is ADPCM.
+
+**And the first fix for it did nothing, which the counter caught.** Carrying
+the history per voice, I required `hpos == curr + 1` to reuse it. The reader
+finishes a frame holding the sample after the position it last PLAYED from,
+and the position is advanced once more before the loop ends - so at a ratio
+of 1.3769 that equality almost never holds:
+
+    re-seeds, first attempt    62,149 of 62,162 voice-mixes  (99.98%)
+
+The right condition is "at or behind", because the walk loop catches the
+history up one sample at a time, which is exactly the contiguous decode
+ADPCM needs. A history more than 4,096 samples behind is from before a seek
+and re-seeds instead.
+
+    re-seeds, corrected             17 of 18,704 voice-mixes  (0.09%)
+
+**What this says about the last session's measurements.** F312's numbers
+were real - the aliasing floor did drop 7.6 dB - and the artefact it
+introduced was not visible in any of them. Aliasing noise and a 200 Hz
+predictor glitch both land in "high-frequency energy", and the
+sample-to-sample jump counter saw a glitch once per 160 samples as ordinary
+programme material. **A measurement that improves is not a measurement that
+nothing got worse**, and the instrument that would have caught it - a count
+of how often the decoder re-seeds - did not exist until it was needed. It
+exists now and is in the exit report.
+
+### F322 — 406,076 invisible triangles: the indexed matrix loads were parsed and thrown away
+
+Ben: "3d movie, objects are either incorrect or not even there."
+
+`GXLoadPosMtxIndx` does not put a matrix in the command stream. It puts an
+INDEX in it, and the hardware fetches the matrix from an array in main
+memory whose base and stride are CP registers - the same mechanism indexed
+vertex attributes use, pointed at XF memory instead of at a vertex.
+
+**`command_length` knew how long those commands were; `dispatch` had no case
+for them.** So they were skipped cleanly, no desync, no log line, and every
+matrix loaded that way stayed at its power-on value of zero. A vertex
+multiplied by an all-zero matrix lands at the origin, behind the eye, and is
+rejected.
+
+The counter naming them had been in the exit report the whole time:
+
+    rejected as behind the eye, with an ALL-ZERO position matrix
+      before   406,076
+      after          0
+
+    indexed XF loads served: 2,163  (no array: 0, bad address: 0)
+
+Field layout and array mapping from Dolphin's `OpcodeDecoding.h`
+(`GX_LOAD_INDX_*`): index in the top 16 bits, XF address in the low 12,
+count in the four bits between plus one, array = `opcode / 8 + 8`. Recorded
+in THIRD_PARTY.md.
+
+**Why it took a complaint rather than an instrument.** Nothing failed. The
+FIFO parser reported 0 desyncs because it WAS parsing the commands
+correctly - it just did nothing with them. "Parsed" and "acted on" were the
+same number in the report, and they are two different numbers; they are two
+different numbers now.
+
+### F323 — the process held two graphics drivers: Vulkan to draw, OpenGL to present
+
+Ben: "I loaded the game with MangoHud and it's using OpenGL and not Vulkan."
+
+He was reading it correctly. `mgs_gpu_init` opens an SDL GPU device and gets
+Vulkan; `SDL_CreateWindowAndRenderer` with no hint takes SDL's DEFAULT 2D
+renderer, which on Linux is OpenGL. An overlay hooks the window, and the
+window was the OpenGL half. Both drivers were loaded in one process.
+
+`SDL_HINT_RENDER_DRIVER` is now set to `vulkan` before the window is made,
+with `MGS_RENDER_DRIVER` to override and a fallback to SDL's own choice if
+the host has no Vulkan renderer - a hint, not a demand, and the chosen
+driver is printed rather than assumed.
+
+**What this does NOT change.** The frame still goes GPU -> readback -> the
+game's own framebuffer -> YUV -> the window, because the framebuffer the
+video interface scans out is the game's and not ours; short-circuiting it
+would show a different picture from the console's. Presenting through the
+GPU device's own swapchain is a separate change with its own comparison.

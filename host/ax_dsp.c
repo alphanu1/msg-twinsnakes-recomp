@@ -277,6 +277,24 @@ static uint64_t s_clipped, s_out_samples;
 static int      s_trace = -1;
 static unsigned s_traced, s_ovr_logged;
 
+/* THE RESAMPLER'S HISTORY, PER VOICE, ACROSS FRAMES.
+ *
+ * This was a local, re-seeded at every AX frame, and that was a real fault
+ * rather than an inefficiency: the reader runs ONE INPUT SAMPLE AHEAD of
+ * the position it plays from, so at the end of a frame the ADPCM predictor
+ * in the parameter block sits at `curr + 1`. Re-seeding decoded `curr`
+ * again with that predictor - wrong history, wrong output - and then
+ * re-decoded `curr + 1` on top of it. Once per frame is two hundred times a
+ * second, and Ben heard it as a gargle over the voices. Only ADPCM voices
+ * are affected, because only they carry state, and the dialogue is ADPCM.
+ *
+ * Kept per voice and carried across frames, so the decoder walks each
+ * position exactly once for as long as the game leaves the voice alone. */
+static int      s_h0[64], s_h1[64];
+static uint32_t s_hpos[64];
+static uint8_t  s_hvalid[64];
+static uint64_t s_reseeds;
+
 /* Where each voice was left at the end of the last frame, so a rewind by
  * the game can be seen rather than inferred. */
 static uint32_t s_left_curr[64];
@@ -339,7 +357,8 @@ void mgs_ax_dsp_frame(void* cpu)
         int vdelta;
         unsigned k;
         /* The resampler's two-sample history: `hist1` is the input sample
-         * at `hpos`, `hist0` the one before it. */
+         * at `hpos`, `hist0` the one before it. Loaded from the per-voice
+         * state below, once the position is known. */
         int hist0 = 0, hist1 = 0, hvalid = 0, src_sel, nearest;
         uint32_t hpos = 0;
 
@@ -407,6 +426,28 @@ void mgs_ax_dsp_frame(void* cpu)
 
         ++s_mixed_voices;
         ++s_advanced;
+
+        /* CARRY THE HISTORY IN whenever it is AT OR BEHIND the position the
+         * game says the voice is at, because the walk below catches it up
+         * one sample at a time - which is exactly the contiguous decode
+         * ADPCM needs.
+         *
+         * "At or behind", not "exactly one ahead". The reader finishes a
+         * frame holding the sample after the position it last PLAYED from,
+         * and the position is then advanced once more before the loop ends,
+         * so `hpos == curr + 1` is true only when that last advance moved
+         * nothing - at this game's ratio of 1.3769, almost never. Requiring
+         * it made 62,149 of 62,162 voice-mixes re-seed, which is to say the
+         * fix did nothing at all, and the counter is what said so.
+         *
+         * A history further behind than one AX frame's worth of input is
+         * from before a seek and is not worth walking; that re-seeds. */
+        if (i < 64u && s_hvalid[i] && s_hpos[i] <= curr + 1u &&
+            curr - s_hpos[i] < 4096u) {
+            hist0 = s_h0[i]; hist1 = s_h1[i]; hpos = s_hpos[i]; hvalid = 1;
+        } else {
+            ++s_reseeds;
+        }
         /* Runway: how far `end` is ahead of where we are about to read. */
         if (looping && end > curr) {
             uint32_t head = end - curr;
@@ -499,6 +540,13 @@ void mgs_ax_dsp_frame(void* cpu)
                 hist0 = hist1;
                 hpos  = curr;
                 hvalid = 1;
+            }
+            /* A history from before a jump is not a history. */
+            if (hpos > curr + 1u) {
+                hist1 = read_one(cpu, pb, format, curr, &ok);
+                if (!ok) { ++s_silent_reads; hist1 = 0; }
+                hist0 = hist1;
+                hpos  = curr;
             }
             while (hpos < curr + 1u) {
                 hist0 = hist1;
@@ -712,6 +760,10 @@ void mgs_ax_dsp_frame(void* cpu)
             }
         }
         any = 1;
+        if (i < 64u) {
+            s_h0[i] = hist0; s_h1[i] = hist1;
+            s_hpos[i] = hpos; s_hvalid[i] = (uint8_t)(hvalid ? 1u : 0u);
+        }
         wr16(cpu, pb + PB_SRC_FRAC, frac);
         wr16(cpu, pb + PB_VE_VOLUME, vol);        /* the ramp's new level */
         wr32pair(cpu, pb + PB_ADDR_CURR_HI, curr);
@@ -945,6 +997,10 @@ void mgs_ax_dsp_report(void)
            "ADPCM %llu of %llu non-zero\n",
            (unsigned long long)s_nz_pcm, (unsigned long long)s_rd_pcm,
            (unsigned long long)s_nz_adpcm, (unsigned long long)s_rd_adpcm);
+    printf("  resampler: %llu of %llu voice-mixes had to re-seed the "
+           "history (a re-seed decodes ADPCM from a predictor that is not "
+           "its own)\n",
+           (unsigned long long)s_reseeds, (unsigned long long)s_mixed_voices);
     printf("  panning: %llu of %llu voice-mixes asked for different left "
            "and right levels\n",
            (unsigned long long)s_panned, (unsigned long long)s_mixed_voices);

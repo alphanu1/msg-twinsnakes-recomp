@@ -123,6 +123,11 @@ typedef struct MgsGx {
     /* Command processor state. */
     uint32_t vcd_lo, vcd_hi;             /* CP 0x50, 0x60 */
     uint32_t vat_a[8], vat_b[8], vat_c[8];
+    /* Indexed XF loads: how many arrived, and how many could not be
+     * served. A matrix that never loads leaves its vertices at the
+     * origin and invisible, so "we saw the command" and "we acted on
+     * it" have to be separate numbers. */
+    uint64_t indexed_xf_loads, indexed_xf_no_array, indexed_xf_bad_addr;
     uint32_t array_base[16];             /* CP 0xA0-0xAF */
     uint32_t array_stride[16];           /* CP 0xB0-0xBF */
     uint32_t cp_matrix_index_a, cp_matrix_index_b;

@@ -1923,6 +1923,16 @@ int main(int argc, char** argv)
                                 printf("\n  untextured at stage 0 but textured "
                                        "at a later stage: %llu\n",
                                        (unsigned long long)rs->tex_on_later_stage);
+                                {
+                                    const MgsGx* g = mgs_display_gx();
+                                    printf("  indexed XF loads "
+                                           "(GXLoadPosMtxIndx and friends): "
+                                           "%llu  (no array: %llu, bad "
+                                           "address: %llu)\n",
+                                        (unsigned long long)(g ? g->indexed_xf_loads : 0),
+                                        (unsigned long long)(g ? g->indexed_xf_no_array : 0),
+                                        (unsigned long long)(g ? g->indexed_xf_bad_addr : 0));
+                                }
                                 printf("  a LATER stage binds its own texture "
                                        "map: %llu  (stages needing more than "
                                        "%u texture units: %llu)\n",

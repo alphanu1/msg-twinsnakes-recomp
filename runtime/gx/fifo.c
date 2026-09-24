@@ -473,6 +473,51 @@ static void dispatch(MgsGx* gx, uint8_t op, const uint8_t* body, unsigned len)
         fprintf(stderr, "\n");
     }
 
+    /* INDEXED XF LOADS - the commands that were SIZED and then dropped.
+     *
+     * `GXLoadPosMtxIndx` and its siblings do not put a matrix in the stream.
+     * They put an INDEX in it, and the hardware fetches the matrix from an
+     * array in main memory whose base and stride are CP registers - the same
+     * mechanism indexed vertex attributes use, pointed at XF memory instead
+     * of at a vertex.
+     *
+     * The parser knew how long these commands were and threw them away, so
+     * every matrix loaded that way stayed at its power-on value of zero. A
+     * vertex multiplied by an all-zero matrix lands at the origin, behind
+     * the eye, and is rejected: 406,076 triangles a run, with the counter
+     * `behind_zero_matrix` sitting there naming them. That is Ben's "objects
+     * are either incorrect or not even there" in the cinematic - animated
+     * models load their bone matrices exactly this way.
+     *
+     * The field layout is Dolphin's (`OpcodeDecoding.h`, the GX_LOAD_INDX_*
+     * case) and the array mapping is its comment: opcode / 8 + 8, so 0x20 ->
+     * array 12, 0x28 -> 13, 0x30 -> 14, 0x38 -> 15. Recorded in
+     * THIRD_PARTY.md. */
+    if (op == GX_OP_LOAD_INDX_A || op == GX_OP_LOAD_INDX_B ||
+        op == GX_OP_LOAD_INDX_C || op == GX_OP_LOAD_INDX_D) {
+        uint32_t value = be32(body);
+        uint32_t index = value >> 16;
+        uint32_t address = value & 0xFFFu;
+        unsigned count = ((value >> 12) & 0xFu) + 1u;
+        unsigned array = ((unsigned)op / 8u) + 8u;
+        uint32_t base = gx->array_base[array & 0xFu];
+        uint32_t stride = gx->array_stride[array & 0xFu];
+        const uint8_t* src;
+
+        ++gx->indexed_xf_loads;
+        if (!base || !stride) { ++gx->indexed_xf_no_array; return; }
+        src = guest_ptr(gx->mem, base + index * stride, count * 4u);
+        if (!src) { ++gx->indexed_xf_bad_addr; return; }
+        {
+            uint32_t words[16];
+            unsigned i;
+            if (count > 16u) count = 16u;
+            for (i = 0; i < count; ++i) words[i] = be32(src + i * 4u);
+            xf_write(gx, address, words, count);
+        }
+        return;
+    }
+
     if (op == GX_OP_LOAD_CP) { cp_write(gx, body[0], be32(body + 1)); return; }
     if (op == GX_OP_LOAD_XF) {
         uint32_t head = be32(body);

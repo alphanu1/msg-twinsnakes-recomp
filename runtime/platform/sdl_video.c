@@ -1,4 +1,7 @@
 #include "sdl_video.h"
+
+#include <stdio.h>
+#include <stdlib.h>
 #include "font8x8.h"
 
 #include <SDL3/SDL.h>
@@ -19,9 +22,43 @@ int mgs_video_init(const char* title)
      * the window scales it, so what the eventual GX path produces is what is
      * shown, unscaled and unguessed.
      */
+    /* PRESENT ON THE SAME API WE RENDER ON.
+     *
+     * `SDL_CreateWindowAndRenderer` with no hint takes SDL's default 2D
+     * renderer, which on Linux is OpenGL - so the process ended up holding
+     * TWO graphics drivers at once: Vulkan for the GPU device that draws the
+     * frame, and OpenGL for the window that shows it. Ben noticed from the
+     * outside, with MangoHud reporting the game as OpenGL, and he was right
+     * to: an overlay hooks the window, and the window was the OpenGL half.
+     *
+     * Asking for Vulkan here costs nothing and leaves one driver loaded.
+     * It is a HINT, not a demand: if the host has no Vulkan renderer SDL
+     * falls back to whatever it does have, which is why the chosen driver
+     * is printed rather than assumed.
+     *
+     * This does NOT move the picture onto the GPU path. The frame still
+     * goes GPU -> readback -> the game's own framebuffer -> YUV -> here,
+     * because the framebuffer the video interface scans out is the game's
+     * and not ours, and short-circuiting that would show a different
+     * picture from the one the console shows. Presenting through the GPU
+     * device's own swapchain is a separate change with its own comparison. */
+    {
+        const char* want = getenv("MGS_RENDER_DRIVER");
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, want && *want ? want : "vulkan");
+    }
     if (!SDL_CreateWindowAndRenderer(title, MGS_XFB_WIDTH * 2, MGS_XFB_HEIGHT * 2,
-                                     SDL_WINDOW_RESIZABLE, &s_window, &s_renderer))
-        return 0;
+                                     SDL_WINDOW_RESIZABLE, &s_window, &s_renderer)) {
+        /* A host with no Vulkan renderer at all: clear the hint and let SDL
+         * choose, rather than failing to open a window over a preference. */
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, NULL);
+        if (!SDL_CreateWindowAndRenderer(title, MGS_XFB_WIDTH * 2,
+                                         MGS_XFB_HEIGHT * 2,
+                                         SDL_WINDOW_RESIZABLE,
+                                         &s_window, &s_renderer))
+            return 0;
+    }
+    fprintf(stderr, "[video] presenting with SDL's %s renderer\n",
+            SDL_GetRendererName(s_renderer));
 
     s_texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_XRGB8888,
                                   SDL_TEXTUREACCESS_STREAMING,
