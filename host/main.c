@@ -2082,6 +2082,11 @@ int main(int argc, char** argv)
                                                (unsigned long long)
                                                mgs_display_rtt_gpu_clears());
                                     }
+                                    printf("  XF 0x1005 clip disable: %llu "
+                                           "writes leaving clipping ON, %llu "
+                                           "turning it OFF\n",
+                                        (unsigned long long)(g ? g->xf_clip_disable_writes[0] : 0),
+                                        (unsigned long long)(g ? g->xf_clip_disable_writes[1] : 0));
                                     printf("  texgen: %llu coordinates "
                                            "generated, %llu from a source "
                                            "not implemented (normal, "
@@ -2386,6 +2391,11 @@ int main(int argc, char** argv)
                                        "crossing it clipped\n",
                                        (unsigned long long)rs->near_plane_rejected,
                                        (unsigned long long)rs->near_plane_clipped);
+                                printf("culled: mode 1 %llu, mode 2 %llu, "
+                                       "all %llu\n",
+                                       (unsigned long long)rs->culled[1],
+                                       (unsigned long long)rs->culled[2],
+                                       (unsigned long long)rs->culled[3]);
                                 printf("TEXTURED TRIANGLES BY THE FORMAT "
                                        "THEY BOUND:\n");
                                 for (k = 0; k < 16u; ++k)

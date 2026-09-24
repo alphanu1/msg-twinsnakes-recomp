@@ -374,6 +374,16 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
         /* What is left is dropped, and counted while it is dropped. The
          * texgen block below is KEPT as well as counted - see fifo.h. */
         else if (a == 0x1012u) gx->xf_dualtex = words[i] & 1u;
+        else if (a == 0x1005u) {
+            /* CLIP DISABLE. Bit 0 turns off clipping detection, and with
+             * it set the hardware does not clip triangles at the near
+             * plane (Dolphin: skip_clipping when every w >= 0). Kept, and
+             * the values seen are counted, because honouring the near
+             * plane when the game has switched it off removes geometry
+             * the console draws. */
+            gx->xf_clip_disable = words[i];
+            ++gx->xf_clip_disable_writes[words[i] & 1u];
+        }
         else if (a == 0x103Fu) gx->xf_num_texgen = words[i] & 0xFu;
         else if (a >= 0x1050u && a < 0x1058u) gx->xf_postinfo[a - 0x1050u] = words[i];
         else if (a >= 0x1040u && a < 0x1050u) {

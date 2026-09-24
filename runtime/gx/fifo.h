@@ -193,6 +193,8 @@ typedef struct MgsGx {
     float    xf_post[64 * 4];            /* XF 0x0500-0x05FF, post-matrices */
     uint32_t xf_num_texgen;              /* XF 0x103F */
     uint32_t xf_dualtex;                 /* XF 0x1012, bit 0 */
+    uint32_t xf_clip_disable;            /* XF 0x1005: bit 0 = no clipping */
+    uint64_t xf_clip_disable_writes[2];  /* writes with bit 0 clear / set */
     /* Texgen the vertex path does not implement yet, counted rather than
      * guessed: a normal or binormal source (normals are skipped, not read),
      * emboss, and colour-as-coordinate. And coordinates whose q is not 1,

@@ -1342,8 +1342,39 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
     if (area == 0.0f) { ++r->clipped; return; }
 
     /* Back-face culling, by the sign of the signed area. */
-    if (r->cull == 1 && area >= 0.0f) { ++r->clipped; return; }
-    if (r->cull == 2 && area <= 0.0f) { ++r->clipped; return; }
+    /* BACK-FACE CULLING, which never ran.
+     *
+     * The test above used `r->cull`, a field that nothing ever wrote: it
+     * was zero from init, so every back face of every model was drawn for
+     * the life of the project. Depth hid most of that, but not all of it -
+     * a translucent surface blended both its sides, a "cull all" draw
+     * (used for depth-only and occlusion passes) put pixels on screen, and
+     * up to half the triangle work was spent on faces the console never
+     * rasterises.
+     *
+     * The mode is GEN_MODE (BP 0x00) bits 14-15, and the decision is
+     * Dolphin's software clipper's, made in the same terms: the triangle's
+     * orientation in normalised device space (the screen-space area scaled
+     * back through the viewport, whose height is negative in the usual
+     * case), inverted when the viewport height is positive. Mode 1 culls
+     * what that test calls front-facing, mode 2 back-facing, 3 everything. */
+    {
+        unsigned cm = (mgs_bp_get(&gx->bp, BP_GEN_MODE) >> 14) & 3u;
+        if (cm) {
+            float vwx = f_from_bits(gx->viewport[0]);
+            float vwy = f_from_bits(gx->viewport[1]);
+            float det_ndc;
+            int backface;
+            if (vwx == 0.0f && vwy == 0.0f) { vwx = 1.0f; vwy = -1.0f; }
+            det_ndc = area * vwx * vwy;       /* same sign as area/(wx*wy) */
+            backface = det_ndc <= 0.0f;
+            if (vwy > 0.0f) backface = !backface;
+            if (cm == 3u || (cm == 1u && !backface) || (cm == 2u && backface)) {
+                ++r->clipped; ++r->culled[cm];
+                return;
+            }
+        }
+    }
 
     minx = sx[0]; maxx = sx[0]; miny = sy[0]; maxy = sy[0];
     for (i = 1; i < 3u; ++i) {

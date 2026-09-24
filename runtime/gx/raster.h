@@ -187,6 +187,7 @@ typedef struct MgsGxRaster {
     /* Triangles wholly in front of GX's near plane (z < -w), and those
      * crossing it and cut back to it. See the clipping in raster.c. */
     uint64_t near_plane_rejected, near_plane_clipped;
+    uint64_t culled[4];       /* by GEN_MODE cull mode, 1..3 */
 
     /* Returns non-zero when drawing should stop - the host has been asked to
      * quit and is waiting for this call to come back. Optional; NULL means

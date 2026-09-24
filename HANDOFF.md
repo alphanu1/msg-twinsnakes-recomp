@@ -14920,3 +14920,29 @@ game's own (the camera passing along the hull), or the fault he means is
 elsewhere; it needs his description or a Dolphin frame of the same moment
 before anything more is claimed. The clip itself is what the hardware does
 and is kept on that basis.
+
+### F348 — back-face culling never ran; and the near-plane clip is what this game asks for
+
+**Culling.** The rasteriser's cull test read `r->cull`, a field nothing ever
+wrote - zero from init, so no triangle was ever culled in the life of the
+project. Depth hid most of it, but translucent surfaces blended both sides,
+"cull all" passes drew, and back faces cost triangle work the console never
+does. Now GEN_MODE (BP 0x00) bits 14-15, decided exactly as Dolphin's
+software clipper decides: orientation in NDC (screen area scaled back
+through the viewport), inverted for a positive viewport height; mode 1 culls
+what that test calls front-facing, mode 2 back-facing, 3 everything.
+**14,946,802 triangles culled in a 200 s run**, all by mode 1. Checked
+visually across the intro (crew, rooms, the submarine): nothing vanished,
+which is what a reversed sign would do.
+
+**The near plane (F347) is confirmed as the game's own setting.** XF 0x1005
+bit 0 disables clipping detection, and with it set the hardware - and
+Dolphin's clipper, which skips clipping when every w >= 0 - would not clip
+there. The game writes it once, with the bit CLEAR: clipping on. Dolphin's
+hardware renderer clips at both the near (z >= -w) and far (z <= 0) planes;
+its software clipper only at the near. We clip the near plane and clamp the
+far.
+
+**New fault reported by Ben:** reaching GAME START in the menus and choosing
+YES freezes the game, with nothing in the terminal log. Not yet reproduced;
+his Ctrl+C `[wedged]` report is the first thing to get.
