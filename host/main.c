@@ -618,6 +618,33 @@ static void patch_report(void)
  * after that needs to be attributable to the shim or cleared of it. Being
  * able to run the same binary both ways is what makes that a measurement
  * rather than an argument. */
+/* RUN AHEAD OF THE REST OF THE MACHINE.
+ *
+ * Ben runs FPGA builds alongside the game: three quartus_fit processes using
+ * ~29 of 32 hardware threads, at the same ordinary priority as ours. The
+ * scheduler then shares cores evenly, and a game whose whole guest runs on
+ * ONE thread loses a large share of that thread - measured at 11 fps against
+ * ~24 on a quiet machine. "Quartus runs should not stop that", and they need
+ * not: the game's two threads that matter are raised above normal work.
+ *
+ * SDL does this without root, through RealtimeKit on Linux where it is
+ * available, and says whether it worked; the answer is printed once per
+ * thread so a refusal is visible rather than silently slow.
+ * MGS_NO_PRIORITY=1 leaves priorities alone. */
+void mgs_raise_thread_priority(const char* who, int critical);
+void mgs_raise_thread_priority(const char* who, int critical)
+{
+    bool ok;
+    if (getenv("MGS_NO_PRIORITY")) return;
+    ok = SDL_SetCurrentThreadPriority(critical
+                                      ? SDL_THREAD_PRIORITY_TIME_CRITICAL
+                                      : SDL_THREAD_PRIORITY_HIGH);
+    fprintf(stderr, "[prio] %s thread: %s priority %s%s%s\n", who,
+            critical ? "time-critical" : "high",
+            ok ? "granted" : "REFUSED",
+            ok ? "" : " - ", ok ? "" : SDL_GetError());
+}
+
 static int mem_shim_disabled(void)
 {
     static int cached = -1;
@@ -1837,6 +1864,7 @@ int main(int argc, char** argv)
                             void mgs_ax_thread_start(void*);
                             mgs_ax_thread_start(cpu);
                         }
+                        mgs_raise_thread_priority("guest", 0);
                         r = mgs_module_run(&mod, cpu, limit);
                         { void mgs_ax_thread_stop(void); mgs_ax_thread_stop(); }
                         static const char* why[] = {

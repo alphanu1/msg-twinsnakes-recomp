@@ -14977,3 +14977,23 @@ loading `stage.dat`. Ben's run did not. Recorded, to be reproduced.
 `MGS_PAD_SCRIPT` now holds 128 entries (was 16), which is what driving the
 title and four menus needs: `300:1000` skips the intro, Start at the title,
 then A alone - Start+A together does not select in the menus.
+
+### F350 — the game now outranks a busy machine: guest and mixer threads raised
+
+Ben: *"quartus runs should not stop that!!!"* He runs FPGA fits alongside
+the game - three `quartus_fit` processes using ~29 of 32 hardware threads,
+load average 40-50 - and at equal priority the scheduler shares cores
+evenly, so a game whose entire guest is ONE thread lost a large share of it:
+11 fps against ~24 on a quiet machine, and 10-20 fps in every benchmark
+taken while the fits ran.
+
+The guest thread is now raised to high priority and the mixer to
+time-critical, through `SDL_SetCurrentThreadPriority` - RealtimeKit on
+Linux, no root needed. Both report once whether the OS granted it (it did
+here). `MGS_NO_PRIORITY=1` leaves priorities alone.
+
+**Measured under load average 47**, the intro's 25 fps stretch: with the
+raise, 25.0 fps for every 50-frame window of a 75 s run; without it, the
+same stretch fell to 21.6 and then 12.0 (load changed during that run as a
+fit finished, so the "without" number is indicative, the "with" number is
+the evidence).

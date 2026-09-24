@@ -402,7 +402,14 @@ static void* ax_thread_main(void* arg)
      * which is the whole point of this thread - it is paced by a clock
      * that runs at 32 kHz whether or not anything is listening. */
     const int have_dev = mgs_audio_have_device();
-    uint64_t t0 = ax_now_ns();
+    uint64_t t0;
+    /* Sound must not starve because something else is busy. See
+     * mgs_raise_thread_priority in host/main.c. */
+    {
+        void mgs_raise_thread_priority(const char* who, int critical);
+        mgs_raise_thread_priority("mixer", 1);
+    }
+    t0 = ax_now_ns();
     uint64_t produced = 0ull;      /* output samples, no-device path only */
     (void)arg;
     while (!s_ax_stop) {
