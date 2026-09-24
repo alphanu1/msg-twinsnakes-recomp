@@ -1539,6 +1539,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     const unsigned tick_rate = mgs_tick_rate();
     unsigned long long forced_retrace = 0ull;
     uint64_t due_vi = 0;
+    uint64_t next_due = 0;   /* earliest hook deadline; see the loop */
     uint64_t pending_ticks = 0;
     unsigned tick_batch = 0;
     const int wall_clock = mgs_clock_is_wall();
@@ -1659,6 +1660,12 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         env = getenv("MGS_TRACE_FN_MAX");
         if (env) s_fntrace_cap = (unsigned)strtoul(env, NULL, 0);
     }
+    /* Is anything watching per step? Decided once: every one of these is
+     * off in an ordinary run, and testing each on every step was part of
+     * what made this loop 10% of the program. */
+    const int diag_any = (s_memwatch_addr != 0u) || profile ||
+                         (caller_of != 0u) || (heartbeat != 0u) ||
+                         (trace_every != 0u) || (trace_steps != 0u);
     for (r.steps = 0; r.steps < max_steps && !mgs_module_interrupted; ++r.steps) {
         uint32_t pc;
 
@@ -1780,6 +1787,23 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * to, and at any other rate it fires at the same point in GUEST
          * TIME instead of the same step. */
         if (!wall_clock) gt += tick_rate;
+
+        /* EVERY PERIODIC HOOK BEHIND ONE DEADLINE.
+         *
+         * This loop runs 21 million times a second for 13 guest cycles of
+         * work each, and it was paying for nine separate deadline compares,
+         * a memory watch, and a dozen diagnostic tests on every one of
+         * them: 10% of the program in mgs_module_run alone, none of it on
+         * one line - smeared across register spills from all the 64-bit
+         * deadlines kept live around the loop.
+         *
+         * Every hook fires when guest time reaches its own deadline, so
+         * none can fire before the EARLIEST of them. `next_due` is that
+         * minimum; until guest time reaches it the whole block is one
+         * compare. The hooks themselves are unchanged and still each test
+         * their own deadline, so their order and their else-if between the
+         * retrace and the PE finish are exactly as before. */
+        if (forced_retrace || gt >= next_due) {
         /* The audio interface's sample counter comes off the same clock,
          * because __AI_SRC_INIT times one against the other. */
 
@@ -1878,34 +1902,6 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * than "somewhere in the last five hundred". Only when asked for:
          * the cost is a guest read per step and this is a diagnostic run,
          * not a normal one. */
-        if (s_memwatch_addr && s_memwatch_len) {
-            uint32_t i;
-            for (i = 0u; i < s_memwatch_len; i += 4u) {
-                uint32_t now = gread32(cpu, s_memwatch_addr + i);
-                uint32_t was = ((uint32_t)s_memwatch_prev[i] << 24)
-                             | ((uint32_t)s_memwatch_prev[i + 1u] << 16)
-                             | ((uint32_t)s_memwatch_prev[i + 2u] << 8)
-                             |  (uint32_t)s_memwatch_prev[i + 3u];
-                if (now == was) continue;
-                fprintf(stderr, "[watch] 0x%08X +0x%03X: 0x%08X -> 0x%08X  "
-                                "at pc 0x%08X lr 0x%08X\n",
-                        s_memwatch_addr, i, was, now,
-                        mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
-                s_memwatch_prev[i] = (uint8_t)(now >> 24);
-                s_memwatch_prev[i + 1u] = (uint8_t)(now >> 16);
-                s_memwatch_prev[i + 2u] = (uint8_t)(now >> 8);
-                s_memwatch_prev[i + 3u] = (uint8_t)now;
-            }
-        } else if (s_memwatch_addr) {
-            uint32_t now = gread32(cpu, s_memwatch_addr);
-            if (now != s_memwatch_last) {
-                fprintf(stderr, "[watch] 0x%08X: 0x%08X -> 0x%08X  "
-                                "at pc 0x%08X lr 0x%08X\n",
-                        s_memwatch_addr, s_memwatch_last, now,
-                        mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
-                s_memwatch_last = now;
-            }
-        }
 
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
@@ -1953,6 +1949,49 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * deferring it to the next retrace would show every frame late. */
         if ((gt >= due_disp ? (due_disp = gt + 2048ull, 1) : 0) && s_display)
             s_display();
+
+        next_due = due_pe;
+        if (due_dsp  < next_due) next_due = due_dsp;
+        if (due_pend < next_due) next_due = due_pend;
+        if (due_aram < next_due) next_due = due_aram;
+        if (due_aid  < next_due) next_due = due_aid;
+        if (due_pump < next_due) next_due = due_pump;
+        if (due_disp < next_due) next_due = due_disp;
+        if (!forced_retrace && due_vi < next_due) next_due = due_vi;
+        if (!wall_clock && due_pace < next_due) next_due = due_pace;
+        }
+
+        /* Diagnostics, all behind one flag decided before the loop. */
+        if (diag_any) {
+            if (s_memwatch_addr && s_memwatch_len) {
+                uint32_t i;
+                for (i = 0u; i < s_memwatch_len; i += 4u) {
+                    uint32_t now = gread32(cpu, s_memwatch_addr + i);
+                    uint32_t was = ((uint32_t)s_memwatch_prev[i] << 24)
+                                 | ((uint32_t)s_memwatch_prev[i + 1u] << 16)
+                                 | ((uint32_t)s_memwatch_prev[i + 2u] << 8)
+                                 |  (uint32_t)s_memwatch_prev[i + 3u];
+                    if (now == was) continue;
+                    fprintf(stderr, "[watch] 0x%08X +0x%03X: 0x%08X -> 0x%08X  "
+                                    "at pc 0x%08X lr 0x%08X\n",
+                            s_memwatch_addr, i, was, now,
+                            mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
+                    s_memwatch_prev[i] = (uint8_t)(now >> 24);
+                    s_memwatch_prev[i + 1u] = (uint8_t)(now >> 16);
+                    s_memwatch_prev[i + 2u] = (uint8_t)(now >> 8);
+                    s_memwatch_prev[i + 3u] = (uint8_t)now;
+                }
+            } else if (s_memwatch_addr) {
+                uint32_t now = gread32(cpu, s_memwatch_addr);
+                if (now != s_memwatch_last) {
+                    fprintf(stderr, "[watch] 0x%08X: 0x%08X -> 0x%08X  "
+                                    "at pc 0x%08X lr 0x%08X\n",
+                            s_memwatch_addr, s_memwatch_last, now,
+                            mgs_module_last_pc, *mgs_module_lr_ptr(cpu));
+                    s_memwatch_last = now;
+                }
+            }
+        }
 
         pc = mgs_module_pc(cpu);
 
@@ -2044,7 +2083,6 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         mgs_module_last_pc = pc;
         mgs_module_phase = "run-loop";
 
-        if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
         /* Checked on a stride, because clock_gettime per step would be a
          * measurable share of what is being measured. 65,536 steps is well
          * under a millisecond of guest execution. */
@@ -2055,33 +2093,36 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
             mgs_module_interrupted = 1;
         }
 
-        if (caller_of && pc == caller_of) {
-            const uint32_t* g = mgs_module_gpr(cpu);
-            uint32_t lr;
-            memcpy(&lr, (const uint8_t*)cpu + CPU_LR_OFFSET, sizeof lr);
-            caller_sample(lr, caller_size_reg < 32u ? g[caller_size_reg] : 0u);
-        }
+        if (diag_any) {
+            if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
+            if (caller_of && pc == caller_of) {
+                const uint32_t* g = mgs_module_gpr(cpu);
+                uint32_t lr;
+                memcpy(&lr, (const uint8_t*)cpu + CPU_LR_OFFSET, sizeof lr);
+                caller_sample(lr, caller_size_reg < 32u ? g[caller_size_reg] : 0u);
+            }
 
-        /* MGS_HEARTBEAT=N prints progress every N steps. A run that stops
-         * producing output is either stuck in the guest or stuck in the
-         * host, and those want completely different investigations; this is
-         * the cheapest thing that tells them apart. */
-        if (heartbeat && (r.steps % heartbeat) == 0ull) {
-            /* Steps alone say the host is alive, which is rarely the
-             * question. What matters is whether the GAME is getting
-             * anywhere, so the counters that move when it does are here
-             * too - frames copied out, and files read. */
-            fprintf(stderr, "[beat] step %9llu  pc 0x%08X  frames %llu  "
-                            "reads %llu\n",
-                    (unsigned long long)r.steps, pc,
-                    (unsigned long long)(s_progress ? s_progress(0) : 0),
-                    (unsigned long long)(s_progress ? s_progress(1) : 0));
-        }
+            /* MGS_HEARTBEAT=N prints progress every N steps. A run that stops
+             * producing output is either stuck in the guest or stuck in the
+             * host, and those want completely different investigations; this is
+             * the cheapest thing that tells them apart. */
+            if (heartbeat && (r.steps % heartbeat) == 0ull) {
+                /* Steps alone say the host is alive, which is rarely the
+                 * question. What matters is whether the GAME is getting
+                 * anywhere, so the counters that move when it does are here
+                 * too - frames copied out, and files read. */
+                fprintf(stderr, "[beat] step %9llu  pc 0x%08X  frames %llu  "
+                                "reads %llu\n",
+                        (unsigned long long)r.steps, pc,
+                        (unsigned long long)(s_progress ? s_progress(0) : 0),
+                        (unsigned long long)(s_progress ? s_progress(1) : 0));
+            }
 
-        if (trace_every ? ((r.steps % trace_every) < trace_steps)
-                        : (r.steps >= trace_from && r.steps < trace_from + trace_steps))
-            fprintf(stderr, "  step %llu  pc = 0x%08X\n",
-                    (unsigned long long)r.steps, pc);
+            if (trace_every ? ((r.steps % trace_every) < trace_steps)
+                            : (r.steps >= trace_from && r.steps < trace_from + trace_steps))
+                fprintf(stderr, "  step %llu  pc = 0x%08X\n",
+                        (unsigned long long)r.steps, pc);
+        }
 
         /* Refill the cycle budget. The translated code decrements it and
          * returns when it hits zero; leaving it empty would return

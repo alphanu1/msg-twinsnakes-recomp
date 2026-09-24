@@ -304,6 +304,11 @@ renderer.
   It shows the composite blit. Restrict it to one format.
 - **Blaming alpha for see-through characters (F342).** Their combiner makes
   them opaque. It was depth: GX screen z is in 24-bit units, not 0..1.
+- **Moving the vertex transform to a shader as a frame-rate fix (F343).**
+  The transform is 0.5% of the program; parsing the vertex stream is the
+  cost, and it stays on the CPU either way.
+- **Benchmarking while the machine is shared (F343).** Check `uptime` first.
+
 
 - **Looking for a panning bug in the AX mixer (F315).** The two output
   channels are bit-identical because the game asks for that: 0 of 62,162
@@ -14759,3 +14764,60 @@ in a scene with overlapping 3D until textures made the result legible.
 **Also found while tracing:** MGS_TRACE_BLENDDRAW's first version read
 per-stage texture pointers past the stages that had been filled and
 segfaulted a run. Fixed before any conclusion was drawn from it.
+
+### F343 — the dispatch loop paid for every hook and every diagnostic on every step
+
+Profiled on the current build, on the game's one busy core:
+
+| | share |
+|---|---|
+| the recompiled game | 48% |
+| our dispatch loop (`mgs_module_run` 10%, patch dispatch 6%) | 16% |
+| EFB copies (readback, encode, YCbCr) | ~9% |
+| vertex parsing, per-triangle state, transform | ~10% |
+| GPU driver (`ioctl`, Vulkan) | ~6% |
+
+The loop runs **21.3 million times a second for 13.1 guest cycles each**
+(`MGS_CYCLE_CENSUS`). It tested nine hook deadlines, a memory watch and a
+dozen diagnostic switches on every one - and no single line was hot: the
+cost was smeared across register spills from the live 64-bit deadlines.
+
+Every hook fires when guest time reaches its own deadline, so none can fire
+before the earliest: the hooks now sit behind one compare against that
+minimum, recomputed whenever the block runs, and every per-step diagnostic
+sits behind one flag decided before the loop. The hooks themselves are
+unchanged and still test their own deadlines, so their order and the
+else-if between the retrace and the PE finish are as before.
+
+**Checked:** on the deterministic step clock, the frames that are
+deterministic across runs (copies 500, 1000, 1200) are byte-identical to
+the previous build. From copy ~1400 two runs of the SAME build diverge -
+DVD reads complete on worker threads in real time - so later frames cannot
+be compared either way. Throughput: 76 frames in 240 s against 64 (+19%);
+wall clock, heavy scenes 21.9-23.8 fps against 20.2-21.5.
+
+**Also measured, and it matters for anything Ben reports:** his 11 fps with
+the CPU at 99% was three `quartus_fit` processes using ~29 of the 32 cores
+and the file indexer holding 31 GB of swap. The port itself used one core at
+~80%. A frame rate taken while the machine is shared is not a measurement.
+
+**What "force the GPU" can buy, recorded so it is not re-proposed on
+instinct:** the vertex TRANSFORM is 0.5% of the program. Moving the vertex
+pipeline into a shader would recover perhaps 2-3%, because the cost is in
+parsing GX's vertex stream, which Dolphin does on the CPU too. The GPU-side
+win is EFB copies (~9% plus readback stalls), and the largest remaining
+items are CPU-side.
+
+### F344 — a texture copy's clear never reached the GPU (and this game never asks for one)
+
+Only the copy to the framebuffer cleared the GPU's colour and depth, and it
+cleared all of it. A copy to a texture with its clear bit set cleared the
+CPU-side buffer only, so the next render-to-texture pass would draw over and
+depth-test against the previous pass. Fixed as the hardware does it - the
+copied rectangle only, colour and alpha and depth each only if its update
+is enabled, to the clear colour and the 24-bit clear depth - as a quad
+through the ordinary batch path so it is ordered with the draws around it.
+
+**It changes nothing in this game**: counted over a four-minute run,
+0 texture copies set the clear bit. Kept because it is what the hardware
+does; recorded so it is not mistaken for the fix of anything Ben saw.

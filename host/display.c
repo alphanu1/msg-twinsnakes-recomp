@@ -72,6 +72,10 @@ static long long s_t_readback, s_t_copy, s_t_present, s_t_cap, s_t_last;
 static uint64_t  s_t_tri, s_t_sub, s_t_dec;
 /* The GPU path's own share of the same span. */
 static uint64_t  s_t_flush, s_t_gtri, s_t_up, s_t_subns;
+/* Render-to-texture copies whose clear now reaches the GPU. */
+static uint64_t  s_rtt_gpu_clears;
+uint64_t mgs_display_rtt_gpu_clears(void);
+uint64_t mgs_display_rtt_gpu_clears(void) { return s_rtt_gpu_clears; }
 /* HOW MANY VIDEO FIELDS EACH DRAWN FRAME TOOK.
  *
  * A PAL field is exactly 810,000 ticks of a 40.5 MHz clock, so 20 ms
@@ -874,8 +878,23 @@ static void run_copy(uint32_t cmd)
                 mgs_efb_copy_tex(&s_efb, s_mem, tl & 0x3FFu,
                                  (tl >> 10) & 0x3FFu,
                                  copy_w, copy_h, copy_tex_format(cmd));
-                if (cmd & COPY_CLEAR)
+                if (cmd & COPY_CLEAR) {
                     mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 0, 1);
+                    /* AND ON THE GPU, which is where the next pass draws.
+                     * See mgs_gpu_clear_rect. */
+                    if (mgs_gpu_ready()) {
+                        uint32_t cm = mgs_bp_get(&s_gx.bp, BP_BLEND_MODE);
+                        uint32_t zm = mgs_bp_get(&s_gx.bp, BP_ZMODE);
+                        mgs_gpu_clear_rect(tl & 0x3FFu, (tl >> 10) & 0x3FFu,
+                                           copy_w, copy_h, s_efb.clear_argb,
+                                           mgs_bp_get(&s_gx.bp,
+                                                      BP_COPY_CLEAR_Z),
+                                           (int)((cm >> 3) & 1u),
+                                           (int)((cm >> 4) & 1u),
+                                           (int)((zm >> 4) & 1u));
+                        ++s_rtt_gpu_clears;
+                    }
+                }
             }
         }
 

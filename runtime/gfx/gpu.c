@@ -1006,6 +1006,61 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
     s_batch[s_batch_n++] = *c;
 }
 
+void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
+                        uint32_t argb, uint32_t z24,
+                        int colour, int alpha, int depth)
+{
+    /* THE CLEAR A COPY ASKS FOR: its own rectangle, its own masks.
+     *
+     * Only the copy to the framebuffer used to clear the GPU's target, and
+     * it cleared all of it. A copy to a TEXTURE with the clear bit left the
+     * previous pass's colour and depth in place, so the next render-to-
+     * texture pass drew over, and depth-tested against, whatever was there
+     * - geometry lost behind depths that no longer existed.
+     *
+     * The hardware clears the copied rectangle only, and only the channels
+     * whose update enables are set (colour and alpha from BP 0x41, depth
+     * from ZMODE), to the clear colour and the 24-bit clear depth. Drawn as
+     * a quad through the ordinary batch path, with the depth test set to
+     * always and blending off, so it is ordered with the draws around it by
+     * construction. */
+    MgsGpuVertex q[6];
+    MgsGpuBind   binds[MGS_GPU_TEX_UNITS];
+    MgsGpuState  st;
+    MgsGpuTev    tev;
+    float x0, y0, x1, y1, zz, cr, cg, cb, ca;
+    unsigned i;
+
+    if (!s_dev || !w || !h || (!colour && !alpha && !depth)) return;
+    x0 = (float)x / (float)s_w * 2.0f - 1.0f;
+    x1 = (float)(x + w) / (float)s_w * 2.0f - 1.0f;
+    y0 = 1.0f - (float)y / (float)s_h * 2.0f;
+    y1 = 1.0f - (float)(y + h) / (float)s_h * 2.0f;
+    zz = (float)(z24 & 0xFFFFFFu) / 16777215.0f;
+    cr = (float)((argb >> 16) & 0xFFu) / 255.0f;
+    cg = (float)((argb >> 8) & 0xFFu) / 255.0f;
+    cb = (float)(argb & 0xFFu) / 255.0f;
+    ca = (float)((argb >> 24) & 0xFFu) / 255.0f;
+
+    memset(q, 0, sizeof q);
+    q[0].x = x0; q[0].y = y0;  q[1].x = x1; q[1].y = y0;  q[2].x = x0; q[2].y = y1;
+    q[3].x = x1; q[3].y = y0;  q[4].x = x1; q[4].y = y1;  q[5].x = x0; q[5].y = y1;
+    for (i = 0; i < 6u; ++i) {
+        q[i].z = zz; q[i].w = 1.0f;
+        q[i].r = cr; q[i].g = cg; q[i].b = cb; q[i].a = ca;
+    }
+    memset(binds, 0, sizeof binds);
+    memset(&st, 0, sizeof st);
+    memset(&tev, 0, sizeof tev);          /* unconfigured: vertex colour */
+    st.depth_test = 1; st.depth_func = 7; /* always */
+    st.depth_write = depth ? 1u : 0u;
+    st.colour_write = colour ? 1u : 0u;
+    st.alpha_write = alpha ? 1u : 0u;
+    mgs_gpu_batch_tri(&q[0], &q[1], &q[2], binds, &st, &tev, 0xC1EA5ull);
+    mgs_gpu_batch_tri(&q[3], &q[4], &q[5], binds, &st, &tev, 0xC1EA5ull);
+    mgs_gpu_batch_flush();
+}
+
 void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear)
 {
     if (!s_dev) return;
@@ -1124,6 +1179,10 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
 void mgs_gpu_batch_flush(void) { }
 void mgs_gpu_submit(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
+void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
+                        uint32_t argb, uint32_t z24, int c, int a, int d)
+{ (void)x; (void)y; (void)w; (void)h; (void)argb; (void)z24;
+  (void)c; (void)a; (void)d; }
 
 #endif
 

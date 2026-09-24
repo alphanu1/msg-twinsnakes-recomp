@@ -2069,6 +2069,14 @@ int main(int argc, char** argv)
                                                "matrix row: %llu)\n",
                                                (unsigned long long)g->tex_mtx_position_row);
                                     }
+                                    {
+                                        uint64_t mgs_display_rtt_gpu_clears(void);
+                                        printf("  render-to-texture copies "
+                                               "that cleared the GPU target: "
+                                               "%llu\n",
+                                               (unsigned long long)
+                                               mgs_display_rtt_gpu_clears());
+                                    }
                                     printf("  texgen: %llu coordinates "
                                            "generated, %llu from a source "
                                            "not implemented (normal, "

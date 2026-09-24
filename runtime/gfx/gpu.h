@@ -180,6 +180,13 @@ void mgs_gpu_batch_flush(void);
  * has to be ordered after the draws. */
 void mgs_gpu_submit(void);
 
+/* Clear one rectangle of the colour/depth target, in embedded-buffer
+ * pixels, as a copy with the clear bit does: colour and alpha to `argb`,
+ * depth to the 24-bit `z24`, each only if its update is enabled. */
+void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
+                        uint32_t argb, uint32_t z24,
+                        int colour, int alpha, int depth);
+
 /* Clear the colour target, for the copy that clears. */
 void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear);
 

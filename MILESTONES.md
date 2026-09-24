@@ -1477,10 +1477,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
         readbacks per frame (6.6 GB over 95 s) because every EFB copy,
         including every render-to-texture pass, is downloaded so the CPU
         can encode it into guest memory. That encode belongs on the GPU.
+      - The dispatch loop behind one deadline and one diagnostics flag
+        (F343): +19% throughput on the step clock, heavy scenes 21.9-23.8
+        fps. Remaining, in order of size: the patch dispatch inside guest
+        calls (~6%), EFB copies on the GPU (~9% + readback stalls), and
+        per-primitive rather than per-triangle draw state (~5%).
       Measure it with `MGS_TIME_FRAME=1`; run headless with
       `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
       the run with `MGS_RUN_SECONDS` so the exit report survives. Read the
-      profile's BY OBJECT table, not its address split (F335).
+      profile's BY OBJECT table, not its address split (F335). Check
+      `uptime` first: a shared machine is not a measurement.
 
 ---
 
