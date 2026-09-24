@@ -414,11 +414,34 @@ static void frame_pump(void)
      * framebuffer directly and just flips to it, which is how a video
      * decoder can present without GX copying anything. Keying on the copy
      * alone would freeze such a picture. */
-    /* THE FRAMEBUFFER COPIES, NOT EVERY COPY. See the note in efb.h: the
-     * texture path issues a copy too, and presenting on that showed a
-     * framebuffer the game had not finished drawing. */
+    /* THE FRAMEBUFFER COPIES, NOT EVERY COPY, AND THE BUFFER, NOT THE FIELD.
+     *
+     * Two separate mistakes lived in this one line.
+     *
+     * `copies` counted every EFB copy including the texture path's, so a
+     * render-to-texture pass presented a framebuffer mid-draw. That is
+     * `xfb_copies` now.
+     *
+     * And the video interface's address changes EVERY FIELD, not every
+     * frame: an interlaced field starts one line further down the same
+     * buffer, so it reads 0x80066480 and then 0x80066880. Keying
+     * presentation on it therefore presents twice per frame. That did not
+     * show while guest time came from a step budget, because retrace then
+     * fired at about 25 Hz and the alternation was the frame rate by
+     * accident. With guest time on the real clock retrace fires at its
+     * proper 50 Hz, the alternation doubles, and the second present of each
+     * pair catches the movie decoder half way through writing the frame -
+     * which is a correct top strip, garbage where the write had reached,
+     * and green where it had not. Ben saw it immediately: "it's where you
+     * have moved from the modelled cpu to a proper static guest time, the
+     * video is not being paced correctly."
+     *
+     * Masking off the low twelve bits collapses the two field addresses of
+     * one buffer to one value, so a flip between BUFFERS still presents and
+     * a flip between FIELDS does not. */
     copies = mgs_display_efb()->xfb_copies
-           ^ ((uint64_t)mgs_mmio_xfb_address(mgs_host_mmio()) << 32);
+           ^ ((uint64_t)(mgs_mmio_xfb_address(mgs_host_mmio())
+                         & ~0xFFFu) << 32);
     if (copies == shown) return;
     shown = copies;
 
