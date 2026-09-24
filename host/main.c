@@ -1452,27 +1452,40 @@ int main(int argc, char** argv)
         mgs_module_set_pace(mgs_audio_pace);
     }
 
-    /* MGS_GPU=1 fills triangles on the GPU instead of the CPU.
+    /* THE GPU PATH IS NOW THE DEFAULT. MGS_NO_GPU=1 goes back.
      *
-     * Off by default while the TEV-to-shader generator does not exist: the
-     * base shader is the rasterised colour times one texture, which is the
-     * commonest combiner in this game and not the only one, so the GPU path
-     * is checkable but not yet correct for multi-stage draws. The software
-     * rasteriser stays the reference.
+     * It was opt-in behind MGS_GPU=1 while it drew the rasterised colour
+     * times one texture and nothing else - white rectangles where there
+     * should have been geometry, and fades that did not fade. That is no
+     * longer what it does. With the combiner, four texture units and
+     * per-texture samplers (F313, F314) it matches the software rasteriser
+     * to 0.07% and 0.56% of pixels differing by more than 8 counts on the
+     * two scene frames of a sampled boot, and the three other frames are
+     * byte-identical - while running about 1.9x faster, which is the
+     * difference between the port keeping up with real time and starving
+     * the audio device.
+     *
+     * Leaving it off by default would mean an ordinary run still gets the
+     * judder. The software rasteriser remains the reference and the
+     * fallback, and remains what every comparison is made against; it is
+     * one environment variable away.
      *
      * SDL_VIDEODRIVER=dummy has no GPU backend at all, so a headless run
      * silently keeps the CPU path - which is right, and worth knowing
      * before reading a headless measurement as if it exercised this. */
-    if (getenv("MGS_GPU")) {
+    if (!getenv("MGS_NO_GPU")) {
         if (mgs_gpu_init(MGS_EFB_WIDTH, MGS_EFB_HEIGHT)) {
             /* mgs_display_init reads mgs_gpu_ready() and sets the flag
              * itself, after mgs_raster_init has zeroed everything. */
-            printf("renderer: SDL3 GPU (%s), the CPU rasteriser is idle\n",
+            printf("renderer: SDL3 GPU (%s), the CPU rasteriser is idle"
+                   "  (MGS_NO_GPU=1 for the software path)\n",
                    mgs_gpu_driver() ? mgs_gpu_driver() : "?");
         } else {
-            printf("renderer: MGS_GPU asked for, but no device; "
-                   "keeping the software rasteriser\n");
+            printf("renderer: no GPU device; keeping the software "
+                   "rasteriser\n");
         }
+    } else {
+        printf("renderer: software rasteriser (MGS_NO_GPU is set)\n");
     }
 
     overlay_line("DISC 2: %s", disc2.mounted ? "MOUNTED" : "NOT MOUNTED");

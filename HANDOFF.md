@@ -13617,3 +13617,28 @@ expecting the transfer to be the prize: the prize is not issuing the stall.
 The whole-screen diagnostics (`MGS_TRACE_DRAWNOISE` and friends) now read
 rows outside the box and will see the previous copy's contents there. They
 are off by default and measure the copy's own region anyway.
+
+### F318 — the GPU path is the default now, and why that is a change of facts rather than a change of mind
+
+Ben chose to keep it behind `MGS_GPU=1` when asked, and that was right at the
+time: it drew the rasterised colour times one texture, which meant white
+rectangles where multi-stage geometry should have been and fades that did not
+fade. Since then F313 and F314 have put the whole combiner, four texture
+units and per-texture samplers on it, and the reason for the flag has gone:
+
+    two scene frames against the software rasteriser
+      pixels differing by more than 8 counts     0.07%  and  0.56%
+      mean absolute channel error                0.72   and  0.65
+    three other sampled frames                   byte-identical
+    speed                                        about 1.9x the CPU path
+
+Leaving it opt-in would mean an ordinary run still gets the judder and the
+starving audio device that the CPU rasteriser causes - which is the fault
+Ben has reported most often. `MGS_NO_GPU=1` goes back to the software
+rasteriser, which stays the reference and stays what every comparison here
+is made against; the startup line now says which path is running and how to
+change it.
+
+**This is a decision made on Ben's behalf and it is reversible in one
+environment variable.** If he wants it opt-in again, the change is the `if`
+in `host/main.c` around `mgs_gpu_init`.
