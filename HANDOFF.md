@@ -13301,3 +13301,27 @@ left against right correlates at exactly 1.000 at lag 0. Every voice mixing
 to both channels is right for this game on GameCube (F285), but identical
 to the last bit means the per-voice left and right volumes are not being
 applied separately, and that is worth a look.
+
+### F311 — the ARAM DMA started on the low half's address, not on the low half being written
+
+`tests/test_dsp_init.c` has been failing since `983775c`, and nothing
+noticed because the run scripts do not run ctest. The test writes the ARAM
+transfer count as one 32-bit store at `__DSPRegs[20]`; the model started the
+transfer only on `addr == MMIO_DSP + 0x2A`, the low half's own address.
+
+`__ARWriteDMA` stores the count as two halfwords and the low one IS at
+0x2A, so the narrow test passes for the SDK and reads as correct. It is
+still the wrong test: what starts a transfer on the hardware is the low half
+being **written**, not the store being sixteen bits wide. A 32-bit store
+covering 0x28-0x2B writes both halves and must start it too.
+
+    before: ARAM transfer raises its flag - never came true (0x0804 after
+            100,000 reads), twice; dsp_init FAILED
+    after:  19 of 19 tests pass
+
+**What this says about the habit, not the bug.** A commit that narrows a
+condition to the case in front of it will pass every test that exercises
+that case. The only thing that catches it is running the suite, and four
+commits went by without it. `ctest --test-dir build/runtime` takes 0.06
+seconds.
+

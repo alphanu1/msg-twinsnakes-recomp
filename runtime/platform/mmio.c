@@ -953,7 +953,17 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
      * the SDK's own sequence: address, address, length-high with the
      * direction bit, then length-low last. Everything before it is just
      * loading registers. */
-    if (addr == MMIO_DSP + 0x2Au) {
+    /* THE LOW HALF STARTS IT, HOWEVER IT IS WRITTEN.
+     *
+     * `__ARWriteDMA` stores the count as two halfwords and the low one is
+     * at 0x2A, so matching that address alone is right for the SDK - but it
+     * is the wrong test, because what starts a transfer on the hardware is
+     * the low half being written, not the store being sixteen bits wide. A
+     * single 32-bit store at 0x28 covers both halves and must start it too;
+     * it did before 983775c narrowed this, and tests/test_dsp_init.c - which
+     * writes the count that way - has been failing ever since. */
+    if (addr == MMIO_DSP + 0x2Au ||
+        (addr == MMIO_DSP + 0x28u && size == 4u)) {
         mgs_aram_run_dma(&m->aram, &m->regs[MMIO_DSP - MMIO_BASE]);
         /* The transfer is already done, so the busy bit is already clear.
          * `__ARWaitForDMA` spins on it and would never leave if it were
