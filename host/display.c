@@ -63,6 +63,7 @@ static MgsGxRaster s_raster;
 /* Frame pacing. 0 means uncapped, which is what a headless run wants. */
 static unsigned  s_fps_cap;
 static long long s_next_frame_ns;
+static long long s_present_due;
 static int       s_frame_timing = -1;
 /* Nanoseconds, accumulated between reports. `guest` is what is left over
  * once the measured pieces are taken out of the wall clock, which is the
@@ -80,6 +81,20 @@ static uint64_t  s_t_tri, s_t_sub, s_t_dec;
  * different and answerable question from 'we are a bit slow'. */
 static uint64_t  s_fields_at_frame, s_field_hist[8];
 static unsigned  s_t_frames;
+
+/* May the window draw yet? The frame cap, asked rather than slept on. */
+int mgs_display_may_present(void);
+int mgs_display_may_present(void)
+{
+    struct timespec now;
+    long long t;
+    if (!s_fps_cap) return 1;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    t = (long long)now.tv_sec * 1000000000ll + now.tv_nsec;
+    if (t < s_present_due) return 0;
+    s_present_due = t + 1000000000ll / (long long)s_fps_cap;
+    return 1;
+}
 
 void mgs_display_add_present_ns(long long ns);
 void mgs_display_add_present_ns(long long ns)
@@ -544,6 +559,23 @@ static void run_copy(uint32_t cmd)
          * occasional slow frame is absorbed instead of accumulating drift,
          * and a frame that overruns by more than one period resynchronises
          * rather than trying to catch up forever. */
+        /* THE FRAME CAP MUST NOT SLEEP THE GUEST THREAD.
+         *
+         * This used to nanosleep here, inside the copy, on the guest
+         * thread - and the AX mixer runs on that same thread, inside the
+         * DSP interrupt. So capping the frame rate literally stopped the
+         * game producing sound, and the lower the cap the worse it got.
+         * Ben at 25 fps: "audio is even worse. the audio should not be
+         * linked to the frame rate, it should run at its correct speed."
+         * He is right, and it was never defensible: sound is produced at 32
+         * kHz by a device that does not care how often we draw.
+         *
+         * It is also no longer needed for its original purpose. Pacing
+         * existed because the guest could outrun real time when guest time
+         * came from a step budget; guest time is real time now, so it
+         * cannot. What is left is a limit on how often we PRESENT, and that
+         * belongs on the presentation side where skipping a draw costs
+         * nothing - see frame_pump in host/main.c. Nothing sleeps here. */
         if ((cmd & COPY_TO_XFB) && s_fps_cap) {
             struct timespec now;
             long long period = 1000000000ll / (long long)s_fps_cap;
@@ -551,18 +583,9 @@ static void run_copy(uint32_t cmd)
             {
                 long long t = (long long)now.tv_sec * 1000000000ll + now.tv_nsec;
                 if (s_next_frame_ns == 0ll || t > s_next_frame_ns + period)
-                    s_next_frame_ns = t + period;          /* first frame, or resync */
-                else {
-                    long long wait = s_next_frame_ns - t;
-                    if (wait > 0ll) {
-                        struct timespec ts;
-                        ts.tv_sec  = (time_t)(wait / 1000000000ll);
-                        ts.tv_nsec = (long)(wait % 1000000000ll);
-                        nanosleep(&ts, NULL);
-                        if (s_frame_timing) s_t_cap += wait;
-                    }
+                    s_next_frame_ns = t + period;
+                else if (t >= s_next_frame_ns)
                     s_next_frame_ns += period;
-                }
             }
         }
 

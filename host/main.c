@@ -443,6 +443,13 @@ static void frame_pump(void)
            ^ ((uint64_t)(mgs_mmio_xfb_address(mgs_host_mmio())
                          & ~0xFFFu) << 32);
     if (copies == shown) return;
+    /* The frame cap lives here now, as a question rather than a sleep: a
+     * present we skip costs nothing, where a sleep on this thread stops the
+     * game producing sound. See host/display.c. */
+    {
+        int mgs_display_may_present(void);
+        if (!mgs_display_may_present()) return;
+    }
     shown = copies;
 
     {   /* The whole presentation step - YUV to RGB, the streaming texture
