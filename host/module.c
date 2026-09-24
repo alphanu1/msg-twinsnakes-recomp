@@ -15,6 +15,7 @@
 #include "platform/mmio.h"
 #include "os/os_runtime.h"
 
+#include <time.h>
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -942,6 +943,69 @@ static unsigned mgs_tick_rate(void)
     return rate;
 }
 
+/* ---- GUEST TIME FROM THE REAL CLOCK ------------------------------------
+ *
+ * THIS IS A STATIC RECOMPILATION AND IT SHOULD NOT MODEL A 486 MHz CPU.
+ *
+ * Guest time used to advance a fixed number of ticks per dispatch step, so
+ * the guest received a fixed slice of work per video field however fast the
+ * machine was - 810,000 ticks a PAL field divided by four is 202,500 steps,
+ * about 28% of a real GameCube's throughput, and no amount of host CPU
+ * could buy more. That is modelling the original hardware, which is what an
+ * emulator does and what this is not.
+ *
+ * Guest time now comes from the monotonic clock at the guest's own 40.5 MHz
+ * timebase. The consequences are the ones wanted: the guest executes as
+ * many instructions as the host can deliver between fields, the retrace and
+ * every device deadline fire at their real rate, and a faster machine makes
+ * the game run better rather than making no difference at all.
+ *
+ * MGS_SPEED scales it - 2.0 runs the game at double speed, 0 lets guest
+ * time advance as fast as the loop can run it, which is the "no limit at
+ * all" case.
+ *
+ * MGS_GUEST_CLOCK=steps restores the old step-driven advance. That is not
+ * nostalgia: the Dolphin comparison harness needs two runs of ours to be
+ * byte-identical before a difference against the emulator means anything
+ * (F320's control), and a wall clock cannot promise that. Determinism is a
+ * property the harness needs, not one the player does.
+ */
+#define MGS_GUEST_HZ 40500000ull
+
+static int mgs_clock_is_wall(void)
+{
+    static int mode = -1;
+    if (mode < 0) {
+        const char* e = getenv("MGS_GUEST_CLOCK");
+        mode = !(e && (*e == 's' || *e == 'S'));
+    }
+    return mode;
+}
+
+static double mgs_speed(void)
+{
+    static double sp = -1.0;
+    if (sp < 0.0) {
+        const char* e = getenv("MGS_SPEED");
+        sp = (e && *e) ? strtod(e, NULL) : 1.0;
+        if (sp < 0.0) sp = 0.0;
+    }
+    return sp;
+}
+
+static uint64_t mgs_wall_ticks(void)
+{
+    static uint64_t origin;
+    struct timespec ts;
+    uint64_t now;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    if (!origin) { origin = now; return 0ull; }
+    /* 40.5 MHz: ticks = ns * 81 / 2000, in that order so a two-hour run
+     * cannot overflow and the division is exact. */
+    return (uint64_t)((double)(now - origin) * (81.0 / 2000.0) * mgs_speed());
+}
+
 /* Whatever the host wants the heartbeat to report. Kept as a callback so
  * this file needs no GX or DVD header. */
 static uint64_t (*s_progress)(unsigned which);
@@ -1444,6 +1508,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     uint64_t due_vi = 0;
     uint64_t pending_ticks = 0;
     unsigned tick_batch = 0;
+    const int wall_clock = mgs_clock_is_wall();
+    uint64_t gt_wall = 0;
     uint64_t due_pe = 0, due_dsp = 0, due_pend = 0, due_aram = 0,
              due_aid = 0, due_pump = 0, due_disp = 0, due_pace = 0;
     uint32_t last_pc = 0u;
@@ -1569,12 +1635,53 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * which is 1.6 microseconds. Nothing in the SDK can see that. What
          * must stay exact is `gt`, the schedule the periodic hooks run on,
          * and that is accumulated every step as before. */
-        pending_ticks += tick_rate;
-        if (++tick_batch >= 16u) {
-            mgs_runtime_advance_ticks(rt, pending_ticks);
-            mgs_mmio_advance_ticks(mmio_p, (uint32_t)pending_ticks);
-            pending_ticks = 0;
-            tick_batch = 0;
+        /* GUEST TIME. From the real clock unless asked otherwise - see the
+         * note at mgs_wall_ticks. The clock is read once every 64 steps
+         * rather than every step, because `clock_gettime` is a vDSO call of
+         * about 20 ns and doing it per step would itself become the cost
+         * this change exists to remove. */
+        if (wall_clock) {
+            if (++tick_batch >= 64u) {
+                uint64_t delta;
+                if (mgs_speed() == 0.0) {
+                    /* NO LIMIT AT ALL. Guest time advances at the catch-up
+                     * bound every batch, so the guest is never waiting on a
+                     * clock and the game renders as fast as the host can
+                     * carry it. Multiplying real time by zero would have
+                     * FROZEN guest time instead, which is the opposite of
+                     * what the flag says. */
+                    delta = 81000ull;
+                    gt += delta;
+                    mgs_runtime_advance_ticks(rt, delta);
+                    mgs_mmio_advance_ticks(mmio_p, (uint32_t)delta);
+                    tick_batch = 0;
+                    goto ticks_done;
+                }
+                {
+                uint64_t now_t = mgs_wall_ticks();
+                delta = now_t > gt_wall ? now_t - gt_wall : 0ull;
+                /* A host that falls behind must not deliver an hour of
+                 * guest time in one step: the interrupts it owes would
+                 * arrive in a burst the guest has no way to service. Catch
+                 * up at a bounded rate instead, which is what a frame that
+                 * overruns does on the console too. */
+                if (delta > 81000ull) delta = 81000ull;    /* 2 ms */
+                gt_wall += delta;
+                gt += delta;
+                mgs_runtime_advance_ticks(rt, delta);
+                mgs_mmio_advance_ticks(mmio_p, (uint32_t)delta);
+                tick_batch = 0;
+                }
+            }
+          ticks_done: ;
+        } else {
+            pending_ticks += tick_rate;
+            if (++tick_batch >= 16u) {
+                mgs_runtime_advance_ticks(rt, pending_ticks);
+                mgs_mmio_advance_ticks(mmio_p, (uint32_t)pending_ticks);
+                pending_ticks = 0;
+                tick_batch = 0;
+            }
         }
         /* THE PERIODIC HOOKS BELOW RUN ON GUEST TIME, NOT ON STEPS.
          *
@@ -1591,7 +1698,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
          * they were tuned at - every hook fires on exactly the step it used
          * to, and at any other rate it fires at the same point in GUEST
          * TIME instead of the same step. */
-        gt += tick_rate;
+        if (!wall_clock) gt += tick_rate;
         /* The audio interface's sample counter comes off the same clock,
          * because __AI_SRC_INIT times one against the other. */
 

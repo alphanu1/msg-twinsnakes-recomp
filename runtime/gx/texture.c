@@ -91,7 +91,13 @@ static unsigned texture_bytes(uint32_t format, unsigned w, unsigned h)
 static void decode_cmpr_block(const uint8_t* src, uint32_t* out, unsigned stride)
 {
     uint16_t c0 = be16(src), c1 = be16(src + 2);
-    uint32_t pal[4];
+    /* ZEROED, because the two interpolated entries below are built a byte
+     * at a time with a read-modify-write and were being read before they
+     * were ever written. Every byte does get written in the end, so this
+     * was undefined behaviour that happened to work rather than a visible
+     * fault - but "happened to work" is not a property a decoder should
+     * rely on, and a compiler is entitled to assume it never happens. */
+    uint32_t pal[4] = { 0u, 0u, 0u, 0u };
     unsigned y, x;
 
     pal[0] = rgb565(c0);

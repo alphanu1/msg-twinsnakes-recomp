@@ -110,16 +110,29 @@ static MgsDvdRequest* dvd_build_and_submit(MgsDvd* dvd, const char* path,
     req->host_buffer = (uint8_t*)malloc(length ? length : 1u);
     if (!req->host_buffer) { req->in_use = 0; return NULL; }
 
-    /* WHEN THE GUEST WILL SEE IT, decided now and in the guest's own clock.
+    /* WHEN THE GUEST WILL SEE IT.
      *
-     * A fixed cost plus a per-byte one. This is NOT the drive's real timing -
-     * a GameCube disc is far slower - and it is not trying to be: what it
-     * buys is that the same run produces the same result, which host thread
-     * scheduling cannot. Modelling the real rate is a separate question and
-     * belongs with the Dolphin comparison, where there is something to
-     * compare against. */
-    req->ready_tick = dvd->now + MGS_DVD_LATENCY_TICKS
-                    + (uint64_t)length * MGS_DVD_TICKS_PER_BYTE;
+     * THIS IS A MODELLED DELAY AND IT IS NOW OFF BY DEFAULT. It held every
+     * read for a millisecond of guest time plus a per-byte cost, spinning
+     * on a deadline with the bytes already in host memory - a drive being
+     * emulated on a machine that has no drive in the path at all. This is a
+     * static recompilation, not an emulator: the only thing that should
+     * pace the game is the frame rate.
+     *
+     * What it bought was determinism: the same run produced the same
+     * result, which host thread scheduling cannot promise. That still
+     * matters for the Dolphin comparison harness, which needs two runs of
+     * ours to be byte-identical before a difference against the emulator
+     * means anything (F320's control). So it is kept, off, behind
+     * MGS_DVD_LATENCY=1 for that harness rather than deleted. */
+    {
+        static int modelled = -1;
+        if (modelled < 0) modelled = getenv("MGS_DVD_LATENCY") != NULL;
+        req->ready_tick = modelled
+            ? dvd->now + MGS_DVD_LATENCY_TICKS
+                       + (uint64_t)length * MGS_DVD_TICKS_PER_BYTE
+            : dvd->now;
+    }
 
     /* The game polls this while it waits. Set before queuing, so it can never
      * observe a request that is neither BUSY nor finished.

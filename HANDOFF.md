@@ -14213,3 +14213,83 @@ Triangles up 1.5x, time up 2.1x. 3.5 microseconds is about seventeen
 thousand cycles to submit one triangle, on a machine where the whole
 GameCube did 6,160 of them in a frame. Ben is right that this is not a
 hardware limit.
+
+### F328 — delta time: guest time comes off the real clock, and nothing models a 486 MHz CPU
+
+Ben, twice and emphatically: "anything modelling against the original
+hardware CPU is just wrong. IT'S A STATIC RECOMPILATION." He is right, and
+the audit found two places doing exactly that plus several smaller ones.
+
+**What was modelled, in full:**
+
+    MGS_TICK_RATE = 4        guest time advanced 4 ticks per dispatch step,
+                             so a PAL field of 810,000 ticks was 202,500
+                             steps - a fixed slice of work per field however
+                             fast the machine, about 28% of a console
+    MGS_DVD_LATENCY_TICKS    every disc read held 1 ms of guest time plus a
+                             per-byte cost, SPINNING on a deadline with the
+                             bytes already in host memory
+    due_pe 512, due_aid 712, due_aram 1016, due_pend 1688, due_dsp 32792
+                             device latencies, in guest ticks
+    mgs_audio_pace           sleeps the guest thread to the device's clock
+    s_fps_cap = 50           presentation - the one limit Ben allows
+
+**Guest time now comes from `CLOCK_MONOTONIC` at the guest's own 40.5 MHz
+timebase.** `MGS_SPEED` scales it, `MGS_SPEED=0` removes the limit
+entirely, and `MGS_GUEST_CLOCK=steps` restores the old advance - kept only
+because F320's control needs two of OUR runs byte-identical before a
+difference against Dolphin means anything. Determinism is a property the
+harness needs, not one the player does. The disc latency is off by default
+behind `MGS_DVD_LATENCY=1` for the same reason.
+
+**AND THE TICK RATE WAS NEVER THE BOTTLENECK, which the sweep settled before
+the change was made.** Lowering it gives the guest MORE steps per field and
+made things worse, monotonically:
+
+    tick 4   ~20-24 fps       tick 2   ~17-18 fps       tick 1   12.5 fps
+
+The host delivers about 8.1M dispatch steps a second, so a 20 ms field is
+~162,000 steps against a budget of 202,500: the budget was never binding.
+Removing the modelling is right on its own terms, and it is recorded here
+that it is NOT the frame-rate fix.
+
+**What it did do**, over a whole run of the heavy scene:
+
+                        min     median    max
+    step budget        12.0      23.8     87.9
+    wall clock         14.2      24.9     50.0
+
+The median is the game's own rate either way - PAL runs 50 fields and this
+game draws one frame per two, so 25 fps is correct. What changed is the
+shape: the maximum is now the real field rate instead of 88 fps of running
+too fast, the heavy scene holds a steady 24.8 instead of swinging 12 to 24,
+and the worst case improved 18%.
+
+**A bug in the first version, caught before it shipped:** `MGS_SPEED=0`
+multiplied real time by zero and would have FROZEN guest time - the exact
+opposite of the "no limit" the flag promises. It now advances at the
+catch-up bound instead.
+
+### F329 — after the texture hash, there is no hotspot left: it is the recompiled code
+
+With `mgs_tex_get`'s per-triangle hashing gone (F327), a fresh profile of
+the heavy scene has no single peak at all:
+
+    recompiled game module (top 30 addresses only)     9.19%
+    mgs_raster_triangle                                9.79%
+    mgs_module_run                                     2.28%
+    mgs_tev_alpha_test                                 1.29%
+    guest_ptr                                          0.83%
+    guest_read32                                       0.71%
+
+138,677 samples over **22,630 distinct addresses**. The top thirty account
+for roughly a quarter; the rest is spread across the recompiled game code,
+thousands of functions at a fraction of a per cent each.
+
+That is the honest shape of the problem and it is not a limiter anyone can
+delete. At ~8.1M dispatch steps a second and roughly 13.5 guest instructions
+a step, the guest runs at about 110M instructions a second against a console
+that issued around 486M cycles - so the generated code costs on the order of
+45 host cycles per guest instruction on a 5 GHz machine. Making the port
+fast means making the recompiler's output better, or finding work to take
+off the single guest thread; it does not mean finding one more bad function.
