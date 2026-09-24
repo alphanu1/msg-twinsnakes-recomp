@@ -116,12 +116,33 @@ static const uint8_t* array_element(const MgsGx* gx, unsigned array,
     return guest_ptr(gx->mem, base + index * stride, size);
 }
 
-/* Array indices, matching the attribute order the hardware uses. */
-#define ARR_POS   9u
-#define ARR_NRM  10u
-#define ARR_CLR0 11u
-#define ARR_CLR1 12u
-#define ARR_TEX0 13u
+/* THE ARRAY INDEX IS NOT THE ATTRIBUTE NUMBER.
+ *
+ * These were 9, 10, 11, 12, 13 - the values of GX_VA_POS, GX_VA_NRM,
+ * GX_VA_CLR0, GX_VA_CLR1 and GX_VA_TEX0 in the ATTRIBUTE enum. The arrays
+ * are numbered separately, from zero, and the SDK does the conversion
+ * itself:
+ *
+ *     libogc   GX_SetArray:  idx = attr - GX_VA_POS;
+ *                            GX_LOAD_CP_REG(0xA0 + idx, ptr);
+ *                            GX_LOAD_CP_REG(0xB0 + idx, stride);
+ *     Dolphin  CPArray:      Position = 0, Normal = 1, Color0 = 2,
+ *                            Color1 = 3, TexCoord0 = 4 ... TexCoord7 = 11
+ *
+ * So every indexed attribute was read from the wrong array. Position looked
+ * for its base and stride in slot 9, which is TexCoord5's, and a stride of
+ * zero there made `array_element` refuse - correctly, on the wrong slot.
+ *
+ * What that cost: 9,260,039 indexed positions a run silently left at the
+ * origin, which a perspective projection turns into w = 0, which the
+ * rasteriser then rejected as "behind the eye" - 5,508,491 triangles, a
+ * THIRD of everything submitted. The scene was decoded, transformed and
+ * discarded, and every counter along the way reported success. */
+#define ARR_POS   0u
+#define ARR_NRM   1u
+#define ARR_CLR0  2u
+#define ARR_CLR1  3u
+#define ARR_TEX0  4u
 
 static void read_position(const MgsGx* gx, Reader* r, const MgsGxVertexFormat* f,
                           MgsGxVertex* v)
@@ -148,7 +169,25 @@ static void read_position(const MgsGx* gx, Reader* r, const MgsGxVertexFormat* f
         }
         src = array_element(gx, ARR_POS, index, bytes);
     }
-    if (!src) return;
+    /* A POSITION THAT CANNOT BE FETCHED IS NOT A POSITION OF ZERO.
+     *
+     * This returned silently, leaving the vertex at the origin, and the
+     * rasteriser then rejected the triangle as "behind the eye" - because
+     * with a perspective projection w is -z and the origin transformed by
+     * an identity matrix gives w = 0. Five and a half million triangles a
+     * run, a third of everything submitted, disappeared that way, and every
+     * counter in the pipeline said the geometry was fine.
+     *
+     * Counted here, where it is known, rather than inferred from a symptom
+     * five stages downstream. */
+    if (!src) {
+        MgsGx* m = (MgsGx*)gx;
+        ++m->pos_fetch_failed;
+        if (!gx->array_base[ARR_POS]) ++m->pos_no_base;
+        else if (!gx->array_stride[ARR_POS]) ++m->pos_no_stride;
+        else ++m->pos_out_of_range;
+        return;
+    }
 
     ar.p = src; ar.n = bytes; ar.at = 0;
     v->x = component(&ar, f->pos_format, f->pos_shift);

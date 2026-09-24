@@ -299,6 +299,15 @@ static void cp_write(MgsGx* gx, uint8_t reg, uint32_t value)
                     reg, value, (unsigned long long)gx->commands);
     }
 
+    /* WHICH command-processor registers the game actually writes.
+     *
+     * Nine and a quarter million indexed positions failed to fetch because
+     * the position array's STRIDE was zero, while its base was set. Either
+     * the game never writes 0xB0-0xBF or we never see the write, and those
+     * need completely different fixes. A count per register group says
+     * which in one run. */
+    if (reg < 0x100u) ++gx->cp_writes[reg >> 4];
+
     if (reg == 0x50u) gx->vcd_lo = value;
     else if (reg == 0x60u) gx->vcd_hi = value;
     else if ((reg & 0xF8u) == 0x70u) gx->vat_a[reg & 7u] = value;

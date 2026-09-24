@@ -1904,6 +1904,58 @@ int main(int argc, char** argv)
                                         printf("    0x%08X  x%llu\n",
                                                rs->rascol_key[k],
                                                (unsigned long long)rs->rascol_hits[k]);
+                                    {
+                                        unsigned q; uint64_t tot = 0;
+                                        for (q = 0; q < 16u; ++q)
+                                            tot += rs->behind_mag[q];
+                                        printf("  rejected as behind the eye,"
+                                               " by how far (%llu split at "
+                                               "the near plane):\n",
+                                               (unsigned long long)
+                                                   rs->near_clipped);
+                                        for (q = 0; q < 16u; ++q)
+                                            if (rs->behind_mag[q])
+                                                printf("    < %10.0f units: "
+                                                       "%llu\n",
+                                                       (double)(1u << (3u*q)),
+                                                       (unsigned long long)
+                                                           rs->behind_mag[q]);
+                                        {
+                                            unsigned z;
+                                            printf("  CP register writes by "
+                                                   "group: ");
+                                            for (z = 0; z < 16u; ++z)
+                                                if (g->cp_writes[z])
+                                                    printf("0x%X0:%llu ", z,
+                                                        (unsigned long long)
+                                                            g->cp_writes[z]);
+                                            printf("\n");
+                                        }
+                                        printf("  indexed POSITIONS that "
+                                               "could not be fetched: %llu "
+                                               "(no base %llu, no stride "
+                                               "%llu, out of range %llu)\n",
+                                               (unsigned long long)
+                                                   g->pos_fetch_failed,
+                                               (unsigned long long)
+                                                   g->pos_no_base,
+                                               (unsigned long long)
+                                                   g->pos_no_stride,
+                                               (unsigned long long)
+                                                   g->pos_out_of_range);
+                                        printf("    of those, %llu had an "
+                                               "ALL-ZERO position matrix\n",
+                                               (unsigned long long)
+                                                   rs->behind_zero_matrix);
+                                        printf("    by matrix index: ");
+                                        for (q = 0; q < 8u; ++q)
+                                            printf("%u-%u:%llu ", q*8u,
+                                                   q*8u+7u,
+                                                   (unsigned long long)
+                                                       rs->behind_mtx[q]);
+                                        printf("\n");
+                                        (void)tot;
+                                    }
                                     printf("  untextured draws, the colour "
                                            "ACTUALLY WRITTEN (1 pixel in "
                                            "1024):\n");

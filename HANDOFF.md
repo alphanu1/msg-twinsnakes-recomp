@@ -12864,3 +12864,63 @@ that needs confirming against the oracle rather than assuming.
 **What not to re-propose:** any explanation that has the geometry missing,
 mis-transformed or rejected. It is drawn, on screen, opaque and white, and
 the numbers above say so one at a time.
+
+### F302 — THE ARRAY INDEX IS NOT THE ATTRIBUTE NUMBER, and it cost a third of the geometry
+
+This is why the scene was empty, and it is five constants.
+
+Indexed vertex attributes live in arrays whose base and stride are in CP
+registers 0xA0-0xAF and 0xB0-0xBF. `runtime/gx/vertex.c` indexed those with
+**9, 10, 11, 12, 13** - the values of `GX_VA_POS`, `GX_VA_NRM`, `GX_VA_CLR0`,
+`GX_VA_CLR1` and `GX_VA_TEX0` in the ATTRIBUTE enum. The arrays are numbered
+separately, from zero. Two independent references say so:
+
+    libogc   GX_SetArray:  idx = attr - GX_VA_POS;
+                           GX_LOAD_CP_REG(0xA0 + idx, ptr);
+                           GX_LOAD_CP_REG(0xB0 + idx, stride);
+    Dolphin  CPArray:      Position = 0, Normal = 1, Color0 = 2,
+                           Color1 = 3, TexCoord0 = 4 ... TexCoord7 = 11
+
+So position looked for its base and stride in slot 9, which is TexCoord5's.
+The stride there is zero, `array_element` refused - correctly, on the wrong
+slot - and `read_position` returned silently, leaving the vertex at the
+ORIGIN. A perspective projection turns the origin under an identity matrix
+into w = 0, and the rasteriser then rejected the triangle as "behind the
+eye".
+
+    indexed positions that could not be fetched   9,260,039  ->  0
+    triangles rejected as behind the eye          5,508,491  ->  4,295,485
+    triangles drawn                              10,714,608  -> 12,013,042
+    triangles sampling a texture                    400,880  ->  1,699,314
+    pixels lit                                  831,983,901  -> 936,126,130
+    alpha-killed                                          0  ->     78,013
+
+and the opening cinematic goes from a flat teal void with a subtitle to an
+actual scene.
+
+**How it hid for so long.** Every counter along the way reported success.
+The FIFO parser had 0 desyncs, the vertex decode did not fail, the transform
+was self-consistent, the projection matched Dolphin field for field, the
+textures bound without a single failure, nothing was depth-rejected or
+masked. The geometry was decoded, transformed and discarded, and the only
+number that ever pointed at it was "5,508,491 clipped", which reads as
+ordinary frustum culling.
+
+**What found it** was following that number down instead of past it: how far
+behind the eye? 5,416,809 of them less than ONE unit, which is not "behind
+the camera" - it is w == 0. Then: with what matrix? Identity. Then: from
+what position? (0,0,0). A vertex at the origin is not a vertex, it is a read
+that failed, and `read_position` was the only place that could fail silently.
+
+**What not to re-propose:** reading "N triangles clipped" as culling. It is
+the only symptom this fault produced, and it looked entirely normal.
+
+**Also fixed on the way, and inert:** near-plane clipping. Triangles that
+straddle the eye plane are now split rather than dropped, by interpolating
+the vertices themselves - which is exact, because everything before the
+divide is linear. It changes almost nothing here (32 triangles a run) and
+the frames are byte-identical with and without it, because the rejected
+geometry was never straddling the plane; it was at w == 0. The first version
+recursed without bound - a replacement vertex sits exactly ON the plane and
+can land a hair behind it in floating point - and the run died silently with
+no exit report. It is now depth-limited to one level.

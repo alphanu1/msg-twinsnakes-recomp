@@ -246,6 +246,55 @@ int mgs_tex_decode(const GuestMemory* mem, uint32_t addr, uint32_t format,
  * read as one sequence. Diagnostic only; nothing branches on it. */
 uint64_t mgs_gx_seq;
 
+/* ONE TIMELINE FOR EVERYTHING THAT TOUCHES THE BUFFER.
+ *
+ * "The scene is drawn and then covered" and "the copy captures the scene"
+ * are both statements about ORDER, and the traces that produced them each
+ * saw one kind of event. This records every kind as a single character in
+ * the order it happens, so the sequence can be read directly:
+ *
+ *     s = an untextured scene draw     Q = a full-screen textured quad
+ *     T = an EFB copy to a texture     F = an EFB copy to the framebuffer
+ *     C = the framebuffer copy cleared the buffer
+ *
+ * Runs are collapsed when printed, because a frame has thousands of scene
+ * draws and what matters is where the other letters fall among them. */
+static char s_order[65536];
+static unsigned s_order_n;
+static int s_order_on = -1;
+
+void mgs_gx_order_note(char c);
+void mgs_gx_order_note(char c)
+{
+    if (s_order_on < 0) s_order_on = getenv("MGS_TRACE_ORDER") != NULL;
+    if (!s_order_on) return;
+    if (s_order_n < sizeof s_order) s_order[s_order_n++] = c;
+}
+
+void mgs_gx_order_dump(const char* label);
+/* A NULL label resets without printing, which is what makes each printed
+ * line ONE frame. Called every frame; printing only in the window meant the
+ * first line carried everything since boot, truncated at the cap - fifty
+ * framebuffer copies deep, which reads like fifty copies in one frame. */
+void mgs_gx_order_dump(const char* label)
+{
+    unsigned i = 0;
+    if (s_order_on <= 0) return;
+    if (!label) { s_order_n = 0; return; }
+    if (!s_order_n) return;
+    fprintf(stderr, "[order] %s: ", label);
+    while (i < s_order_n) {
+        unsigned j = i;
+        while (j < s_order_n && s_order[j] == s_order[i]) ++j;
+        if (j - i > 1) fprintf(stderr, "%c x%u ", s_order[i], j - i);
+        else fprintf(stderr, "%c ", s_order[i]);
+        i = j;
+    }
+    fprintf(stderr, "\n");
+    s_order_n = 0;
+}
+
+
 /* WHICH ADDRESSES HOLD TEXELS AN EFB COPY PUT THERE.
  *
  * The content hash asks "have these bytes changed", and for a texture the

@@ -496,6 +496,20 @@ static void run_copy(uint32_t cmd)
                     was_noisy = noisy;
                 }
                 ++vn;
+                {   /* One frame's worth of the timeline, in a window. */
+                    static long from = -2;
+                    if (from == -2) { const char* e =
+                            getenv("MGS_TRACE_ORDER");
+                        from = (e && *e) ? strtol(e, NULL, 0) : -1; }
+                    if (from >= 0 && vn >= (unsigned)from &&
+                        vn < (unsigned)from + 4u) {
+                        char lbl[32];
+                        snprintf(lbl, sizeof lbl, "frame %u", vn);
+                        mgs_gx_order_dump(lbl);
+                    } else {
+                        mgs_gx_order_dump(NULL);   /* reset, do not print */
+                    }
+                }
             }
         }
 
@@ -588,6 +602,8 @@ static void run_copy(uint32_t cmd)
              * buffer, often the scratch strip to the right of the visible
              * area, not the origin. */
             if (cmd & COPY_TO_XFB) {
+                mgs_gx_order_note('F');
+                if (cmd & COPY_CLEAR) mgs_gx_order_note('C');
                 mgs_efb_copy(&s_efb, s_mem, copy_w, copy_h, 1,
                              (cmd & COPY_CLEAR) != 0);
             } else if (!getenv("MGS_NO_RTT")) {
@@ -607,6 +623,7 @@ static void run_copy(uint32_t cmd)
                  * the code did before render-to-texture existed, and the
                  * screen was better for it. */
                 uint32_t tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
+                mgs_gx_order_note('T');
                 mgs_efb_copy_tex(&s_efb, s_mem, tl & 0x3FFu,
                                  (tl >> 10) & 0x3FFu,
                                  copy_w, copy_h, copy_tex_format(cmd));

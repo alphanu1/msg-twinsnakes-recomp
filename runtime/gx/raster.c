@@ -53,6 +53,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->trace_preload = getenv("MGS_TRACE_PRELOAD") != NULL;
     r->trace_texuse = getenv("MGS_TRACE_TEXUSE") != NULL;
     r->note_pixels = getenv("MGS_TRACE_CENV") != NULL;
+    r->trace_behind = getenv("MGS_TRACE_BEHIND") != NULL;
     /* The diagnostics added while chasing the video faults, read ONCE like
      * everything else here. Called per draw they were thousands of string
      * lookups a frame, which is a measurable cost to leave behind in a
@@ -320,6 +321,44 @@ static void texture_wrap(const MgsGxBp* bp, unsigned map,
     *wrap_t = (v >> 2) & 3u;
     /* Magnification filter: 0 is nearest, 1 is linear. */
     *bilinear = (int)((v >> 4) & 1u);
+}
+
+/* One vertex partway along the edge to another.
+ *
+ * EVERY field is interpolated with the same parameter, and that is exact
+ * rather than approximate: the modelview and the projection are both linear,
+ * so a point at t along an edge in OBJECT space is the same point at t along
+ * that edge in clip space. The division by w is what stops being linear, and
+ * that happens after this. */
+static MgsGxVertex lerp_vertex(const MgsGxVertex* a, const MgsGxVertex* b,
+                               float t)
+{
+    MgsGxVertex o = *a;
+    unsigned i;
+    o.x = a->x + (b->x - a->x) * t;
+    o.y = a->y + (b->y - a->y) * t;
+    o.z = a->z + (b->z - a->z) * t;
+    o.nx = a->nx + (b->nx - a->nx) * t;
+    o.ny = a->ny + (b->ny - a->ny) * t;
+    o.nz = a->nz + (b->nz - a->nz) * t;
+    for (i = 0; i < 2u; ++i) {
+        unsigned ch;
+        uint32_t out = 0;
+        for (ch = 0; ch < 4u; ++ch) {
+            unsigned sh = ch * 8u;
+            float ca = (float)((a->color[i] >> sh) & 0xFFu);
+            float cb = (float)((b->color[i] >> sh) & 0xFFu);
+            float v = ca + (cb - ca) * t;
+            unsigned q = (unsigned)(v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v));
+            out |= (uint32_t)q << sh;
+        }
+        o.color[i] = out;
+    }
+    for (i = 0; i < 8u; ++i) {
+        o.u[i] = a->u[i] + (b->u[i] - a->u[i]) * t;
+        o.v[i] = a->v[i] + (b->v[i] - a->v[i]) * t;
+    }
+    return o;
 }
 
 static float edge(float ax, float ay, float bx, float by, float px, float py)
@@ -987,6 +1026,129 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
 
     vin[0] = a; vin[1] = b; vin[2] = c;
 
+    /* NEAR-PLANE CLIPPING, instead of dropping the triangle whole.
+     *
+     * A vertex at or behind the eye cannot be divided by w, and what this
+     * did was reject the whole triangle. Honest, and expensive: **5,508,491
+     * of 16,223,099 triangles - 34% of everything submitted - were thrown
+     * away** in one run of the opening. A scene with the camera inside it
+     * loses most of its environment that way, which is what an empty
+     * cinematic looks like.
+     *
+     * Clipping is done by SUBSTITUTION rather than by a separate clip-space
+     * path: the crossing point is found from w, and a replacement vertex is
+     * built by interpolating the original's own fields at that parameter.
+     * That is exact, because everything before the divide is linear - see
+     * lerp_vertex. The replacements then go through the identical route,
+     * which is what keeps this from becoming a second renderer.
+     *
+     * The clip plane sits ABOVE the rejection threshold (0.001 against
+     * 0.0001) so a vertex produced here always passes the test below, and
+     * the recursion is one level deep and cannot repeat. */
+    {
+        /* THE RECURSION HAS TO BE BOUNDED, and the first version was not.
+         *
+         * A replacement vertex sits exactly ON the near plane in exact
+         * arithmetic, and in floating point it can land a hair behind it.
+         * Then the clip fires again on the triangle it just produced, and
+         * again, until the stack is gone: the run died silently with no exit
+         * report, always at the same point, which is what that looks like.
+         *
+         * One level is all the geometry needs - a triangle crossing the
+         * plane yields pieces that are entirely in front of it - so a second
+         * level means the arithmetic disagreed with itself, and rejecting
+         * there is both safe and rare. */
+        static int depth;
+        const float near_w = 0.001f;
+        float wv[3];
+        unsigned behind = 0u;
+
+        for (i = 0; i < 3u; ++i) {
+            float view[3], clipv[3];
+            transform(position_matrix(gx, vin[i]->pos_matrix),
+                      vin[i]->x, vin[i]->y, vin[i]->z, view);
+            project(gx, view, clipv, &wv[i]);
+            if (wv[i] < near_w) ++behind;
+        }
+        if (behind == 3u) {
+            /* HOW FAR behind, and whether it is scene geometry.
+             *
+             * A third of everything submitted is rejected here, and "behind
+             * the eye" means two very different things depending on the
+             * number: a few units behind is a camera sitting inside the
+             * geometry, and thousands of units behind is a transform that
+             * has put the world in the wrong place. */
+            ++r->clipped;
+            {   /* WHICH MATRIX, AND IS IT EMPTY?
+                 *
+                 * 5,416,809 of the 5.5 million rejected triangles are less
+                 * than ONE unit behind the eye, which is not "behind the
+                 * camera" - it is w == 0. A transform that returns zero does
+                 * that, and an unloaded position matrix is all zeroes. */
+                const float* m = position_matrix(gx, vin[0]->pos_matrix);
+                int zero = 1; unsigned q;
+                for (q = 0; q < 12u; ++q) if (m[q] != 0.0f) { zero = 0; break; }
+                if (zero) ++r->behind_zero_matrix;
+                /* MGS_TRACE_BEHIND: a few of them in full. Five million
+                 * triangles landing at w == 0 with a matrix that is not
+                 * empty means either the positions or the matrix is not
+                 * what it should be, and only the numbers say which. */
+                if (r->trace_behind && r->behind_shown < 6u) {
+                    float view0[3];
+                    ++r->behind_shown;
+                    transform(m, vin[0]->x, vin[0]->y, vin[0]->z, view0);
+                    fprintf(stderr,
+                        "[behind] obj (%.2f,%.2f,%.2f) mtx %u  ->  view "
+                        "(%.3f,%.3f,%.3f)  w %.5f  ortho %u\n"
+                        "[behind]   matrix %.3f %.3f %.3f %.3f / %.3f %.3f "
+                        "%.3f %.3f / %.3f %.3f %.3f %.3f\n",
+                        vin[0]->x, vin[0]->y, vin[0]->z, vin[0]->pos_matrix,
+                        view0[0], view0[1], view0[2], wv[0],
+                        gx->xf_projection_ortho,
+                        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+                        m[8], m[9], m[10], m[11]);
+                }
+                if (vin[0]->pos_matrix < 64u)
+                    ++r->behind_mtx[vin[0]->pos_matrix / 8u];
+            }
+            {
+                float worst = wv[0] < wv[1] ? (wv[0] < wv[2] ? wv[0] : wv[2])
+                                            : (wv[1] < wv[2] ? wv[1] : wv[2]);
+                unsigned b2 = 0u;
+                float m = -worst;
+                while (m >= 1.0f && b2 < 15u) { m /= 8.0f; ++b2; }
+                ++r->behind_mag[b2];
+            }
+            return;
+        }
+        if (behind && depth >= 1) { ++r->clipped; return; }
+        if (behind) {
+            MgsGxVertex poly[4];
+            unsigned n = 0u;
+            for (i = 0; i < 3u; ++i) {
+                unsigned j = (i + 1u) % 3u;
+                int in_i = wv[i] >= near_w, in_j = wv[j] >= near_w;
+                if (in_i && n < 4u) poly[n++] = *vin[i];
+                if (in_i != in_j && n < 4u) {
+                    float d = wv[j] - wv[i];
+                    float t = (d != 0.0f) ? (near_w - wv[i]) / d : 0.0f;
+                    if (t < 0.0f) t = 0.0f;
+                    if (t > 1.0f) t = 1.0f;
+                    poly[n++] = lerp_vertex(vin[i], vin[j], t);
+                }
+            }
+            ++r->near_clipped;
+            ++depth;
+            if (n >= 3u) {
+                mgs_raster_triangle(gx, &poly[0], &poly[1], &poly[2]);
+                if (n == 4u)
+                    mgs_raster_triangle(gx, &poly[0], &poly[2], &poly[3]);
+            }
+            --depth;
+            return;
+        }
+    }
+
     for (i = 0; i < 3u; ++i) {
         float view[3], clip[3], w;
         transform(position_matrix(gx, vin[i]->pos_matrix),
@@ -1058,6 +1220,8 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
      *
      * Counted by where the box sits relative to the viewport, which is the
      * only distinction that matters here. */
+    mgs_gx_order_note(!tex_enabled ? 's'
+                      : ((maxx - minx) > 400.0f ? 'Q' : 'q'));
     if (!tex_enabled) {
         if (maxx < 0.0f || minx > (float)r->width ||
             maxy < 0.0f || miny > (float)r->height)

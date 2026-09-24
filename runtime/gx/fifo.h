@@ -133,6 +133,10 @@ typedef struct MgsGx {
     float xf_normal[32 * 3];
     float xf_projection[7];
     unsigned xf_projection_ortho;
+
+    /* Indexed positions that could not be fetched. See read_position. */
+    uint64_t pos_fetch_failed, pos_no_base, pos_no_stride, pos_out_of_range;
+    uint64_t cp_writes[16];   /* CP register writes, by high nibble */
     uint32_t viewport[6];
 
     /* Parser state. The stream arrives in fragments of one to four bytes, so

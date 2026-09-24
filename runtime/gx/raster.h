@@ -91,6 +91,11 @@ typedef struct MgsGxRaster {
     uint32_t  blend_key[16];  uint64_t blend_hits[16];  unsigned blend_n;
     uint32_t  outa_key[16];   uint64_t outa_hits[16];   unsigned outa_n;
     uint64_t  untex_onscreen, untex_offscreen, untex_straddle;
+    uint64_t  near_clipped;   /* triangles split at the near plane */
+    uint64_t  behind_mag[16]; /* how far behind the eye a rejected tri is */
+    uint64_t  behind_zero_matrix;   /* ...with an all-zero position matrix */
+    int       trace_behind; unsigned behind_shown;
+    uint64_t  behind_mtx[8];        /* ...by matrix index, in groups of 8 */
     int       note_pixels;    /* MGS_TRACE_CENV: sample written colours */
     uint32_t  outc_key[16];   uint64_t outc_hits[16];   unsigned outc_n;
     int       scissor_box[4], scissor_seen;

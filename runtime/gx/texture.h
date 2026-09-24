@@ -97,6 +97,9 @@ void mgs_tex_note_efb_copy(uint32_t addr);
  * memory. */
 void mgs_tex_snapshot_efb_copy(uint32_t addr, const uint8_t* src, unsigned n);
 
+void mgs_gx_order_note(char c);
+void mgs_gx_order_dump(const char* label);
+
 extern uint64_t mgs_gx_seq;
 
 #endif
