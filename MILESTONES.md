@@ -1465,11 +1465,22 @@ This is the project. ~200 functions and the widest error bars in the plan.
         cache-hostile walk, 600,000 times per fifty frames. Moved to the
         decode, where the value actually belongs. Heaviest scene
         **12.0 → 18.1 fps**, 4.00 → 2.55 us per triangle.
-      - Still ~2.5-4.3 us per triangle, so there is more per-triangle cost
-        to find. Light scenes barely moved, which is where to look next.
+      - Then five more pieces of our own overhead, each measured (F336):
+        the patch lookup's miss path (5.0% of all samples), `getenv` on the
+        per-vertex and per-BP-write paths (1.4%), the texture upload's
+        per-pixel byte shuffle (2.0%), a kernel submit per batch (`ioctl`,
+        4.5%) and an `mmap`/`munmap` pair per batch (0.9%).
+      - **Heavy scene 12.0 -> 24.0 fps over the session**, against a
+        cutscene's correct rate of 25. Gameplay's 50 is still unmeasured
+        because a headless run cannot press Start.
+      - Next, and probably worth more than all of the above: there are ~6
+        readbacks per frame (6.6 GB over 95 s) because every EFB copy,
+        including every render-to-texture pass, is downloaded so the CPU
+        can encode it into guest memory. That encode belongs on the GPU.
       Measure it with `MGS_TIME_FRAME=1`; run headless with
       `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
-      the run with `MGS_RUN_SECONDS` so the exit report survives.
+      the run with `MGS_RUN_SECONDS` so the exit report survives. Read the
+      profile's BY OBJECT table, not its address split (F335).
 
 ---
 

@@ -275,7 +275,10 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
                  * different claims: an identity-valued matrix at a
                  * non-identity INDEX would make the count above alarming and
                  * harmless. Print a few and settle it. */
-                if (getenv("MGS_TRACE_TEXMTX")) {
+                static int texmtx_on = -1;
+                if (texmtx_on < 0)
+                    texmtx_on = getenv("MGS_TRACE_TEXMTX") != NULL;
+                if (texmtx_on) {
                     static unsigned said;
                     if (said < 6u) {
                         unsigned row = v->tex_matrix[i], k;

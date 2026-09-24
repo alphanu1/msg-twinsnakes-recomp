@@ -10,6 +10,13 @@ typedef void (*MgsSdkFn)(CPUState* ctx);
 /* Returns the native implementation for a guest address, or NULL. */
 MgsSdkFn mgs_patch_lookup(uint32_t address);
 
+/* The raw table, for the test that sweeps every address in
+ * MEM1 against a linear scan of it. The lookup is three
+ * layers of index arithmetic and "it still boots" is not
+ * evidence that it agrees with the table it was built from. */
+uint32_t mgs_patch_count(void);
+uint32_t mgs_patch_address_at(uint32_t i);
+
 void mgs_memset(CPUState* ctx);
 void mgs___fill_mem(CPUState* ctx);
 void mgs_memcpy(CPUState* ctx);

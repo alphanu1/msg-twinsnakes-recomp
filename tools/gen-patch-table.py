@@ -12,11 +12,138 @@ dolrecomp_call consults dolrecomp_dispatch_replacement BEFORE its own table,
 so returning 1 from there means "handled natively, do not run the translated
 code". Phase 1's cross-module router proved that path works.
 
-Emits a sorted address table plus a binary-search lookup. Sorted and searched
-rather than switch()ed because this sits in the hot dispatch path and a linear
-scan over ~400 entries would be paid on every guest call.
+Emits the address table plus a lookup built for the case that actually
+dominates: the MISS. This is consulted once per dispatch - about 8.1 million
+times a second - and almost every answer is "no", so the miss must be cheap
+before the hit is.
+
+Three layers, cheapest first:
+
+  1. A range check. Every patch is an SDK OS, cache, DVD or time function and
+     they all sit in one narrow window near the bottom of MEM1, while the
+     game's own code is far above it. A subtract and an unsigned compare
+     reject everything outside the window with no memory access at all.
+  2. A bitmap, one bit per four-byte address across that window. Small enough
+     to stay in L1, and exact rather than probabilistic.
+  3. Only then the open-addressed hash.
+
+An earlier version binary-searched the sorted table, which is eight
+dependent loads for every miss; before that a linear scan. The hash version
+was hand-written into the generated file and this generator was never
+updated, so regenerating would have silently reverted it - which is exactly
+what "generated code is never hand-edited" is there to prevent.
 """
 import re, argparse, sys
+
+# The lookup itself, emitted verbatim. Kept as one block rather than as
+# string concatenation so it reads as C and can be edited as C.
+LOOKUP_C = r"""
+/* HOW THIS IS SEARCHED, AND WHY THE MISS IS WHAT MATTERS.
+ *
+ * mgs_patch_lookup is asked once per dispatch - around 8.1 million times a
+ * second - and almost every answer is "no". Profiled over a heavy scene the
+ * old binary search was 5.0% of ALL CPU samples, more than the entire render
+ * path, because every miss walked a sorted table through several dependent
+ * loads in memory nothing else keeps warm.
+ *
+ * So the miss is answered first and without touching memory. Every patch is
+ * an SDK OS, cache, DVD or time function, and they all lie in one narrow
+ * window near the bottom of MEM1 while the game's own code is far above it.
+ * A subtract and an unsigned compare reject everything outside it.
+ *
+ * Inside the window a bitmap of one bit per four-byte address settles it
+ * exactly - a few kilobytes, small enough to stay in L1, and exact rather
+ * than probabilistic, so a hit is still a hit. Only then is the hash read.
+ *
+ * Open addressing, no allocation: address zero is not a valid patch target,
+ * so it doubles as the empty marker. Guest addresses are four-byte aligned,
+ * so the index takes the bits above that. */
+#define PATCH_SLOT_BITS 8u
+#define PATCH_SLOTS (1u << PATCH_SLOT_BITS)
+#define PATCH_MASK (PATCH_SLOTS - 1u)
+
+/* One bit per four-byte address. Sized generously against the window the
+ * patches actually occupy; build_slots refuses the fast path rather than
+ * miss a patch if they ever spread wider than this. */
+#define PATCH_BITMAP_BYTES ((0x40000u >> 2) / 8u)
+
+static uint32_t  s_slot_addr[PATCH_SLOTS];
+static MgsSdkFn  s_slot_fn[PATCH_SLOTS];
+static int       s_slots_built;
+static uint32_t  s_lo, s_span;
+static uint8_t   s_present[PATCH_BITMAP_BYTES];
+
+static void build_slots(void)
+{
+    uint32_t i, hi;
+
+    s_lo = k_patches[0].address;
+    hi   = k_patches[0].address;
+    for (i = 1u; i < MGS_PATCH_COUNT; ++i) {
+        if (k_patches[i].address < s_lo) s_lo = k_patches[i].address;
+        if (k_patches[i].address > hi)   hi   = k_patches[i].address;
+    }
+    s_span = hi - s_lo;
+
+    if (s_span >= PATCH_BITMAP_BYTES * 8u * 4u) {
+        /* Wider than the bitmap. Fall back to the hash for every call and
+         * SAY SO: silently dropping a patch would be a correctness change
+         * the next time someone adds one far from the rest. */
+        fprintf(stderr, "[patch] the patch addresses span 0x%X bytes, wider "
+                        "than the lookup bitmap; using the hash for every "
+                        "call\n", (unsigned)s_span);
+        s_span = 0xFFFFFFFFu;
+    }
+
+    for (i = 0u; i < MGS_PATCH_COUNT; ++i) {
+        uint32_t h = (k_patches[i].address >> 2) & PATCH_MASK;
+        while (s_slot_addr[h]) h = (h + 1u) & PATCH_MASK;
+        s_slot_addr[h] = k_patches[i].address;
+        s_slot_fn[h]   = k_patches[i].fn;
+        if (s_span != 0xFFFFFFFFu) {
+            uint32_t b = (k_patches[i].address - s_lo) >> 2;
+            s_present[b >> 3] |= (uint8_t)(1u << (b & 7u));
+        }
+    }
+    s_slots_built = 1;
+}
+
+MgsSdkFn mgs_patch_lookup(uint32_t address)
+{
+    uint32_t h, off;
+
+    if (!s_slots_built) build_slots();
+
+    off = address - s_lo;
+    if (off > s_span) return 0;
+    if (s_span != 0xFFFFFFFFu) {
+        uint32_t b = off >> 2;
+        if (!(s_present[b >> 3] & (1u << (b & 7u)))) return 0;
+    }
+
+    h = (address >> 2) & PATCH_MASK;
+    for (;;) {
+        uint32_t a = s_slot_addr[h];
+        if (a == address) {
+            /* Checked only on a HIT. A miss returns nothing either way, and
+             * this walks a string when MGS_UNPATCH is set. */
+            return unpatched(address) ? 0 : s_slot_fn[h];
+        }
+        if (!a) return 0;
+        h = (h + 1u) & PATCH_MASK;
+    }
+}
+
+/* FOR THE TEST, which sweeps every address in MEM1 against a linear scan of
+ * the table above. The fast path is three layers of index arithmetic and
+ * "it still boots" is not evidence that it agrees with the table. */
+uint32_t mgs_patch_count(void) { return MGS_PATCH_COUNT; }
+
+uint32_t mgs_patch_address_at(uint32_t i)
+{
+    return i < MGS_PATCH_COUNT ? k_patches[i].address : 0u;
+}
+"""
 
 def main():
     ap = argparse.ArgumentParser()
@@ -57,7 +184,13 @@ def main():
                 "typedef struct CPUState CPUState;\n"
                 "typedef void (*MgsSdkFn)(CPUState* ctx);\n\n"
                 "/* Returns the native implementation for a guest address, or NULL. */\n"
-                "MgsSdkFn mgs_patch_lookup(uint32_t address);\n\n")
+                "MgsSdkFn mgs_patch_lookup(uint32_t address);\n\n"
+                "/* The raw table, for the test that sweeps every address in\n"
+                " * MEM1 against a linear scan of it. The lookup is three\n"
+                " * layers of index arithmetic and \"it still boots\" is not\n"
+                " * evidence that it agrees with the table it was built from. */\n"
+                "uint32_t mgs_patch_count(void);\n"
+                "uint32_t mgs_patch_address_at(uint32_t i);\n\n")
         for _, name in want:
             f.write(f"void mgs_{name}(CPUState* ctx);\n")
         f.write("\n#endif\n")
@@ -65,11 +198,10 @@ def main():
     with open(a.out_c, 'w') as f:
         f.write("/* Generated by tools/gen-patch-table.py - do not edit.\n"
                 " *\n"
-                " * Sorted by address and binary-searched: this is consulted on every\n"
-                " * guest call that reaches the dispatch hook, so a linear scan over the\n"
-                " * whole table would be paid continuously.\n"
+                " * Consulted on every guest call that reaches the dispatch hook, so the\n"
+                " * MISS is what is optimised: see mgs_patch_lookup below.\n"
                 " */\n"
-                '#include "patch_table.h"\n#include <stdlib.h>\n\n'
+                '#include "patch_table.h"\n#include <stdlib.h>\n#include <stdio.h>\n\n'
                 "typedef struct { uint32_t address; MgsSdkFn fn; } MgsPatch;\n\n"
                 "static const MgsPatch k_patches[] = {\n")
         for addr, name in want:
@@ -102,16 +234,7 @@ def main():
                 "        p = (*end == ',') ? end + 1 : end;\n"
                 "    }\n"
                 "    return 0;\n}\n\n"
-                "MgsSdkFn mgs_patch_lookup(uint32_t address)\n{\n"
-                "    uint32_t lo = 0u, hi = MGS_PATCH_COUNT;\n"
-                "    if (unpatched(address)) return 0;\n"
-                "    while (lo < hi) {\n"
-                "        uint32_t mid = lo + (hi - lo) / 2u;\n"
-                "        if (k_patches[mid].address == address) return k_patches[mid].fn;\n"
-                "        if (k_patches[mid].address < address) lo = mid + 1u;\n"
-                "        else hi = mid;\n"
-                "    }\n"
-                "    return 0;\n}\n")
+                + LOOKUP_C)
 
     print(f"patch table: {len(want)} SDK functions patched")
     if missing:

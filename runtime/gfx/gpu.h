@@ -173,6 +173,13 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
  * embedded buffer is read. */
 void mgs_gpu_batch_flush(void);
 
+/* Hand the frame's recorded work to the driver. Batches share one command
+ * buffer - a submit is a kernel call and one per batch was 4.5% of the
+ * program - so this is what actually sends it. Called at the start of a
+ * frame and before any readback; a readback submits it itself, because it
+ * has to be ordered after the draws. */
+void mgs_gpu_submit(void);
+
 /* Clear the colour target, for the copy that clears. */
 void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear);
 

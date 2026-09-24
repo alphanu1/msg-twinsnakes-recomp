@@ -129,6 +129,67 @@ int main(void)
         }
     }
 
+    /* --- THE TEXEL'S CHANNELS COME BACK IN THE RIGHT ORDER ------------
+     *
+     * The test above samples an all-white texture, and white is invariant
+     * under every channel permutation - so it passes whatever order the
+     * upload writes. That matters because the upload format is chosen to
+     * match the decoder's own layout (a uint32_t 0xAARRGGBB is B,G,R,A in
+     * memory, which is B8G8R8A8), turning a per-pixel shuffle into a
+     * memcpy. Get that wrong and every texture in the game draws with red
+     * and blue swapped, which reads as bad art rather than as a bug.
+     *
+     * So: a texel with four distinct channels, a WHITE vertex colour so the
+     * combiner passes the texel through unchanged, and an exact comparison.
+     */
+    {
+        MgsGpuVertex tri[3];
+        unsigned i;
+        static const uint32_t tex3[4] = { 0xFF112233u, 0xFF112233u,
+                                          0xFF112233u, 0xFF112233u };
+        tri[0].x = -1.0f; tri[0].y = -1.0f;
+        tri[1].x =  0.0f; tri[1].y = -1.0f;
+        tri[2].x = -1.0f; tri[2].y =  1.0f;
+        for (i = 0; i < 3u; ++i) {
+            tri[i].z = 0.0f; tri[i].w = 1.0f;
+            tri[i].r = 1.0f; tri[i].g = 1.0f; tri[i].b = 1.0f; tri[i].a = 1.0f;
+            tri[i].uv[0][0] = 0.5f; tri[i].uv[0][1] = 0.5f;
+        }
+        /* mgs_gpu_draw passes no combiner at all, and with none the shader
+         * returns the vertex colour and never samples - which is the other
+         * reason the white-texture test above could not have caught this.
+         * So the batch path is used, with has_texture set and the combiner
+         * left unconfigured: that is the hardware's power-on "modulate",
+         * and a white vertex colour makes it the texel unchanged. */
+        MgsGpuBind   binds[MGS_GPU_TEX_UNITS];
+        MgsGpuState  st;
+        MgsGpuTev    tev;
+        memset(binds, 0, sizeof binds);
+        memset(&st, 0, sizeof st);
+        memset(&tev, 0, sizeof tev);
+        binds[0].texels = tex3; binds[0].w = 2u; binds[0].h = 2u;
+        binds[0].key = 0x1234u;
+        st.depth_test = 1; st.depth_write = 1; st.depth_func = 3;
+        st.colour_write = 1; st.alpha_write = 1;
+        tev.ctl[2] = 1;                     /* has_texture */
+
+        mgs_gpu_clear(0xFF000000u);
+        mgs_gpu_batch_tri(&tri[0], &tri[1], &tri[2], binds, &st, &tev, 0x99u);
+        mgs_gpu_batch_flush();
+        if (!mgs_gpu_read_back(px, W, H, W)) {
+            printf("FAIL: read back nothing after the textured draw\n");
+            ++failures;
+        } else {
+            uint32_t got = px[(H / 2u) * W + (W / 8u)];
+            if (got != 0xFF112233u) {
+                printf("FAIL: the texel came back as 0x%08X, expected "
+                       "0xFF112233 - the upload's channel order is wrong\n",
+                       got);
+                ++failures;
+            }
+        }
+    }
+
     mgs_gpu_shutdown();
     printf(failures ? "gpu: FAILED\n" : "gpu: ok\n");
     return failures ? 1 : 0;

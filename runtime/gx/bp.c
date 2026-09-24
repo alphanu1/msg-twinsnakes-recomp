@@ -32,7 +32,11 @@ void mgs_bp_write(MgsGxBp* bp, uint8_t reg, uint32_t value)
      * 23. Doing it here rather than at read time is what makes both
      * survivable: a game that sets a konst and then a colour through the
      * same address would otherwise leave only the second. */
-    if (reg >= 0xF6u && reg <= 0xFDu && getenv("MGS_TRACE_KSEL")) {
+    /* Cached: this is a per-BP-write path, and getenv walks the whole
+     * environment every call. */
+    static int ksel_on = -1;
+    if (ksel_on < 0) ksel_on = getenv("MGS_TRACE_KSEL") != NULL;
+    if (reg >= 0xF6u && reg <= 0xFDu && ksel_on) {
         static unsigned seen[8];
         unsigned i2 = reg - 0xF6u;
         if (seen[i2]++ < 3u)

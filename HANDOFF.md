@@ -286,6 +286,15 @@ renderer.
   `MGS_RUN_SECONDS`.
 - **44.1 kHz anywhere in the audio path (F333).** The console does 32 kHz or
   48 kHz; this game starts the interface at 32 kHz and AICR says so.
+- **Reading the profiler's address split as "ours vs the game" (F335).**
+  SDL, the Vulkan driver and libc were all counted as the game. Read the
+  BY OBJECT table instead.
+- **Submitting the whole frame in one command buffer (F336).** Tried: the
+  `ioctl` count fell and the frame rate did not move, because the GPU then
+  idled through the frame and the fence waited for all of it at once.
+  Submit every few batches instead.
+- **Hand-editing `runtime/os/patch_table.c` (F337).** It is generated.
+  Change `tools/gen-patch-table.py` and regenerate.
 
 - **Looking for a panning bug in the AX mixer (F315).** The two output
   channels are bit-identical because the game asks for that: 0 of 62,162
@@ -14487,3 +14496,122 @@ counters live, is thrown away with it. Every measurement before this had to
 be scraped from the periodic lines. `MGS_RUN_SECONDS=<n>` ends the run
 cleanly at a wall-clock time so the report is printed; a step count is not a
 substitute, because a step costs whatever the scene it is drawing costs.
+
+### F335 — the profiler called SDL, the Vulkan driver and libc "the game's code"
+
+The split was by address range: within 64 MB of our binary's base is ours,
+anything else is the recompiled module. But the recompiled module is
+`dlopen`ed far away and **so are SDL3, the Vulkan driver, libm and libc** -
+all of them landed in the same bucket, labelled "translated game code".
+
+It mattered. The renderer measured 13.9% of CPU while *ablating* it cost 26%
+of the frame, and the difference was the driver's and libc's share of the
+render path filed under the game. Several sessions of "the cost is the
+recompiled code, there is no hotspot left" (F329) rest on that bucket.
+
+`/proc/self/maps` names every executable mapping, so the report now
+attributes each sample to the object it is actually in, and `dladdr` names
+the symbol. On the heavy scene:
+
+    gGGSPA4_recomp.so   46.7%     the recompiled game
+    twin-snakes         40.3%     our native runtime
+    libc.so.6           10.3%
+    libvulkan_radeon     1.3%
+    libSDL3              0.4%
+
+So about half the CPU was **ours**, and the GPU driver was doing almost
+nothing - which is the fact that made the next finding findable. An offset
+that only addr2line against our own binary could resolve is why every
+sample outside it stayed anonymous for so long; the report names them now.
+
+### F336 — half the frame was our own overhead, and it came off in five pieces
+
+Ben: *"optimise. and utilise more resource!!!"* and, earlier, *"the sheer
+magnitude of triangles should not be an issue"*. Both correct. Measured on
+the heavy scene (~1.05M triangles per fifty frames), headless, Vulkan:
+
+| | fps |
+|---|---|
+| start of session | **12.0** |
+| the per-triangle texture scan removed (F331) | 18.5 |
+| patch lookup, getenv, texture upload format | 20.8 |
+| one command buffer per frame, kept staging buffer | **24.0** |
+
+**Twice the frame rate**, and 24.0 against a cutscene's correct rate of 25.
+
+What the five were, each measured rather than guessed:
+
+1. **The patch lookup, 5.0% of all samples.** Asked once per dispatch -
+   21.3 million times a second, for 13.1 guest cycles of work each - and
+   almost every answer is "no". All 39 patches lie between 0x800050B4 and
+   0x80029DE8, one 150 KB window near the bottom of MEM1, because they are
+   SDK OS, cache, DVD and time functions and the game's code is far above
+   them. A subtract and an unsigned compare now reject everything outside
+   it with no load at all; inside, a bitmap of one bit per four-byte
+   address settles it exactly before the hash is touched.
+2. **`getenv` on hot paths, 1.4%.** A diagnostic switch read per BP
+   register write and per vertex, each call walking the whole environment.
+   Cached at each site.
+3. **The texture upload's per-pixel byte shuffle, 2.0%.** A decoded texel
+   is `0xAARRGGBB`, which on a little-endian host is B,G,R,A in memory -
+   exactly `B8G8R8A8_UNORM`. The texture was declared `R8G8B8A8`, so every
+   upload reordered bytes that were already in order: 229,000 iterations
+   for a 512x448 surface. With the matching format it is a `memcpy`.
+4. **A kernel submit per batch, `ioctl` at 4.5%.** 40-56 batches a frame,
+   each acquiring a command buffer and submitting it. Now one command
+   buffer holds several batches.
+5. **An `mmap` and an `munmap` per batch, 0.9%,** creating and destroying
+   the vertex staging buffer. Allocated once, grown when needed, mapped
+   with cycling.
+
+**The wrong turn in the middle, which is the useful part.** Holding ONE
+command buffer for the whole frame and submitting it only at the readback
+removed the per-batch `ioctl` and bought nothing: the GPU sat idle while the
+CPU recorded, and the fence then waited for the entire frame at once.
+Readback went from 133 ms per fifty frames to 284 ms and the frame rate did
+not move. Submitting every eight batches keeps work in flight while the CPU
+records and keeps most of the saving - readback back to 110-142 ms. **A
+kernel call removed is not the same as time saved**, and the frame
+decomposition is what told them apart.
+
+**Still open:** `ioctl` is still 3.9% and `mmap`/`munmap` 1.0%, both now in
+the texture upload path and the fence. There are ~6 readbacks per frame
+(13,698 in 95 s, 6.6 GB) because every EFB copy - including every
+render-to-texture pass - is downloaded so the CPU can encode it into guest
+memory. Doing that encode on the GPU is the next large piece, and is
+probably worth more than everything above.
+
+### F337 — the patch table's generator was stale, and the generated file had been hand-edited
+
+`runtime/os/patch_table.c` says "Generated by tools/gen-patch-table.py - do
+not edit" and had been edited: the committed file used an open-addressed
+hash, the generator still emitted a binary search. Regenerating would have
+silently reverted it - which is exactly what the standing rule about
+generated code exists to prevent, and it was found only because the next
+optimisation went to the same place.
+
+The lookup now lives in the generator, which was checked by regenerating
+over the tree and diffing.
+
+### F338 — two tests that could not have failed
+
+Both found while changing what they cover, and both worth stating because
+the same shape will recur.
+
+**`test_gpu` sampled an all-white texture.** White is invariant under every
+channel permutation, so the test passed whatever order the upload wrote -
+exactly the property being changed in F336's third item. It now draws a
+texel with four distinct channels and compares exactly; forcing the wrong
+order makes it report `0xFF332211` against `0xFF112233`, so it has teeth.
+
+**And it could not sample at all.** `mgs_gpu_draw` passes no combiner, and
+with none the shader returns the vertex colour and never reads a texture:
+the old check `inside == 0xFFFF0000` was the vertex colour whether or not
+the texture was bound. The new case goes through the batch path with
+`has_texture` set.
+
+**`test_patch_table` is new** and sweeps every four-byte address in MEM1 -
+6,291,456 of them - against a linear scan of the table, because the lookup
+is now three layers of index arithmetic and a dropped patch would run the
+translated original instead of our shim: slower but correct, and invisible
+until it showed up weeks later as a divergence.

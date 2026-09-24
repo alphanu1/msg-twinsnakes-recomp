@@ -26,6 +26,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <dlfcn.h>
 
 #define PROF_SLOTS 65536u
 
@@ -151,11 +152,96 @@ void mgs_profile_report(void)
                 theirs += prof_hits[k];
         }
         if (prof_total) {
-            fprintf(stderr, "[profile] ALL SAMPLES: translated game code "
+            fprintf(stderr, "[profile] ALL SAMPLES: outside our binary "
                             "%5.1f%%, our native runtime %5.1f%%\n",
                     100.0 * (double)theirs / (double)prof_total,
                     100.0 * (double)ours / (double)prof_total);
         }
+    }
+
+    /* AND WHICH OBJECT THE REST IS IN, which the split above cannot say.
+     *
+     * "Anything not in our binary is the translated game code" was wrong
+     * and was believed for several sessions: the recompiled module is
+     * dlopened far away, but so are SDL3, the Vulkan driver and libc, and
+     * all of them landed in the same bucket. It made the renderer look like
+     * 14% of the run when ablating it cost 26% - the difference being the
+     * driver's own work, filed under "the game's code".
+     *
+     * /proc/self/maps names every executable mapping, so each sample can be
+     * attributed to the object it is actually in. Read at report time, not
+     * in the handler. */
+    {
+        FILE* m = fopen("/proc/self/maps", "r");
+        struct { unsigned long lo, hi; unsigned long hits; char name[96]; }
+            obj[48];
+        unsigned nobj = 0, k;
+        unsigned long unattributed = 0ul;
+        char line[512];
+
+        if (m) {
+            while (nobj < 48u && fgets(line, sizeof line, m)) {
+                unsigned long lo, hi;
+                char perms[8], path[512];
+                int got;
+                path[0] = 0;
+                got = sscanf(line, "%lx-%lx %7s %*s %*s %*s %511[^\n]",
+                             &lo, &hi, perms, path);
+                if (got < 3 || perms[2] != 'x') continue;   /* executable only */
+                {   /* Merge adjacent segments of the same object. */
+                    const char* base = path;
+                    const char* sl = path;
+                    unsigned j;
+                    while (*sl) { if (*sl == '/') base = sl + 1; ++sl; }
+                    if (!*base) base = "[anonymous]";
+                    for (j = 0; j < nobj; ++j)
+                        if (!strcmp(obj[j].name, base)) {
+                            if (lo < obj[j].lo) obj[j].lo = lo;
+                            if (hi > obj[j].hi) obj[j].hi = hi;
+                            break;
+                        }
+                    if (j == nobj) {
+                        obj[nobj].lo = lo; obj[nobj].hi = hi;
+                        obj[nobj].hits = 0ul;
+                        strncpy(obj[nobj].name, base,
+                                sizeof obj[nobj].name - 1u);
+                        obj[nobj].name[sizeof obj[nobj].name - 1u] = 0;
+                        ++nobj;
+                    }
+                }
+            }
+            fclose(m);
+        }
+
+        for (i = 0; i < PROF_SLOTS; ++i) {
+            unsigned j;
+            if (!prof_hits[i]) continue;
+            for (j = 0; j < nobj; ++j)
+                if (prof_pc[i] >= obj[j].lo && prof_pc[i] < obj[j].hi) {
+                    obj[j].hits += prof_hits[i];
+                    break;
+                }
+            if (j == nobj) unattributed += prof_hits[i];
+        }
+
+        fprintf(stderr, "[profile] BY OBJECT:\n");
+        for (;;) {   /* selection sort: at most 48 rows */
+            unsigned best = nobj;
+            for (k = 0; k < nobj; ++k)
+                if (obj[k].hits && (best == nobj ||
+                                    obj[k].hits > obj[best].hits)) best = k;
+            if (best == nobj) break;
+            if (prof_total)
+                fprintf(stderr, "[profile]   %6.2f%%  %8lu  %s\n",
+                        100.0 * (double)obj[best].hits / (double)prof_total,
+                        obj[best].hits, obj[best].name);
+            obj[best].hits = 0ul;
+        }
+        if (unattributed && prof_total)
+            fprintf(stderr, "[profile]   %6.2f%%  %8lu  (unmapped: JIT or "
+                            "freed mapping)\n",
+                    100.0 * (double)unattributed / (double)prof_total,
+                    unattributed);
     }
     /* Offsets, not absolute addresses: an offset can be fed straight to
      * addr2line against the binary, which is the point of printing them. */
@@ -172,10 +258,31 @@ void mgs_profile_report(void)
         if (lim > PROF_SLOTS) lim = PROF_SLOTS;
         for (i = 0; i < n && i < lim; ++i) {
             unsigned s = order[i];
-            fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx\n",
+            /* NAME IT HERE, rather than leaving an offset to be resolved
+             * by hand afterwards.
+             *
+             * An offset can be fed to addr2line against OUR binary and
+             * nothing else, so every sample in libc, SDL or the driver
+             * stayed anonymous - which is how the renderer's real cost sat
+             * unattributed for several sessions. dladdr names the nearest
+             * exported symbol in whichever object the address is in, which
+             * is exact for libc's memcpy and good enough everywhere else. */
+            Dl_info di;
+            const char* sym = NULL;
+            const char* obj = NULL;
+            if (dladdr((void*)prof_pc[s], &di)) {
+                sym = di.dli_sname;
+                if (di.dli_fname) {
+                    const char* b = di.dli_fname, *q = di.dli_fname;
+                    while (*q) { if (*q == '/') b = q + 1; ++q; }
+                    obj = b;
+                }
+            }
+            fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx  %s%s%s\n",
                     100.0 * (double)prof_hits[s] /
                     (double)(prof_total ? prof_total : 1ul),
-                    prof_hits[s], prof_pc[s] - prof_base);
+                    prof_hits[s], prof_pc[s] - prof_base,
+                    obj ? obj : "?", sym ? "!" : "", sym ? sym : "");
         }
         return;
     }

@@ -11,6 +11,10 @@ static uint64_t s_frames, s_readbacks, s_bytes;
 #include <SDL3/SDL.h>
 
 static SDL_GPUDevice*         s_dev;
+/* The upload format for decoded texels. See upload_texture: B8G8R8A8 is a
+ * straight memcpy of what the decoder already produced; R8G8B8A8 is the
+ * fallback and costs a per-pixel shuffle. Probed once, at device creation. */
+static SDL_GPUTextureFormat   s_tex_format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 static SDL_GPUTexture*        s_colour;
 static SDL_GPUTexture*        s_depth;
 static SDL_GPUTransferBuffer* s_readback;
@@ -119,6 +123,13 @@ int mgs_gpu_init(unsigned width, unsigned height)
         return 0;
     }
     s_driver = SDL_GetGPUDeviceDriver(s_dev);
+    if (SDL_GPUTextureSupportsFormat(s_dev,
+            SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+            SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER))
+        s_tex_format = SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM;
+    else
+        fprintf(stderr, "[gpu] no B8G8R8A8 sampler format; texture uploads "
+                        "will shuffle bytes per pixel\n");
 
     memset(&ci, 0, sizeof ci);
     ci.type = SDL_GPU_TEXTURETYPE_2D;
@@ -193,6 +204,86 @@ void mgs_gpu_shutdown(void)
     s_white = NULL;
 }
 
+/* ONE COMMAND BUFFER PER FRAME, NOT ONE PER BATCH.
+ *
+ * Every batch used to acquire a command buffer, record into it and submit
+ * it. A submit is a kernel call to the graphics driver, and at 40-56
+ * batches a frame that put `ioctl` at 4.5% of the whole program - more than
+ * the renderer's own arithmetic - with the transfer-buffer create/destroy
+ * around it adding mmap and munmap on top.
+ *
+ * So the command buffer is kept open and every batch records into the same
+ * one. It is submitted when something needs the result: a readback, the
+ * start of a frame, or the retire list filling up. Passes still bracket
+ * each batch, which is allowed - a command buffer may hold any number of
+ * copy and render passes in sequence.
+ *
+ * Two things this has to get right. The vertex buffer is shared between
+ * batches, so an upload now happens while an earlier draw may not have run
+ * yet: SDL_UploadToGPUBuffer is asked to CYCLE it, which is exactly what
+ * that flag is for. And transfer buffers and one-shot textures may not be
+ * released until the command buffer they are recorded into has been
+ * submitted, so they go on a retire list instead of being freed inline. */
+static SDL_GPUCommandBuffer* s_cmd;
+/* The staging buffer for vertices, kept across batches. See the note where
+ * it is mapped. */
+static SDL_GPUTransferBuffer* s_vtx_xfer;
+static Uint32                 s_vtx_xfer_bytes;
+/* Batches recorded into the current command buffer, and how many are worth
+ * holding before handing it over. See mgs_gpu_batch_flush. */
+#define SUBMIT_EVERY 8u
+static unsigned      s_since_submit;
+static struct {
+    SDL_GPUTransferBuffer* xfer;
+    SDL_GPUTexture*        tex;
+} s_retire[1024];
+static unsigned s_retire_n;
+
+static SDL_GPUCommandBuffer* gpu_cmd(void)
+{
+    if (!s_cmd) s_cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+    return s_cmd;
+}
+
+static void gpu_retire_all(void)
+{
+    unsigned i;
+    for (i = 0; i < s_retire_n; ++i) {
+        if (s_retire[i].tex)  SDL_ReleaseGPUTexture(s_dev, s_retire[i].tex);
+        if (s_retire[i].xfer) SDL_ReleaseGPUTransferBuffer(s_dev,
+                                                           s_retire[i].xfer);
+    }
+    s_retire_n = 0;
+}
+
+static void gpu_retire(SDL_GPUTransferBuffer* x, SDL_GPUTexture* t)
+{
+    if (!x && !t) return;
+    if (s_retire_n >= (unsigned)(sizeof s_retire / sizeof s_retire[0])) {
+        /* Full: submit so they can be freed, rather than leaking or
+         * freeing something still recorded. */
+        void mgs_gpu_submit(void);
+        mgs_gpu_submit();
+    }
+    s_retire[s_retire_n].xfer = x;
+    s_retire[s_retire_n].tex  = t;
+    ++s_retire_n;
+}
+
+void mgs_gpu_submit(void)
+{
+    SDL_GPUCommandBuffer* c = s_cmd;
+    s_since_submit = 0;
+    if (!c) { gpu_retire_all(); return; }
+    s_cmd = NULL;
+    {
+        uint64_t t0 = timing_on() ? now_ns() : 0ull;
+        SDL_SubmitGPUCommandBuffer(c);
+        if (timing_on()) { s_ns_submit += now_ns() - t0; ++s_n_submit; }
+    }
+    gpu_retire_all();
+}
+
 const char* mgs_gpu_driver(void) { return s_dev ? s_driver : NULL; }
 int mgs_gpu_ready(void) { return s_dev != NULL; }
 
@@ -204,7 +295,7 @@ void mgs_gpu_clear(uint32_t argb)
     SDL_GPURenderPass* pass;
 
     if (!s_dev) return;
-    cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+    cmd = gpu_cmd();
     if (!cmd) return;
 
     memset(&ct, 0, sizeof ct);
@@ -226,7 +317,6 @@ void mgs_gpu_clear(uint32_t argb)
 
     pass = SDL_BeginGPURenderPass(cmd, &ct, 1, &ds);
     if (pass) SDL_EndGPURenderPass(pass);
-    SDL_SubmitGPUCommandBuffer(cmd);
     ++s_frames;
 }
 
@@ -511,7 +601,18 @@ static SDL_GPUTexture* upload_texture(SDL_GPUCopyPass* pass,
 
     memset(&ci, 0, sizeof ci);
     ci.type = SDL_GPU_TEXTURETYPE_2D;
-    ci.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    /* B8G8R8A8, WHICH IS WHAT OUR TEXELS ALREADY ARE.
+     *
+     * A decoded texel is a uint32_t 0xAARRGGBB, and on a little-endian host
+     * that sits in memory as BB GG RR AA - which is exactly B8G8R8A8_UNORM.
+     * Declaring the texture R8G8B8A8 meant every upload ran a per-pixel
+     * shuffle to reorder bytes that were already in the right order: 229,000
+     * iterations for a 512x448 surface, and 2% of the whole program. With
+     * the format that matches, the upload is a memcpy.
+     *
+     * The shader needs no change: the format describes the memory layout, so
+     * the sampler still returns the same RGBA. */
+    ci.format = s_tex_format;
     ci.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
     ci.width = w; ci.height = h;
     ci.layer_count_or_depth = 1; ci.num_levels = 1;
@@ -527,14 +628,20 @@ static SDL_GPUTexture* upload_texture(SDL_GPUCopyPass* pass,
 
     map = SDL_MapGPUTransferBuffer(s_dev, xfer, false);
     if (map) {
-        unsigned i2;
-        uint8_t* o = (uint8_t*)map;
-        for (i2 = 0; i2 < w * h; ++i2) {      /* ARGB in, RGBA8 out */
-            uint32_t c = px[i2];
-            o[i2 * 4u + 0u] = (uint8_t)((c >> 16) & 0xFFu);
-            o[i2 * 4u + 1u] = (uint8_t)((c >> 8) & 0xFFu);
-            o[i2 * 4u + 2u] = (uint8_t)(c & 0xFFu);
-            o[i2 * 4u + 3u] = (uint8_t)((c >> 24) & 0xFFu);
+        if (s_tex_format == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM) {
+            memcpy(map, px, (size_t)w * h * 4u);
+        } else {
+            /* The driver does not take B8G8R8A8, so the bytes have to be
+             * reordered after all. Kept so an unusual device still draws. */
+            unsigned i2;
+            uint8_t* o = (uint8_t*)map;
+            for (i2 = 0; i2 < w * h; ++i2) {      /* ARGB in, RGBA8 out */
+                uint32_t c = px[i2];
+                o[i2 * 4u + 0u] = (uint8_t)((c >> 16) & 0xFFu);
+                o[i2 * 4u + 1u] = (uint8_t)((c >> 8) & 0xFFu);
+                o[i2 * 4u + 2u] = (uint8_t)(c & 0xFFu);
+                o[i2 * 4u + 3u] = (uint8_t)((c >> 24) & 0xFFu);
+            }
         }
         SDL_UnmapGPUTransferBuffer(s_dev, xfer);
     }
@@ -666,23 +773,36 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
     }
     vbytes = (Uint32)(count * sizeof(MgsGpuVertex));
 
-    cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+    cmd = gpu_cmd();
     if (!cmd) return 0;
 
-    /* ONE command buffer: upload, then draw. */
+    /* Upload, then draw, into the frame's command buffer. */
     cp = SDL_BeginGPUCopyPass(cmd);
-    if (!cp) { SDL_SubmitGPUCommandBuffer(cmd); return 0; }
+    if (!cp) return 0;
     {
         SDL_GPUTransferBufferCreateInfo tb;
         SDL_GPUTransferBufferLocation src;
         SDL_GPUBufferRegion dst;
         void* map;
-        memset(&tb, 0, sizeof tb);
-        tb.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        tb.size = vbytes;
-        vtx_xfer = SDL_CreateGPUTransferBuffer(s_dev, &tb);
+        /* ONE TRANSFER BUFFER, KEPT.
+         *
+         * A create and a release per batch is an mmap and an munmap per
+         * batch - two system calls, 0.9% of the program between them, for
+         * a staging area whose size barely changes. It is allocated once,
+         * grown when a batch needs more, and MAPPED WITH CYCLE so a write
+         * cannot land on memory an earlier batch's upload is still
+         * reading. */
+        if (s_vtx_xfer_bytes < vbytes) {
+            if (s_vtx_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, s_vtx_xfer);
+            memset(&tb, 0, sizeof tb);
+            tb.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+            tb.size = vbytes;
+            s_vtx_xfer = SDL_CreateGPUTransferBuffer(s_dev, &tb);
+            s_vtx_xfer_bytes = s_vtx_xfer ? vbytes : 0u;
+        }
+        vtx_xfer = s_vtx_xfer;
         if (vtx_xfer) {
-            map = SDL_MapGPUTransferBuffer(s_dev, vtx_xfer, false);
+            map = SDL_MapGPUTransferBuffer(s_dev, vtx_xfer, true);
             if (map) memcpy(map, verts, vbytes);
             SDL_UnmapGPUTransferBuffer(s_dev, vtx_xfer);
             memset(&src, 0, sizeof src);
@@ -690,7 +810,12 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
             memset(&dst, 0, sizeof dst);
             dst.buffer = s_vbuf;
             dst.size = vbytes;
-            SDL_UploadToGPUBuffer(cp, &src, &dst, false);
+            /* CYCLE: batches now share one command buffer, so this upload
+             * can be recorded while an earlier batch's draw from the same
+             * buffer has not run. Cycling hands the upload fresh backing
+             * and leaves the in-flight contents alone. Without it the last
+             * batch's vertices would be drawn several times over. */
+            SDL_UploadToGPUBuffer(cp, &src, &dst, true);
         }
     }
     /* Every unit is uploaded or resolved from the cache in the SAME copy
@@ -706,13 +831,9 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
     SDL_EndGPUCopyPass(cp);
 
     if (!all_bound || !vtx_xfer) {
-        SDL_SubmitGPUCommandBuffer(cmd);
-        for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
-            if (t[u] && t[u] != s_white && !binds[u].key)
-                SDL_ReleaseGPUTexture(s_dev, t[u]);
-            if (tex_xfer[u]) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer[u]);
-        }
-        if (vtx_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, vtx_xfer);
+        for (u = 0; u < MGS_GPU_TEX_UNITS; ++u)
+            gpu_retire(tex_xfer[u],
+                       (t[u] && t[u] != s_white && !binds[u].key) ? t[u] : NULL);
         return 0;
     }
 
@@ -756,24 +877,18 @@ static int mgs_gpu_draw_keyed(const MgsGpuVertex* verts, unsigned count,
         SDL_DrawGPUPrimitives(pass, count, 1, 0, 0);
         SDL_EndGPURenderPass(pass);
     }
-    {
-        uint64_t t0 = timing_on() ? now_ns() : 0ull;
-        SDL_SubmitGPUCommandBuffer(cmd);
-        if (timing_on()) { s_ns_submit += now_ns() - t0; ++s_n_submit; }
-    }
-
-    /* The transfer buffers go; SDL keeps them alive until the command
-     * buffer retires. The TEXTURE only goes when it was not cached - a
-     * cached one is owned by the cache and releasing it here would free
-     * something the next draw expects to find. */
-    for (u = 0; u < MGS_GPU_TEX_UNITS; ++u) {
-        /* Released only when it is OURS: a cached texture belongs to the
-         * cache, and the white stand-in is shared by every unbound unit. */
-        if (t[u] && t[u] != s_white && !binds[u].key)
-            SDL_ReleaseGPUTexture(s_dev, t[u]);
-        if (tex_xfer[u]) SDL_ReleaseGPUTransferBuffer(s_dev, tex_xfer[u]);
-    }
-    if (vtx_xfer) SDL_ReleaseGPUTransferBuffer(s_dev, vtx_xfer);
+    /* NOT submitted here: the command buffer stays open for the next batch
+     * and is submitted when something needs the result. So the transfer
+     * buffers and any one-shot texture cannot be released yet either -
+     * they are recorded into a command buffer that has not run. They go on
+     * the retire list, which is emptied after the submit.
+     *
+     * The TEXTURE only goes when it was not cached: a cached one is owned
+     * by the cache and releasing it would free what the next draw expects
+     * to find, and the white stand-in is shared by every unbound unit. */
+    for (u = 0; u < MGS_GPU_TEX_UNITS; ++u)
+        gpu_retire(tex_xfer[u],
+                   (t[u] && t[u] != s_white && !binds[u].key) ? t[u] : NULL);
     ++s_frames;
     return 1;
 }
@@ -835,6 +950,23 @@ void mgs_gpu_batch_flush(void)
     ++s_batch_flushes;
     s_batch_n = 0;
     s_batch_has = 0;
+
+    /* KEEP THE GPU WORKING WHILE THE CPU RECORDS.
+     *
+     * One command buffer per batch made a kernel call per batch: 4.5% of
+     * the program in `ioctl`. Holding a single buffer for the whole frame
+     * removed that, and cost as much again at the other end - nothing was
+     * submitted until the readback, so the GPU sat idle through the frame
+     * and the fence then waited for all of it. Readback went from 133 ms
+     * per fifty frames to 284 ms and the frame rate did not move.
+     *
+     * So: submit every few batches. The GPU has work in flight while the
+     * CPU records the next batches, and the kernel calls still drop by
+     * most of the original factor. */
+    if (++s_since_submit >= SUBMIT_EVERY) {
+        s_since_submit = 0;
+        mgs_gpu_submit();
+    }
 }
 
 void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
@@ -879,6 +1011,10 @@ void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear)
     if (!s_dev) return;
     mgs_gpu_batch_flush();
     if (do_clear) mgs_gpu_clear(clear_argb);
+    /* Hand the frame to the driver. Without this the command buffer only
+     * ever closes on a readback, and a frame with none would keep growing
+     * and keep its retire list alive. */
+    mgs_gpu_submit();
 }
 
 int mgs_gpu_read_back(uint32_t* argb, unsigned width, unsigned height,
@@ -904,7 +1040,14 @@ int mgs_gpu_read_back_rect(uint32_t* argb, unsigned rx, unsigned ry,
     if (height > s_h - ry) height = s_h - ry;
     if (!width || !height) return 0;
 
-    cmd = SDL_AcquireGPUCommandBuffer(s_dev);
+    /* THE SAME COMMAND BUFFER THE DRAWS WENT INTO.
+     *
+     * A readback on a command buffer of its own would be submitted while
+     * the frame's draws were still sitting unsubmitted in another, and
+     * would download the picture from before them. Recording the download
+     * at the end of the open buffer orders it after every draw by
+     * construction, and costs one submit rather than two. */
+    cmd = gpu_cmd();
     if (!cmd) return 0;
 
     memset(&src, 0, sizeof src);
@@ -922,7 +1065,7 @@ int mgs_gpu_read_back_rect(uint32_t* argb, unsigned rx, unsigned ry,
     dst.rows_per_layer = height;
 
     pass = SDL_BeginGPUCopyPass(cmd);
-    if (!pass) { SDL_SubmitGPUCommandBuffer(cmd); return 0; }
+    if (!pass) { mgs_gpu_submit(); return 0; }
     SDL_DownloadFromGPUTexture(pass, &src, &dst);
     SDL_EndGPUCopyPass(pass);
 
@@ -931,10 +1074,12 @@ int mgs_gpu_read_back_rect(uint32_t* argb, unsigned rx, unsigned ry,
      * which would look exactly like a rendering bug. */
     {
         uint64_t t0 = timing_on() ? now_ns() : 0ull;
+        s_cmd = NULL;               /* this submit consumes it */
         fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
-        if (!fence) return 0;
+        if (!fence) { gpu_retire_all(); return 0; }
         SDL_WaitForGPUFences(s_dev, true, &fence, 1);
         SDL_ReleaseGPUFence(s_dev, fence);
+        gpu_retire_all();
         if (timing_on()) { s_ns_fence += now_ns() - t0; ++s_n_fence; }
     }
 
@@ -977,6 +1122,7 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
                        const MgsGpuState* st, const MgsGpuTev* tv, uint64_t tk)
 { (void)a; (void)b; (void)c; (void)bi; (void)st; (void)tv; (void)tk; }
 void mgs_gpu_batch_flush(void) { }
+void mgs_gpu_submit(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
 
 #endif

@@ -103,7 +103,9 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
      * and the fault is upstream, in the drawing. Roughness separates the two:
      * a picture scores a few, uncorrelated pixels score tens. Measured over
      * the source rectangle, not the whole buffer. */
-    if (getenv("MGS_TRACE_COPYSRC")) {
+    static int copysrc_on = -1;
+    if (copysrc_on < 0) copysrc_on = getenv("MGS_TRACE_COPYSRC") != NULL;
+    if (copysrc_on) {
         static unsigned n;
         /* Only the large ones. The 64x64 caption copies run thousands of
          * times and would fill any cap long before the movie starts. */
@@ -250,7 +252,9 @@ void mgs_efb_copy_tex(MgsEfb* efb, GuestMemory* mem,
      * not a victim, of everything downstream. Comparing the spread of the
      * source against the spread of the bytes written answers it directly.
      */
-    if (getenv("MGS_CHECK_ENCODE")) {
+    static int check_encode = -1;
+    if (check_encode < 0) check_encode = getenv("MGS_CHECK_ENCODE") != NULL;
+    if (check_encode) {
         static unsigned n;
         if (width > 256u && n++ < 6u) {
             unsigned i, srcmin = 255u, srcmax = 0u, bmin = 255u, bmax = 0u;
@@ -363,7 +367,11 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
                      * if the embedded buffer stops being noise with the
                      * framebuffer write suppressed, the write is what
                      * destroys the texture. */
-                    if (getenv("MGS_NO_FB_OVER_TEX")) return;
+                    {   static int no_fb_over_tex = -1;
+                        if (no_fb_over_tex < 0)
+                            no_fb_over_tex =
+                                getenv("MGS_NO_FB_OVER_TEX") != NULL;
+                        if (no_fb_over_tex) return; }
                     if (said) continue;
                     said = 1;
                     fprintf(stderr,
@@ -376,7 +384,9 @@ void mgs_efb_copy(MgsEfb* efb, GuestMemory* mem,
                                                     : hi - s_tex_range[i].lo));
                 }
             }
-            if (getenv("MGS_TRACE_RANGES")) {
+            static int ranges_on = -1;
+            if (ranges_on < 0) ranges_on = getenv("MGS_TRACE_RANGES") != NULL;
+            if (ranges_on) {
                 static unsigned n;
                 if (n++ < 8u)
                     fprintf(stderr, "[range] framebuffer 0x%08X-0x%08X "

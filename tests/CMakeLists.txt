@@ -85,3 +85,7 @@ endif()
 add_executable(test_ai_dma test_ai_dma.c)
 target_link_libraries(test_ai_dma PRIVATE mgs_runtime)
 add_test(NAME ai_dma COMMAND test_ai_dma)
+
+add_executable(test_patch_table test_patch_table.c)
+target_link_libraries(test_patch_table PRIVATE mgs_runtime)
+add_test(NAME patch_table COMMAND test_patch_table)
