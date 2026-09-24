@@ -969,6 +969,40 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
     if (!mgs_xfb_to_rgb(mem, xfb, s_efb.copy_stride, w, h, scratch))
         return 0;
 
+    /* MGS_TRACE_PRESENT: what we are about to put on screen, measured.
+     *
+     * The framebuffer in guest memory is provably correct - dumped during
+     * the movie it is textbook YUV 4:2:2, chroma 128.2, no zero rows - and
+     * yet the window shows green with coloured stripes. Green is what a
+     * ZERO-filled YUV buffer decodes to (0,135,0); black is 10 80. So
+     * either we are reading somewhere other than where the picture is, or
+     * we are reading it with the wrong shape.
+     *
+     * This is the one path a headless run cannot exercise, which is why it
+     * has to report rather than be inspected: the address, the geometry,
+     * and how much of what we read was zero. */
+    {
+        static int on = -1;
+        static unsigned said;
+        if (on < 0) on = getenv("MGS_TRACE_PRESENT") != NULL;
+        if (on && (said++ % 60u) == 0u) {
+            const uint8_t* src = guest_ptr(mem, xfb,
+                                                 s_efb.copy_stride * h);
+            unsigned zero = 0u, tot = 0u, q;
+            if (src)
+                for (q = 0; q < s_efb.copy_stride * h; q += 97u) {
+                    if (!src[q]) ++zero;
+                    ++tot;
+                }
+            fprintf(stderr, "[present] xfb 0x%08X  %ux%u stride %u  "
+                    "source %s  zero bytes %.1f%%  scratch mean %u\n",
+                    xfb, w, h, s_efb.copy_stride,
+                    src ? "mapped" : "NOT MAPPED",
+                    tot ? 100.0 * (double)zero / (double)tot : 0.0,
+                    (unsigned)((scratch[(h/2)*w + w/2] >> 8) & 0xFFu));
+        }
+    }
+
     /* The window's framebuffer is a fixed 640x480; the game's is whatever it
      * chose - 512x448 here. Nearest scaling keeps this honest about being a
      * stand-in for the real scaler, and keeps the aspect the game intended
