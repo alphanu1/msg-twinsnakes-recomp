@@ -1479,9 +1479,12 @@ This is the project. ~200 functions and the widest error bars in the plan.
         can encode it into guest memory. That encode belongs on the GPU.
       - The dispatch loop behind one deadline and one diagnostics flag
         (F343): +19% throughput on the step clock, heavy scenes 21.9-23.8
-        fps. Remaining, in order of size: the patch dispatch inside guest
-        calls (~6%), EFB copies on the GPU (~9% + readback stalls), and
-        per-primitive rather than per-triangle draw state (~5%).
+        fps. Textures made from EFB copies are now cached on the GPU
+        instead of re-uploaded per batch (F345): uploads ~1,900 -> ~270 per
+        fifty frames, heaviest scene 24.0 fps. Remaining, in order of size:
+        render-to-texture copies kept on the GPU (80% of the readback
+        stall), the patched-call round trip through the host loop (~5%,
+        recompiler structure), per-primitive draw state (~5%).
       Measure it with `MGS_TIME_FRAME=1`; run headless with
       `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
       the run with `MGS_RUN_SECONDS` so the exit report survives. Read the

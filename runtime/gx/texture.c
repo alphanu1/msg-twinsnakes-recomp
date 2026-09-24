@@ -600,8 +600,19 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     if (serial) {
         /* Validated by the copy that made it. Hashing main memory here
          * would not just be wasted - it would be asking the wrong
-         * question, and getting a wrong answer every frame. */
-        hash = 0u;
+         * question, and getting a wrong answer every frame.
+         *
+         * BUT NOT ZERO. The GPU path reads a zero key as "not cacheable"
+         * and uploads the texture again for every batch that binds it and
+         * throws it away after: ~1,500 uploads per fifty frames against
+         * ~250 decodes, almost all of them copies being re-sent unchanged.
+         * The copy's own identity - where, which copy, and how it is being
+         * read - is a key that changes exactly when the texels can. */
+        hash = 0xEFBC0000000000ull
+             ^ ((uint64_t)addr << 20) ^ ((uint64_t)serial << 1)
+             ^ ((uint64_t)format << 56) ^ ((uint64_t)width * 2654435761ull)
+             ^ ((uint64_t)height * 40503ull) ^ ((uint64_t)tlut_addr << 8);
+        if (!hash) hash = 1u;
     } else {
         unsigned nbytes = texture_bytes(format, width, height);
         const uint8_t* src = nbytes ? guest_ptr(mem, addr, nbytes) : NULL;

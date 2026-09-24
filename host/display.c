@@ -74,6 +74,8 @@ static uint64_t  s_t_tri, s_t_sub, s_t_dec;
 static uint64_t  s_t_flush, s_t_gtri, s_t_up, s_t_subns;
 /* Render-to-texture copies whose clear now reaches the GPU. */
 static uint64_t  s_rtt_gpu_clears;
+static long long s_t_rb_xfb, s_t_rb_tex;
+static unsigned  s_n_rb_xfb, s_n_rb_tex;
 uint64_t mgs_display_rtt_gpu_clears(void);
 uint64_t mgs_display_rtt_gpu_clears(void) { return s_rtt_gpu_clears; }
 /* HOW MANY VIDEO FIELDS EACH DRAWN FRAME TOOK.
@@ -423,7 +425,15 @@ static void run_copy(uint32_t cmd)
                                bx + (box_wh & 0x3FFu) + 1u,
                                by + ((box_wh >> 10) & 0x3FFu) + 1u,
                                MGS_EFB_WIDTH);
-        if (s_frame_timing) s_t_readback += frame_now_ns() - t0;
+        if (s_frame_timing) {
+            long long dt = frame_now_ns() - t0;
+            s_t_readback += dt;
+            /* Which kind of copy the stall belongs to: the one frame copy,
+             * or the render-to-texture passes. They need different fixes -
+             * presenting from the GPU, or keeping texture copies there. */
+            if (cmd & COPY_TO_XFB) { s_t_rb_xfb += dt; ++s_n_rb_xfb; }
+            else                   { s_t_rb_tex += dt; ++s_n_rb_tex; }
+        }
     }
     {
         uint32_t ar = mgs_bp_get(&s_gx.bp, BP_COPY_CLEAR_AR);
@@ -831,6 +841,14 @@ static void run_copy(uint32_t cmd)
                                         (double)(g_fl - s_t_flush) : 0.0,
                                     (unsigned long long)(g_up - s_t_up),
                                     (double)(g_ns - s_t_subns) / 1e6);
+                            if (s_t_last && (s_n_rb_xfb || s_n_rb_tex))
+                                fprintf(stderr,
+                                    "[frametime]   readback: %u frame copies "
+                                    "%.1f ms, %u texture copies %.1f ms\n",
+                                    s_n_rb_xfb, (double)s_t_rb_xfb / 1e6,
+                                    s_n_rb_tex, (double)s_t_rb_tex / 1e6);
+                            s_t_rb_xfb = s_t_rb_tex = 0;
+                            s_n_rb_xfb = s_n_rb_tex = 0;
                             s_t_flush = g_fl; s_t_gtri = g_tri;
                             s_t_up = g_up;    s_t_subns = g_ns;
                         }

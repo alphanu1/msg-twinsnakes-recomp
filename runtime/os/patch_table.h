@@ -17,6 +17,13 @@ MgsSdkFn mgs_patch_lookup(uint32_t address);
 uint32_t mgs_patch_count(void);
 uint32_t mgs_patch_address_at(uint32_t i);
 
+/* THE WINDOW EVERY PATCH LIES IN, as constants, so a caller
+ * can reject a miss before paying for a call. The dispatch
+ * hook runs on every guest function call - some twenty
+ * million a second - and almost none of them is a patch. */
+#define MGS_PATCH_LO   0x800050B4u
+#define MGS_PATCH_SPAN 0x00024D34u
+
 void mgs_memset(CPUState* ctx);
 void mgs___fill_mem(CPUState* ctx);
 void mgs_memcpy(CPUState* ctx);

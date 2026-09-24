@@ -54,6 +54,17 @@ int main(void)
         }
     }
 
+    /* The caller rejects anything outside [LO, LO+SPAN] without asking,
+     * so a patch outside that window would silently never run. */
+    for (i = 0; i < n; ++i) {
+        uint32_t addr = mgs_patch_address_at(i);
+        if (addr - MGS_PATCH_LO > MGS_PATCH_SPAN) {
+            printf("FAIL: patch 0x%08X lies outside the emitted window "
+                   "0x%08X+0x%X\n", addr, MGS_PATCH_LO, MGS_PATCH_SPAN);
+            ++failures;
+        }
+    }
+
     printf("patch table: swept %lu addresses, %lu patched, %u entries\n",
            swept, hits, n);
     printf(failures ? "patch_table: FAILED\n" : "patch_table: ok\n");

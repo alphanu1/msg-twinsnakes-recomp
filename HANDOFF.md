@@ -14821,3 +14821,37 @@ through the ordinary batch path so it is ordered with the draws around it.
 **It changes nothing in this game**: counted over a four-minute run,
 0 texture copies set the clear bit. Kept because it is what the hardware
 does; recorded so it is not mistaken for the fix of anything Ben saw.
+
+### F345 — every texture made from an EFB copy was re-uploaded for every batch that used it
+
+A texture sampled from an EFB copy's destination is validated by the copy's
+serial rather than by hashing RAM, and its hash was set to **0**. The GPU
+path reads a zero key as "not cacheable": upload, draw, release. So every
+batch binding a copied texture sent it to the GPU again - ~1,500-2,300
+uploads per fifty frames against ~250 decodes, each with its own transfer
+buffer (the remaining `mmap`/`munmap` and part of the `ioctl` time).
+
+The key is now the copy's identity - address, copy serial, format, size,
+palette - which changes exactly when the texels can. **Uploads fell to
+216-325 per fifty frames** (7,169 in a run against 47,840), and the
+heaviest scene went from 21.9-23.8 to 24.0 fps.
+
+**Checked:** on the step clock the stable frames match the previous build
+(copy 1200 differs by 0.7% of bytes - the "A Hideo Kojima Game" title one
+fade step apart, same content); the movie still advances frame by frame and
+ends as before (668 and 727 movie frames in the two runs, which land at
+different points of it).
+
+**Measured on the way:** 80% of the readback stall is the render-to-texture
+copies, not the frame copy - about five per frame, 100-126 ms per fifty
+frames against 22-35 ms for the one frame copy. That is where GPU-resident
+copies would pay.
+
+**And a neutral change, recorded so it is not re-tried:** rejecting a patch
+miss before the lookup call (the generator now emits the patch window as
+`MGS_PATCH_LO`/`MGS_PATCH_SPAN`) bought nothing measurable. The calls are
+not misses outside the window: `OSDisableInterrupts` and
+`OSRestoreInterrupts` are called 75 million times EACH in 80 s - every lock
+in the engine - and a patched call returns all the way to the host loop and
+re-enters at the caller. That round trip is the cost, and it is the
+recompiler's structure, not the lookup.

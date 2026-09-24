@@ -629,6 +629,11 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 {
     MgsSdkFn fn;
 
+    /* THE MISS FIRST, and without a call. This runs on every guest function
+     * call and almost none is a patch; every patch lies in one window near
+     * the bottom of MEM1, which the generator emits as constants. */
+    if (address - MGS_PATCH_LO > MGS_PATCH_SPAN) return 0;
+
     if (mem_shim_disabled() &&
         (address == 0x800050B4u || address == 0x800050E4u ||
          address == 0x8000519Cu))
