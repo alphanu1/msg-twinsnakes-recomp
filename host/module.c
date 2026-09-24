@@ -812,6 +812,13 @@ uint64_t mgs_module_cycles_run(void) { return s_cycles_run; }
 uint64_t mgs_module_dispatches(void);
 uint64_t mgs_module_dispatches(void) { return s_dispatches; }
 
+/* Called from the run loop to hold the guest to the audio device. Held as
+ * a bare callback so this file needs no SDL or audio header. */
+static void (*s_pace)(void);
+
+void mgs_module_set_pace(void (*fn)(void));
+void mgs_module_set_pace(void (*fn)(void)) { s_pace = fn; }
+
 static MgsPump s_pump;
 static void*   s_pump_user;
 
@@ -1228,7 +1235,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     uint64_t pending_ticks = 0;
     unsigned tick_batch = 0;
     uint64_t due_pe = 0, due_dsp = 0, due_pend = 0, due_aram = 0,
-             due_aid = 0, due_pump = 0, due_disp = 0;
+             due_aid = 0, due_pump = 0, due_disp = 0, due_pace = 0;
     uint32_t last_pc = 0u;
     uint64_t same_pc = 0u;
     uint64_t trace_steps = 0u;
@@ -1504,6 +1511,23 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         /* Host-driven work that must run on the guest thread. Like the
          * interrupt above, this can move the pc, so it comes BEFORE pc is
          * read. */
+        /* HOLD THE GUEST TO THE AUDIO DEVICE, HERE, BETWEEN INSTRUCTIONS.
+         *
+         * This used to happen inside the mixer, which runs inside the DSP
+         * interrupt. Sleeping there stops the guest in the middle of
+         * servicing an interrupt: the audio interrupts keep being offered
+         * while it sleeps, and the arrears logic lets the backlog through
+         * in a burst when it wakes - several AX frames mixed back to back
+         * from voice state the game has had no chance to advance. Here the
+         * guest is between instructions, which is a place it is already
+         * prepared to be stopped.
+         *
+         * Every 8,192 guest ticks, which is about five times per AX frame:
+         * often enough to hold a deadline, rare enough that the check costs
+         * nothing. It returns immediately when there is no device. */
+        if ((gt >= due_pace ? (due_pace = gt + 8192ull, 1) : 0) && s_pace)
+            s_pace();
+
         if ((gt >= due_pump ? (due_pump = gt + 4096ull, 1) : 0) && s_pump)
             s_pump(mod, cpu, s_pump_user);
 

@@ -1446,6 +1446,11 @@ int main(int argc, char** argv)
      * against a user who could hear it juddering. A headless run still
      * opens nothing by default, so batch runs stay silent. */
     if (!headless || getenv("MGS_AUDIO")) mgs_audio_open(32000u);
+    {   /* The run loop paces the guest against the device; see
+         * mgs_audio_pace for why it is not done inside the mixer. */
+        void mgs_module_set_pace(void (*fn)(void));
+        mgs_module_set_pace(mgs_audio_pace);
+    }
 
     /* MGS_GPU=1 fills triangles on the GPU instead of the CPU.
      *

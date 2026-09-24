@@ -13197,3 +13197,44 @@ bubbles and legible subtitles.
 be dark. There is still no TEV combiner - the shader is the rasterised
 colour times one texture - and no alpha test. That is the next piece and it
 is what the grey is waiting on.
+
+### F309 — the pacing was sleeping inside an interrupt handler
+
+Ben on the GPU build: "audio has got an echo, which is shoudl not. also
+still clips."
+
+**The echo is not in the mixer's output.** `MGS_AUDIO_WAV` over a GPU run,
+autocorrelated across a busy two-second window, peaks at **0.17** at 9 ms -
+a real echo would be past 0.5 at a consistent lag. So the doubling happens
+on the device side of the mixer, not in the mix.
+
+**What was wrong, and it is wrong regardless of whether it is the echo.**
+The pacing slept inside `mgs_audio_push`, which is called from the AX mixer,
+which runs inside the DSP interrupt, on the guest thread. Sleeping there
+stops the guest in the MIDDLE OF SERVICING AN INTERRUPT. The audio
+interrupts keep being offered while it sleeps, and F281's arrears logic -
+which exists so a refused interrupt is not lost - then lets the backlog
+through in a burst when it wakes. Several AX frames get mixed back to back
+from voice state the game has had no chance to advance between them, and
+that is what a doubling sounds like.
+
+It now happens in the run loop, every 8,192 guest ticks - about five times
+per AX frame - where the guest is between instructions and is already
+prepared to be stopped. The deadline and the adaptive target are unchanged.
+
+    with a device open, after settling:
+      produced against real time   overall +0.40%, instantaneous +4% to -3%
+      queue                        7 to 66 ms against a 60 ms target
+
+The guest is held to the device's clock without the mixer ever being
+interrupted mid-frame.
+
+**Not confirmed as the echo.** It cannot be from here - the fault is
+audible and the measurement says it is not in the sample stream. What can
+be said is that the old arrangement was wrong for a reason that would
+produce exactly this symptom, and the new one is not.
+
+**What not to re-propose:** pacing inside `mgs_audio_push`, or anywhere
+else reached from an interrupt. The clipping Ben also reports is a separate
+thing - the limiter stands in for AX's compressor (F285) and the real one
+needs the DSP command list parsed.

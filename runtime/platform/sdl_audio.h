@@ -30,6 +30,11 @@ void mgs_audio_push(const int16_t* stereo, unsigned frames);
  * bug this whole subsystem exists to expose. */
 unsigned mgs_audio_queued(void);
 
+/* Hold the guest to the device's clock. Called from the RUN LOOP, not from
+ * the mixer: sleeping inside the DSP interrupt stops the guest mid-service
+ * and lets the audio interrupt backlog through in a burst when it wakes. */
+void mgs_audio_pace(void);
+
 /* Totals for the exit report: pushed, and dropped for want of a device. */
 void mgs_audio_stats(uint64_t* pushed, uint64_t* dropped, uint64_t* underruns);
 
