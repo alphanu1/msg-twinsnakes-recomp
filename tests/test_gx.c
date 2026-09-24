@@ -365,6 +365,100 @@ int main(void)
         }
     }
 
+    /* --- THE ATTRIBUTE TABLE'S TEXTURE FIELDS -------------------------
+     *
+     * Every texture coordinate is nine bits of VAT: count, a three-bit
+     * format, then a FIVE-bit fraction. Coordinates 1-7 used to read the
+     * fraction two bits in instead of four, which overlaps the format, and
+     * coordinate 4's fraction was stitched from VAT_B bit 31 (VCacheEnhance)
+     * and VAT_C. Each field here gets a distinct value, laid out as
+     * Dolphin's CPMemory.h lays them out, so a field read from its
+     * neighbour's bits cannot come back right by coincidence. */
+    {
+        MgsGxVertexFormat f;
+        uint32_t b = 0u, c = 0u;
+        unsigned i;
+        /* VAT_B: tex1..3 at 0, 9, 18; tex4 count/format at 27/28. */
+        for (i = 1; i < 4u; ++i) {
+            unsigned sft = (i - 1u) * 9u;
+            b |= 1u << sft;                          /* two components */
+            b |= (uint32_t)(i & 7u) << (sft + 1u);   /* format = i      */
+            b |= (uint32_t)(10u + i) << (sft + 4u);  /* frac = 10 + i   */
+        }
+        b |= 1u << 27; b |= 4u << 28;
+        b |= 1u << 31;                               /* VCacheEnhance   */
+        /* VAT_C: tex4 frac at 0; tex5..7 at 5, 14, 23. */
+        c |= 14u;
+        for (i = 5; i < 8u; ++i) {
+            unsigned sft = 5u + (i - 5u) * 9u;
+            c |= 1u << sft;
+            c |= (uint32_t)((i - 4u) & 7u) << (sft + 1u);
+            c |= (uint32_t)(10u + i) << (sft + 4u);
+        }
+        gx.vat_a[3] = 0u; gx.vat_b[3] = b; gx.vat_c[3] = c;
+        mgs_gx_vertex_format(&gx, 3u, &f);
+        for (i = 1; i < 4u; ++i) {
+            CHECK(f.tex_count[i] == 2u);
+            CHECK(f.tex_format[i] == i);
+            CHECK(f.tex_shift[i] == 10u + i);
+        }
+        CHECK(f.tex_count[4] == 2u);
+        CHECK(f.tex_format[4] == 4u);
+        CHECK(f.tex_shift[4] == 14u);        /* not polluted by bit 31 */
+        for (i = 5; i < 8u; ++i) {
+            CHECK(f.tex_count[i] == 2u);
+            CHECK(f.tex_format[i] == i - 4u);
+            CHECK(f.tex_shift[i] == 10u + i);
+        }
+    }
+
+    /* --- TEXGEN: AN OUTPUT TAKES ITS SOURCE FROM ITS REGISTER ----------
+     *
+     * The game builds output 1 from TEX0, not TEX1. Before texgen was
+     * honoured, output 1 read input TEX1 - absent, so zero - and every
+     * vertex got the same coordinate. One vertex with only TEX0, texgen 1
+     * pointed at TEX0 through an identity matrix, and output 1 must carry
+     * TEX0's value. */
+    {
+        MgsGxVertexFormat f;
+        MgsGxVertex v;
+        uint8_t data[64];
+        unsigned n, at = 0;
+        float px = 1.0f, py = 2.0f, pz = 3.0f, s0 = 0.25f, t0 = 0.75f;
+        memset(&f, 0, sizeof f);
+        f.kind[GX_VA_POS] = GX_ATTR_DIRECT;
+        f.pos_count = 3u; f.pos_format = 4u;
+        f.kind[GX_VA_TEX0] = GX_ATTR_DIRECT;
+        f.tex_count[0] = 2u; f.tex_format[0] = 4u;
+        {
+            float vals[5];
+            unsigned k;
+            vals[0] = px; vals[1] = py; vals[2] = pz; vals[3] = s0; vals[4] = t0;
+            for (k = 0; k < 5u; ++k) {
+                uint32_t bits; memcpy(&bits, &vals[k], sizeof bits);
+                data[at++] = (uint8_t)(bits >> 24); data[at++] = (uint8_t)(bits >> 16);
+                data[at++] = (uint8_t)(bits >> 8);  data[at++] = (uint8_t)bits;
+            }
+        }
+        gx.xf_num_texgen = 2u;
+        gx.xf_texgen[0] = 5u << 7;           /* output 0 from TEX0 */
+        gx.xf_texgen[1] = 5u << 7;           /* output 1 ALSO from TEX0 */
+        gx.xf_dualtex = 0u;
+        memset(&v, 0, sizeof v);
+        v.tex_matrix[0] = 60u; v.tex_matrix[1] = 60u;   /* GX_IDENTITY */
+        n = mgs_gx_decode_vertex(&gx, &f, data, at, &v);
+        CHECK(n == at);
+        CHECK(v.u[1] == s0 && v.v[1] == t0);
+        /* And from GEOMETRY: output 1 from the position row. */
+        gx.xf_texgen[1] = 0u << 7;
+        memset(&v, 0, sizeof v);
+        v.tex_matrix[0] = 60u; v.tex_matrix[1] = 60u;
+        (void)mgs_gx_decode_vertex(&gx, &f, data, at, &v);
+        CHECK(v.u[1] == px && v.v[1] == py);
+        gx.xf_num_texgen = 8u;
+        for (n = 0; n < 8u; ++n) gx.xf_texgen[n] = (5u + n) << 7;
+    }
+
     guest_memory_free(&mem);
     printf(failures ? "gx: FAILED\n" : "gx: ok\n");
     return failures ? 1 : 0;

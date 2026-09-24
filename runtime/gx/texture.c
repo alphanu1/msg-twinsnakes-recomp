@@ -703,6 +703,40 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
         }
         for (i = 0; i < entries; ++i) palette_copy[i] = be16(p + i * 2u);
         palette = palette_copy;
+
+        /* MGS_TRACE_TLUT: IS THE PALETTE WRONG, OR ARE THE INDICES?
+         *
+         * The palettised formats decode to two or three distinct colours,
+         * and they are what two thirds of this game's textured triangles
+         * bind - so the models are flat. Two things produce that and they
+         * need completely different fixes: a palette that is itself almost
+         * constant (the TLUT address, its load, or its format is wrong), or
+         * a rich palette read through indices that all come out the same
+         * (the tile walk or the nibble order is wrong).
+         *
+         * Printing the palette's own distinct-entry count separates them in
+         * one line, before anything is decoded. */
+        {
+            static int on = -1;
+            static unsigned shown;
+            if (on < 0) on = getenv("MGS_TRACE_TLUT") != NULL;
+            if (on && shown < 24u) {
+                unsigned d = 0u, j, q;
+                ++shown;
+                for (j = 0; j < entries; ++j) {
+                    for (q = 0; q < j; ++q)
+                        if (palette_copy[q] == palette_copy[j]) break;
+                    if (q == j) ++d;
+                }
+                fprintf(stderr, "[tlut] fmt 0x%X %ux%u  tlut 0x%08X fmt %u  "
+                                "%u entries, %u DISTINCT   first:",
+                        format, width, height, tlut_addr, tlut_format,
+                        entries, d);
+                for (j = 0; j < (entries < 8u ? entries : 8u); ++j)
+                    fprintf(stderr, " %04X", palette_copy[j]);
+                fprintf(stderr, "\n");
+            }
+        }
     }
 
     t = reuse ? reuse : find_slot(c);
@@ -923,6 +957,53 @@ no_dump:
                                                        : 0xFF00FF00u;
         }
     }
+    /* MGS_TEX_UVMAP=1: every texture becomes its own coordinate field -
+     * red rising with u, green rising with v.
+     *
+     * The checkerboard answers "does a texel reach the pixel" and it does:
+     * the whole screen fills with checks. What it CANNOT answer is whether
+     * the coordinates are the model's, because at one texel per check the
+     * pattern aliases into a regular screen-space grid whichever coordinates
+     * produced it - which is exactly how it looked, and reading that as
+     * "sampling is fine" was as far as it could be taken.
+     *
+     * A coordinate ramp has no such ambiguity. Rendered, it shows the UV
+     * field directly: real model UVs paint each surface with a smooth
+     * gradient that follows the geometry and breaks at the seams, while
+     * coordinates that are wrong show as flat colour, as a screen-aligned
+     * wash, or as the same gradient on every object. */
+    {
+        /* MGS_TEX_UVMAP=<format> limits it to ONE texture format, and that
+         * matters more than it looks.
+         *
+         * Applied to everything, the last thing drawn is a full-screen quad
+         * that composites the scene from a render-to-texture pass - so the
+         * override lands on THAT texture and paints the whole frame with
+         * one gradient, hiding every model behind it. The same trap caught
+         * the checkerboard before it (F326): "the checks cover the screen,
+         * so sampling and the combiner are fine" was a statement about the
+         * composite blit and about nothing else.
+         *
+         * The models are CMPR and C4, the composite is RGBA8, so naming the
+         * format separates them. */
+        static int uvmap = -1;
+        static long uvfmt = -1;
+        if (uvmap < 0) {
+            const char* e = getenv("MGS_TEX_UVMAP");
+            uvmap = e != NULL;
+            uvfmt = (e && *e && e[0] != '1') ? (long)strtoul(e, NULL, 0) : -1;
+        }
+        if (uvmap && (uvfmt < 0 || (long)format == uvfmt) &&
+            t->texels && width && height) {
+            unsigned yy, xx;
+            for (yy = 0; yy < height; ++yy)
+                for (xx = 0; xx < width; ++xx)
+                    t->texels[yy * width + xx] =
+                        0xFF000000u
+                      | ((uint32_t)(xx * 255u / (width  > 1u ? width  - 1u : 1u)) << 16)
+                      | ((uint32_t)(yy * 255u / (height > 1u ? height - 1u : 1u)) << 8);
+        }
+    }
     /* SOURCE VARIATION AGAINST DECODED VARIATION. See the note in
      * texture.h: this is what separates "the bytes were flat" from "we
      * flattened them", and nothing else does. */
@@ -958,6 +1039,33 @@ no_dump:
         }
         ++c->dec_n[format];
     }
+    /* Distinct colours, for the "are the texels flat?" question. See
+     * MgsTexCache::dec_colours. */
+    if (format < 16u) {
+        static uint32_t seen[2048];      /* 65536 bits */
+        unsigned q, distinct = 0u;
+        memset(seen, 0, sizeof seen);
+        /* ARGB, four bits a channel - ALPHA INCLUDED.
+         *
+         * Quantising RGB only said the palettised model textures had two
+         * distinct colours and looked like a decode fault. They are black
+         * with an alpha ramp - alpha masks, which is what the palette data
+         * actually holds - so the metric was measuring the wrong axis and
+         * the reading was an artefact of the measurement. */
+        for (q = 0; q < width * height; ++q) {
+            uint32_t c = t->texels[q];
+            unsigned k = (unsigned)(((c >> 16) & 0xF000u) |
+                                    ((c >> 12) & 0x0F00u) |
+                                    ((c >> 8)  & 0x00F0u) |
+                                    ((c >> 4)  & 0x000Fu));
+            if (!(seen[k >> 5] & (1u << (k & 31u)))) {
+                seen[k >> 5] |= 1u << (k & 31u);
+                ++distinct;
+            }
+        }
+        c->dec_colours[format] += distinct;
+    }
+
     t->hash = hash;
     t->efb_serial = serial;
 

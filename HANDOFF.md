@@ -295,6 +295,13 @@ renderer.
   Submit every few batches instead.
 - **Hand-editing `runtime/os/patch_table.c` (F337).** It is generated.
   Change `tools/gen-patch-table.py` and regenerate.
+- **"The texgen registers don't matter here" (F339).** They were the flat
+  models. The claim was read off an 8-entry list GXInit had filled.
+- **Our TLUT IA8 conversion is backwards (F339).** It is not: Dolphin does
+  not byte-swap IA8 TLUT entries, so its effective order is ours. The C4
+  model textures really are black alpha masks.
+- **A whole-frame texture override as evidence about the models (F341).**
+  It shows the composite blit. Restrict it to one format.
 
 - **Looking for a panning bug in the AX mixer (F315).** The two output
   channels are bit-identical because the game asks for that: 0 of 62,162
@@ -14171,6 +14178,13 @@ is, it is not a decode or a bind failure.
 
 ### F326 — the flat textures are not the sampler, not the coordinates and not the combiner: proved with a checkerboard
 
+> **WRONG, corrected by F339.** The checkerboard covering the screen proved
+> something about the LAST draw of each frame - a full-screen quad that
+> composites the scene from a render-to-texture pass - and nothing about the
+> models underneath it. The coordinates WERE the fault. Replacing only the
+> CMPR textures (the models' format) with a coordinate ramp showed whole
+> models in one colour, clamped to (1,1) or (0,0).
+
 Ben, repeatedly and correctly: "there are no textures on the 3d models."
 Every counter said the textures were fine, which is why it took so long to
 take seriously:
@@ -14615,3 +14629,91 @@ the texture was bound. The new case goes through the batch path with
 is now three layers of index arithmetic and a dropped patch would run the
 translated original instead of our shim: slower but correct, and invisible
 until it showed up weeks later as a divergence.
+
+### F339 — the models were flat because texture coordinate generation was never implemented
+
+Ben has reported flat, untextured 3D models for several sessions. It was
+texgen.
+
+**How it was found, in order, because two of the steps were wrong turns.**
+
+1. Distinct colours per decode said CMPR (the model format) decodes to 244
+   colours - healthy - and the palettised formats to 2-3. The palettised
+   ones looked like the fault: two thirds of all textured triangles bind
+   C4. **They were not.** Their IA8 palettes read `4A00 AD00 D800 ...` and
+   I first called our IA8 conversion backwards. Dolphin reads a TLUT entry
+   as a NATIVE u16 and does not swap it for IA8 (it does for RGB565 and
+   RGB5A3), so its effective byte order is exactly ours. Those textures are
+   alpha masks - black with an alpha ramp - and "two colours" was the
+   metric ignoring alpha. Checked against the oracle before changing
+   anything, which is the only reason it did not ship.
+2. The software rasteriser produced an equally flat picture, so it was not
+   the shader: the fault was upstream of both renderers.
+3. `MGS_TEX_UVMAP` replaces each texture with its own coordinate ramp.
+   Applied to everything, it painted the whole frame with ONE gradient -
+   the composite blit, which is also all the checkerboard (F326) had ever
+   shown. Applied to CMPR only (`MGS_TEX_UVMAP=0xE`), **whole models came
+   out a single colour**: yellow, i.e. clamped to (1,1), or black at (0,0).
+   Constant coordinates per draw.
+4. The texgen configurations list showed only TEX0/TEX1 sources - but it
+   holds eight entries and GXInit's eight defaults had filled it. Counting
+   by source row instead: **16,225,544 coordinates from the normal and
+   4,390,814 from each binormal** in 60 seconds, all dropped.
+
+**What the hardware does, and what we did.** Each output coordinate's texgen
+register (XF 0x1040+i) names its SOURCE - position, normal, a binormal, or
+any of TEX0..7 - and a 2x4 or 3x4 matrix; with dual texture on (XF 0x1012,
+which this game sets), the result is optionally normalised and multiplied by
+a post-matrix from XF 0x0500. We assumed output i came from input TEXi. A
+vertex carrying only TEX0 has no TEX2, so output 2 was a matrix times
+(0,0,1,1): the same value for every vertex, one texel per draw.
+
+**Fixed** from Dolphin's software `TransformUnit.cpp`
+(`TransformTexCoordRegular`), including its NaN-to-1 and q == 0 cases. The
+texgen registers, post-matrix indices, post-matrices, texgen count and
+dual-texture switch are now kept instead of counted and dropped. Normals and
+binormals are READ now - they were skipped because nothing lit anything -
+with Dolphin's fixed normal scales (s8/64, u8/128, s16/16384, u16/32768) and
+its three-index NBT layout, where index k reads components 3k..3k+2 of its
+own array entry.
+
+**Result:** 90,427,469 coordinates generated from their real source in
+80 s, **0 unsupported**. The intro cinematic shows skin shading on faces,
+folds in cloth, panelling and hatches on the submarine hull and specular
+pipework in its interior, where it showed flat colour. `tests/test_gx.c`
+drives the decoder with output 1 sourced from TEX0 and then from geometry.
+
+**Not done, and counted so it is visible:** emboss and colour-sourced
+texgen (none seen yet), and coordinates with q != 1 are divided per vertex
+rather than per pixel (none seen yet either: 0 in the run above).
+
+**Cost:** heavy scenes dropped from ~24 fps to ~19-21 in the one run
+measured. Not yet profiled, and the machine was shared with Ben's own
+testing, so it is recorded as unexplained rather than attributed.
+
+### F340 — the attribute table's texture fractions were read from the wrong bits
+
+Found on the way to F339 and real, though it was not what flattened the
+models. Each texture coordinate is nine VAT bits - count, a three-bit
+format, a five-bit fraction - so the fraction begins FOUR bits into its
+group. Coordinates 1-7 read it at two, overlapping the format; only
+coordinate 0, whose fields in VAT_A were written out literally, was right.
+Coordinate 4's fraction was built from VAT_B bit 31 (which is
+VCacheEnhance) and four bits of VAT_C, when it is simply VAT_C bits 0-4.
+Coordinates 5-7 started one bit early. Layout from Dolphin's `CPMemory.h`.
+`tests/test_gx.c` gives every field a distinct value; restoring the old
+reading fails it three times.
+
+### F341 — two instruments that were measuring the wrong thing
+
+Both recorded because they cost most of this investigation.
+
+**The checkerboard (F326) and any whole-frame texture override** land on
+the composite quad drawn last, which covers the screen. An override has to
+be restricted to the format under suspicion (`MGS_TEX_UVMAP=<format>`) or
+it measures the blit.
+
+**A list of "distinct values seen" that the defaults can fill.** The texgen
+list and the texture-shape list (16 entries - the C4 shapes never appeared
+in it) both silently stop recording once full. A capped list says what was
+seen FIRST, not what matters; count by the field that decides the question.

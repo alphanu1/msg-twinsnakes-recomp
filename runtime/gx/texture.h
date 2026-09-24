@@ -97,6 +97,17 @@ typedef struct MgsTexCache {
     uint64_t dec_n[16];      /* decodes, by format */
     uint64_t dec_src_var[16];/* mean |byte - previous byte| x1000 */
     uint64_t dec_out_var[16];/* the same over decoded luminance */
+    /* HOW MANY DISTINCT COLOURS THE DECODE PRODUCED, summed per format.
+     *
+     * The variation metrics above are mean |step| between neighbouring
+     * texels, which is a texture's BUSYNESS and not its richness: a smooth
+     * photographic texture and a two-colour one can score the same, so
+     * neither could settle whether CMPR and the indexed formats were
+     * decoding flat. A distinct-colour count separates them outright - a
+     * real 256x256 CMPR surface has hundreds, a broken decode has a
+     * handful. Counted in a 65,536-entry bitset over RGB565-quantised
+     * colour, which is exact in that space and costs 8 KB of stack. */
+    uint64_t dec_colours[16];
 
 } MgsTexCache;
 

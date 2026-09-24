@@ -54,23 +54,46 @@ void mgs_gx_vertex_format(const MgsGx* gx, unsigned vat, MgsGxVertexFormat* out)
     out->tex_format[0] = (a >> 22) & 7u;
     out->tex_shift[0]  = (a >> 25) & 0x1Fu;
 
+    /* THE FRACTION SITS AFTER THE FORMAT, AND THE FORMAT IS THREE BITS.
+     *
+     * Each texture coordinate occupies nine bits of the table: one for the
+     * component count, three for the numeric format, five for the number of
+     * FRACTIONAL BITS. So within a group the fraction begins four bits in,
+     * not two - reading it at two overlaps the format field and returns a
+     * shift built from the wrong bits.
+     *
+     * Only coordinate 0 escaped, because VAT_A spells its fields out and
+     * they were written literally (22..24 format, 25..29 fraction). The
+     * other seven were generated from a stride and were all wrong, and
+     * coordinates 1, 2 and 3 are the ones this game uses most - 20.9M,
+     * 19.4M and 20.9M vertices against 10.6M for coordinate 0.
+     *
+     * The fraction is a power-of-two divisor, so getting it wrong scales
+     * every coordinate by a power of two. Too large, they run off the end
+     * of the texture and CLAMP, and every triangle samples the same corner
+     * texel: the models draw in one flat colour, which is exactly how this
+     * presented. Bit layout from Dolphin's CPMemory.h (rule 10).
+     */
     for (i = 1; i < 4u; ++i) {
-        unsigned s = (i - 1u) * 9u;
+        unsigned s = (i - 1u) * 9u;               /* 0, 9, 18 */
         out->tex_count[i]  = ((b >> s) & 1u) ? 2u : 1u;
         out->tex_format[i] = (b >> (s + 1u)) & 7u;
-        out->tex_shift[i]  = (b >> (s + 2u)) & 0x1Fu;
+        out->tex_shift[i]  = (b >> (s + 4u)) & 0x1Fu;
     }
-    /* Texture 4 straddles the two registers: its low bits are the top of B
-     * and its high bits the bottom of C. Reading it from one alone gives a
-     * plausible wrong answer rather than an obvious one. */
+    /* Coordinate 4 is split ACROSS the two registers, but not in the middle
+     * of a field: VAT_B ends with its count and format (bit 31 is
+     * VCacheEnhance, nothing to do with it) and VAT_C BEGINS with its five
+     * fraction bits. The old reading took VAT_B's bit 31 as the fraction's
+     * low bit and shifted VAT_C's up by one, so it mixed the cache flag
+     * into the scale and dropped the fraction's top bit. */
     out->tex_count[4]  = ((b >> 27) & 1u) ? 2u : 1u;
     out->tex_format[4] = (b >> 28) & 7u;
-    out->tex_shift[4]  = ((b >> 31) & 1u) | (((c >> 0) & 0xFu) << 1);
+    out->tex_shift[4]  = c & 0x1Fu;               /* VAT_C bits 0..4 */
     for (i = 5; i < 8u; ++i) {
-        unsigned s = 4u + (i - 5u) * 9u;
+        unsigned s = 5u + (i - 5u) * 9u;          /* 5, 14, 23 */
         out->tex_count[i]  = ((c >> s) & 1u) ? 2u : 1u;
         out->tex_format[i] = (c >> (s + 1u)) & 7u;
-        out->tex_shift[i]  = (c >> (s + 2u)) & 0x1Fu;
+        out->tex_shift[i]  = (c >> (s + 4u)) & 0x1Fu;
     }
 }
 
@@ -145,6 +168,19 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem)
     memset(gx, 0, sizeof *gx);
     gx->mem = mem;
     mgs_bp_init(&gx->bp);
+    {   /* The transform unit as GXInit leaves it: output i from input
+         * TEXi through a 2x4 matrix, post-matrix GX_PTIDENTITY (row 61),
+         * dual texture off. */
+        unsigned i;
+        for (i = 0; i < 8u; ++i) {
+            gx->xf_texgen[i]   = (5u + i) << 7;
+            gx->xf_postinfo[i] = 61u;
+        }
+        gx->xf_num_texgen = 8u;
+        gx->xf_post[61 * 4 + 0] = 1.0f;
+        gx->xf_post[62 * 4 + 1] = 1.0f;
+        gx->xf_post[63 * 4 + 2] = 1.0f;
+    }
     {
         const char* e;
         gx->trace_teximg = getenv("MGS_TRACE_TEXIMG") != NULL;
@@ -335,10 +371,14 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
          * which is enough to send every vertex behind the eye. */
         else if (a >= 0x1020u && a < 0x1026u) gx->xf_projection[a - 0x1020u] = f;
         else if (a == 0x1026u) gx->xf_projection_ortho = words[i] & 1u;
-        /* EVERYTHING ELSE IS DROPPED, and is counted while it is dropped.
-         * See the note beside these fields in fifo.h. */
+        /* What is left is dropped, and counted while it is dropped. The
+         * texgen block below is KEPT as well as counted - see fifo.h. */
+        else if (a == 0x1012u) gx->xf_dualtex = words[i] & 1u;
+        else if (a == 0x103Fu) gx->xf_num_texgen = words[i] & 0xFu;
+        else if (a >= 0x1050u && a < 0x1058u) gx->xf_postinfo[a - 0x1050u] = words[i];
         else if (a >= 0x1040u && a < 0x1050u) {
             unsigned k;
+            if (a < 0x1048u) gx->xf_texgen[a - 0x1040u] = words[i];
             ++gx->xf_texgen_writes;
             for (k = 0; k < gx->xf_texgen_n; ++k)
                 if (gx->xf_texgen_key[k] == words[i]) break;
@@ -348,7 +388,10 @@ static void xf_write(MgsGx* gx, uint32_t addr, const uint32_t* words, unsigned n
             }
             if (k < 8u) ++gx->xf_texgen_hits[k];
         }
-        else if (a >= 0x0500u && a < 0x0600u) ++gx->xf_texmtx_writes;
+        else if (a >= 0x0500u && a < 0x0600u) {
+            gx->xf_post[a - 0x0500u] = f;
+            ++gx->xf_texmtx_writes;
+        }
         else {
             unsigned k;
             ++gx->xf_other_writes;

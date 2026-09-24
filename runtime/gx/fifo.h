@@ -99,6 +99,9 @@ typedef struct MgsGxVertexFormat {
 typedef struct MgsGxVertex {
     float x, y, z;
     float nx, ny, nz;
+    /* The two binormals, when the vertex carries NBT. Texgen reads them
+     * as source rows 3 and 4; nothing else does yet. */
+    float bt[2][3];
     uint32_t color[2];       /* ARGB */
     float u[8], v[8];
     unsigned pos_matrix;     /* position/normal matrix index */
@@ -173,6 +176,33 @@ typedef struct MgsGx {
     float xf_normal[32 * 3];
     float xf_projection[7];
     unsigned xf_projection_ortho;
+
+    /* TEXTURE COORDINATE GENERATION, which was parsed and thrown away.
+     *
+     * Each output coordinate names its own SOURCE - the position, the normal
+     * or any of the eight input coordinates - in its texgen register, and
+     * this game builds its outputs from TEX0 and TEX1. Assuming output i
+     * came from input TEXi fed zeros to outputs 1-3, and a matrix applied
+     * to (0,0,1,1) gives the same answer for every vertex: one texel per
+     * draw, and every model flat. See vertex.c.
+     *
+     * Initialised to what GXInit leaves (output i from TEXi, 2x4, identity
+     * post-matrix), so a game that never writes them behaves as before. */
+    uint32_t xf_texgen[8];               /* XF 0x1040-0x1047 */
+    uint32_t xf_postinfo[8];             /* XF 0x1050-0x1057 */
+    float    xf_post[64 * 4];            /* XF 0x0500-0x05FF, post-matrices */
+    uint32_t xf_num_texgen;              /* XF 0x103F */
+    uint32_t xf_dualtex;                 /* XF 0x1012, bit 0 */
+    /* Texgen the vertex path does not implement yet, counted rather than
+     * guessed: a normal or binormal source (normals are skipped, not read),
+     * emboss, and colour-as-coordinate. And coordinates whose q is not 1,
+     * which are divided per vertex where the hardware divides per pixel. */
+    uint64_t texgen_unsupported, texgen_q_not_one, texgen_regular;
+    /* The unsupported ones by what they asked for. The list of distinct
+     * texgen VALUES holds eight, and GXInit's own eight defaults fill it
+     * before the game writes anything, so the configurations that matter
+     * were never shown. */
+    uint64_t texgen_unsup_type[8], texgen_unsup_row[32];
 
     /* Indexed positions that could not be fetched. See read_position. */
     uint64_t pos_fetch_failed, pos_no_base, pos_no_stride, pos_out_of_range;
@@ -281,6 +311,11 @@ void mgs_gx_write(MgsGx* gx, uint32_t value, unsigned size);
 /* Resolve the current vertex descriptor and attribute table into one format.
  * Exposed for testing: it is where a misread register shows up first. */
 void mgs_gx_vertex_format(const MgsGx* gx, unsigned vat, MgsGxVertexFormat* out);
+
+/* Decode one vertex, texture coordinate generation included. Returns the
+ * bytes consumed. Declared here so the test can drive it directly. */
+unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
+                              const uint8_t* data, unsigned n, MgsGxVertex* v);
 
 /* Bytes one vertex occupies in the stream, for the given format. Returns 0
  * if the format is one this cannot size, which is a refusal to desynchronise

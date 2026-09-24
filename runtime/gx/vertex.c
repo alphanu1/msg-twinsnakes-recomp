@@ -16,6 +16,7 @@
 #include <stdlib.h>
 
 #include <string.h>
+#include <math.h>
 
 typedef struct Reader {
     const uint8_t* p;
@@ -295,21 +296,65 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
 
     read_position(gx, &r, f, v);
 
-    /* Normals are read past rather than used: lighting is the transform
-     * unit's, and this renderer does not light yet. Skipping the right NUMBER
-     * of bytes is what matters - getting it wrong desynchronises the vertex. */
+    /* NORMALS, READ RATHER THAN SKIPPED.
+     *
+     * They were skipped because nothing lit anything. But texture
+     * coordinate generation takes them as a SOURCE, and this game builds
+     * 16.2M coordinates a minute from the normal and 4.4M from each
+     * binormal - its environment and lighting maps. Fed nothing, those
+     * surfaces sampled one texel.
+     *
+     * Fixed point is NOT the attribute table's shift here: a normal's
+     * scale is fixed by its type - s8 over 64, u8 over 128, s16 over
+     * 16384, u16 over 32768 - as in Dolphin's VertexLoader_Normal.
+     * NBT is normal, then the two binormals, in stream order. In the
+     * three-index form (NormalIndex3) index k reads components 3k..3k+2
+     * of ITS OWN array entry, not the first three. */
     if (f->kind[GX_VA_NRM] != GX_ATTR_NONE) {
-        unsigned c = (f->nrm_format == 4u) ? 4u : (f->nrm_format >= 2u) ? 2u : 1u;
-        /* NormalIndex3 (VAT_A bit 31): an INDEXED normal carries three
-         * indices - normal, binormal, tangent - not one. The size function
-         * counts them, so this has to skip them, or the two disagree and the
-         * vertex ends in the wrong place. Skipping one index where the stream
-         * holds three is how a whole display list came apart. */
-        unsigned idx = (f->nrm_index3 &&
-                        f->kind[GX_VA_NRM] != GX_ATTR_DIRECT) ? 3u : 1u;
-        while (idx--)
-            skip_attr(&r, f->kind[GX_VA_NRM],
-                      c * (f->nrm_count == 3u ? 9u : 3u));
+        MgsGxAttrKind k = f->kind[GX_VA_NRM];
+        unsigned fmt = f->nrm_format;
+        unsigned cs = (fmt == 4u) ? 4u : (fmt >= 2u) ? 2u : 1u;
+        unsigned sh = (fmt == 4u) ? 0u
+                    : (fmt == 0u) ? 7u : (fmt == 1u) ? 6u
+                    : (fmt == 2u) ? 15u : 14u;
+        unsigned vecs = (f->nrm_count == 3u) ? 3u : 1u;
+        float nv[3][3];
+        unsigned j;
+        memset(nv, 0, sizeof nv);
+        if (k == GX_ATTR_DIRECT) {
+            for (j = 0; j < vecs; ++j) {
+                nv[j][0] = component(&r, fmt, sh);
+                nv[j][1] = component(&r, fmt, sh);
+                nv[j][2] = component(&r, fmt, sh);
+            }
+        } else if (f->nrm_index3 && vecs == 3u) {
+            for (j = 0; j < 3u; ++j) {
+                unsigned index = (k == GX_ATTR_INDEX8) ? r8(&r) : r16(&r);
+                const uint8_t* src = array_element(gx, ARR_NRM, index,
+                                                   cs * 3u * (j + 1u));
+                Reader ar;
+                if (!src) continue;
+                ar.p = src; ar.n = cs * 3u * (j + 1u); ar.at = cs * 3u * j;
+                nv[j][0] = component(&ar, fmt, sh);
+                nv[j][1] = component(&ar, fmt, sh);
+                nv[j][2] = component(&ar, fmt, sh);
+            }
+        } else {
+            unsigned index = (k == GX_ATTR_INDEX8) ? r8(&r) : r16(&r);
+            const uint8_t* src = array_element(gx, ARR_NRM, index,
+                                               cs * 3u * vecs);
+            if (src) {
+                Reader ar;
+                ar.p = src; ar.n = cs * 3u * vecs; ar.at = 0;
+                for (j = 0; j < vecs; ++j) {
+                    nv[j][0] = component(&ar, fmt, sh);
+                    nv[j][1] = component(&ar, fmt, sh);
+                    nv[j][2] = component(&ar, fmt, sh);
+                }
+            }
+        }
+        v->nx = nv[0][0]; v->ny = nv[0][1]; v->nz = nv[0][2];
+        for (j = 0; j < 3u; ++j) { v->bt[0][j] = nv[1][j]; v->bt[1][j] = nv[2][j]; }
     }
 
     read_color_attr(gx, &r, f, 0, v);
@@ -367,34 +412,119 @@ unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
         if (off < 0) off = getenv("MGS_NO_TEXMTX") != NULL;
         if (off) return r.at;
     }
-    for (i = 0; i < 8u; ++i) {
-        unsigned row = v->tex_matrix[i];
-        const float* m;
-        float s0, t0;
-        if (row >= 60u) continue;              /* identity, or out of range */
-        /* ROWS BELOW 30 ARE POSITION MATRICES. GX_PNMTX0..9 occupy rows
-         * 0,3,..27 and GX_TEXMTX0..9 rows 30,33,..57, in one memory. A
-         * texture coordinate pointed at a position matrix is either a game
-         * generating coordinates from geometry - which needs the texgen
-         * configuration we still drop - or our own misread of the CP
-         * register's default. Multiplying texture coordinates by a modelview
-         * matrix would be far worse than leaving them alone, so it is left
-         * alone and counted. */
-        if (row < 30u) { ++((MgsGx*)gx)->tex_mtx_position_row; continue; }
-        if (row * 4u + 8u > 64u * 4u) continue;
-        ++((MgsGx*)gx)->tex_mtx_applied[i];
-        m = &gx->xf_matrix[row * 4u];
-        s0 = v->u[i]; t0 = v->v[i];
-        v->u[i] = m[0] * s0 + m[1] * t0 + m[2] + m[3];
-        v->v[i] = m[4] * s0 + m[5] * t0 + m[6] + m[7];
-        {   /* Did it actually move? An identity-valued matrix at a
-             * non-identity index is common and costs nothing; it is also
-             * the difference between this mattering and not. */
-            float du = v->u[i] - s0, dv = v->v[i] - t0;
-            if (du < 0.0f) du = -du;
-            if (dv < 0.0f) dv = -dv;
-            if (du > 1e-6f || dv > 1e-6f) ++((MgsGx*)gx)->tex_mtx_moved;
-            else ++((MgsGx*)gx)->tex_mtx_unmoved;
+    /* TEXTURE COORDINATE GENERATION, per output coordinate.
+     *
+     * This used to assume output i came from input TEXi through matrix i.
+     * The hardware does not: each output's texgen register (XF 0x1040+i)
+     * names a SOURCE row - the position, the normal, or any of TEX0..7 -
+     * and this game builds its outputs from TEX0 and TEX1 (0x280 and 0x300,
+     * 128,441 writes between them). A vertex carrying only TEX0 has no
+     * TEX2 or TEX3, so outputs 2 and 3 were computed from zeros, and a
+     * matrix applied to (0,0,1,1) is the same constant for every vertex.
+     * One texel per draw. Rendered with each texture replaced by its own
+     * coordinate ramp, whole models came out a single colour - clamped to
+     * (1,1) or (0,0) - which is the flat shading Ben has been reporting.
+     *
+     * Follows Dolphin's software TransformUnit (TransformTexCoordRegular):
+     * source, then a 2x4 or 3x4 matrix, then - with dual texture on - an
+     * optional normalise and a 3x4 post-matrix from XF 0x0500. Per-pixel
+     * perspective division by q is NOT done here: a coordinate with q != 1
+     * is divided at the vertex and counted, because that is an approximation
+     * and the count says how much it is being relied on. */
+    {
+        static const float k_ident[12] = { 1,0,0,0, 0,1,0,0, 0,0,1,0 };
+        MgsGx* gm = (MgsGx*)gx;
+        float in_u[8], in_v[8];
+        unsigned n = gx->xf_num_texgen > 8u ? 8u : gx->xf_num_texgen;
+        for (i = 0; i < 8u; ++i) { in_u[i] = v->u[i]; in_v[i] = v->v[i]; }
+
+        for (i = 0; i < n; ++i) {
+            uint32_t cfg = gx->xf_texgen[i];
+            unsigned stq  = (cfg >> 1) & 1u;      /* 0 ST (2x4), 1 STQ (3x4) */
+            unsigned abc1 = (cfg >> 2) & 1u;      /* input form */
+            unsigned type = (cfg >> 4) & 7u;      /* 0 regular */
+            unsigned srow = (cfg >> 7) & 0x1Fu;
+            unsigned row  = v->tex_matrix[i];
+            const float* m;
+            float sx, sy, sz, s0, t0, q0;
+
+            if (type != 0u) {
+                ++gm->texgen_unsupported; ++gm->texgen_unsup_type[type];
+                continue;
+            }
+            if (srow == 0u) {                     /* geometry */
+                sx = v->x; sy = v->y; sz = v->z;
+            } else if (srow == 1u) {              /* normal */
+                sx = v->nx; sy = v->ny; sz = v->nz;
+            } else if (srow == 3u || srow == 4u) {  /* binormals */
+                sx = v->bt[srow - 3u][0]; sy = v->bt[srow - 3u][1];
+                sz = v->bt[srow - 3u][2];
+            } else if (srow >= 5u && srow <= 12u) {
+                sx = in_u[srow - 5u]; sy = in_v[srow - 5u]; sz = 1.0f;
+            } else {
+                /* The colour row, or a row the hardware does not define. */
+                ++gm->texgen_unsupported; ++gm->texgen_unsup_row[srow];
+                continue;
+            }
+            ++gm->texgen_regular;
+            /* NaN to 1, as Dolphin does (Shadow the Hedgehog's eyelids). */
+            if (sx != sx) sx = 1.0f;
+            if (sy != sy) sy = 1.0f;
+            if (sz != sz) sz = 1.0f;
+
+            /* GX_IDENTITY and above: the SDK loads an identity there. The
+             * position-matrix rows below 30 are legitimate here - that is
+             * how coordinates are generated from geometry - so the old
+             * guard against them is gone. */
+            if (row >= 60u || row * 4u + (stq ? 12u : 8u) > 64u * 4u)
+                m = k_ident;
+            else
+                m = &gx->xf_matrix[row * 4u];
+            if (m != k_ident) ++gm->tex_mtx_applied[i];
+
+            if (abc1) {
+                s0 = m[0] * sx + m[1] * sy + m[2]  * sz + m[3];
+                t0 = m[4] * sx + m[5] * sy + m[6]  * sz + m[7];
+                q0 = stq ? m[8] * sx + m[9] * sy + m[10] * sz + m[11] : 1.0f;
+            } else {
+                s0 = m[0] * sx + m[1] * sy + m[2]  + m[3];
+                t0 = m[4] * sx + m[5] * sy + m[6]  + m[7];
+                q0 = stq ? m[8] * sx + m[9] * sy + m[10] + m[11] : 1.0f;
+            }
+
+            if (gx->xf_dualtex) {
+                uint32_t pi = gx->xf_postinfo[i];
+                unsigned pidx = pi & 0x3Fu;
+                const float* pm = (pidx * 4u + 12u <= 64u * 4u)
+                                ? &gx->xf_post[pidx * 4u] : k_ident;
+                float a = s0, b = t0, c = q0;
+                if ((pi >> 8) & 1u) {
+                    float len = sqrtf(a * a + b * b + c * c);
+                    if (len > 0.0f) { a /= len; b /= len; c /= len; }
+                }
+                s0 = pm[0] * a + pm[1] * b + pm[2]  * c + pm[3];
+                t0 = pm[4] * a + pm[5] * b + pm[6]  * c + pm[7];
+                q0 = pm[8] * a + pm[9] * b + pm[10] * c + pm[11];
+            }
+
+            if (q0 == 0.0f) {
+                /* The hardware's special case, from Dolphin. */
+                s0 = s0 / 2.0f; t0 = t0 / 2.0f;
+                s0 = s0 < -1.0f ? -1.0f : s0 > 1.0f ? 1.0f : s0;
+                t0 = t0 < -1.0f ? -1.0f : t0 > 1.0f ? 1.0f : t0;
+            } else if (q0 != 1.0f) {
+                ++gm->texgen_q_not_one;
+                s0 /= q0; t0 /= q0;
+            }
+            {
+                float du = s0 - in_u[i], dv = t0 - in_v[i];
+                if (du < 0.0f) du = -du;
+                if (dv < 0.0f) dv = -dv;
+                if (du > 1e-6f || dv > 1e-6f) ++gm->tex_mtx_moved;
+                else ++gm->tex_mtx_unmoved;
+            }
+            v->u[i] = s0;
+            v->v[i] = t0;
         }
     }
     return r.at;

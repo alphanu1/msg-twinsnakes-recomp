@@ -2069,6 +2069,34 @@ int main(int argc, char** argv)
                                                "matrix row: %llu)\n",
                                                (unsigned long long)g->tex_mtx_position_row);
                                     }
+                                    printf("  texgen: %llu coordinates "
+                                           "generated, %llu from a source "
+                                           "not implemented (normal, "
+                                           "emboss, colour), %llu with q != 1 "
+                                           "divided per vertex%s\n",
+                                        (unsigned long long)(g ? g->texgen_regular : 0),
+                                        (unsigned long long)(g ? g->texgen_unsupported : 0),
+                                        (unsigned long long)(g ? g->texgen_q_not_one : 0),
+                                        (g && g->xf_dualtex) ? ", dual texture ON" : "");
+                                    if (g) {
+                                        unsigned k;
+                                        printf("    unsupported texgen by "
+                                               "type (1 emboss, 2 colour0, "
+                                               "3 colour1):");
+                                        for (k = 0; k < 8u; ++k)
+                                            if (g->texgen_unsup_type[k])
+                                                printf("  %u:%llu", k,
+                                                  (unsigned long long)g->texgen_unsup_type[k]);
+                                        printf("\n    unsupported regular "
+                                               "texgen by source row (1 "
+                                               "normal, 2 colours, 3/4 "
+                                               "binormal):");
+                                        for (k = 0; k < 32u; ++k)
+                                            if (g->texgen_unsup_row[k])
+                                                printf("  %u:%llu", k,
+                                                  (unsigned long long)g->texgen_unsup_row[k]);
+                                        printf("\n");
+                                    }
                                     printf("  indexed XF loads "
                                            "(GXLoadPosMtxIndx and friends): "
                                            "%llu  (no array: %llu, bad "
@@ -2083,17 +2111,21 @@ int main(int argc, char** argv)
                                     unsigned k;
                                     printf("  decodes by format: source "
                                            "variation -> decoded variation "
-                                           "(both mean |step| x1000)\n");
+                                           "(both mean |step| x1000), and "
+                                           "DISTINCT COLOURS per decode\n");
                                     for (k = 0; k < 16u; ++k)
                                         if (rs->tex.dec_n[k])
                                             printf("    fmt 0x%X  %6llu "
                                                    "decodes   src %7.1f  "
-                                                   "out %7.1f\n", k,
+                                                   "out %7.1f   colours %6.0f"
+                                                   "\n", k,
                                                 (unsigned long long)rs->tex.dec_n[k],
                                                 (double)rs->tex.dec_src_var[k]
                                                     / rs->tex.dec_n[k] / 1000.0,
                                                 (double)rs->tex.dec_out_var[k]
-                                                    / rs->tex.dec_n[k] / 1000.0);
+                                                    / rs->tex.dec_n[k] / 1000.0,
+                                                (double)rs->tex.dec_colours[k]
+                                                    / rs->tex.dec_n[k]);
                                 }
                                 printf("  texture lookup memo: %llu hits, "
                                        "%llu misses (a miss content-hashes "
@@ -2334,6 +2366,20 @@ int main(int argc, char** argv)
                                    (unsigned long long)rs->tex.refused_palette,
                                    (unsigned long long)rs->tex.refused_alloc,
                                    (unsigned long long)rs->tex.refused_decode);
+                            {
+                                unsigned k;
+                                printf("TEXTURED TRIANGLES BY THE FORMAT "
+                                       "THEY BOUND:\n");
+                                for (k = 0; k < 16u; ++k)
+                                    if (rs->tri_by_texfmt[k])
+                                        printf("    fmt 0x%X  %llu "
+                                               "triangles\n", k,
+                                            (unsigned long long)rs->tri_by_texfmt[k]);
+                                printf("    of all of them, bound texture "
+                                       "<=4x4: %llu, <=16x16: %llu\n",
+                                       (unsigned long long)rs->tri_tex_tiny,
+                                       (unsigned long long)rs->tri_tex_small);
+                            }
                             {
                                 unsigned k;
                                 printf("textures decoded by shape "

@@ -1558,6 +1558,12 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * every textured triangle - see MgsTexture::rough for what that
              * cost and why it moved to the decode. */
             if (tex) {
+                if (tex->format < 16u) ++r->tri_by_texfmt[tex->format];
+                if (tex->width <= 4u && tex->height <= 4u) ++r->tri_tex_tiny;
+                else if (tex->width <= 16u && tex->height <= 16u)
+                    ++r->tri_tex_small;
+            }
+            if (tex) {
                 unsigned i2 = r->drawlog_at & 63u;
                 r->drawlog_addr[i2] = tex->addr;
                 r->drawlog_w[i2] = (uint16_t)tex->width;

@@ -172,6 +172,18 @@ typedef struct MgsGxRaster {
     int      trace_preload;   /* MGS_TRACE_PRELOAD */
     uint64_t tex_wanted;      /* stage 0 asked for a texture */
     uint64_t tex_bind_failed; /* ...and we could not supply one */
+    /* WHICH TEXTURE THE DRAWN TRIANGLES ACTUALLY BIND.
+     *
+     * The decode counters say what was decoded, which is a different
+     * question: CMPR decodes to 244 distinct colours and looks healthy,
+     * while the models on screen are flat-shaded. That is only a
+     * contradiction if the model triangles are sampling those decodes -
+     * and nothing measured whether they are. Counted per format, with the
+     * very small textures separated out because a 2x2 or a 1x1 bound to a
+     * model IS a flat colour however well it decoded. */
+    uint64_t tri_by_texfmt[16];
+    uint64_t tri_tex_tiny;    /* bound texture <= 4x4 */
+    uint64_t tri_tex_small;   /* <= 16x16 */
 
     /* Returns non-zero when drawing should stop - the host has been asked to
      * quit and is waiting for this call to come back. Optional; NULL means
