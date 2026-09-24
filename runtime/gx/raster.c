@@ -52,6 +52,7 @@ void mgs_raster_init(MgsGxRaster* r, MgsEfb* efb)
     r->no_depth = getenv("MGS_NO_DEPTH") != NULL;
     r->trace_preload = getenv("MGS_TRACE_PRELOAD") != NULL;
     r->trace_texuse = getenv("MGS_TRACE_TEXUSE") != NULL;
+    r->note_pixels = getenv("MGS_TRACE_CENV") != NULL;
     /* The diagnostics added while chasing the video faults, read ONCE like
      * everything else here. Called per draw they were thousands of string
      * lookups a frame, which is a measurable cost to leave behind in a
@@ -415,6 +416,7 @@ typedef struct RasterSpan {
     unsigned            tex_coord, wrap_s, wrap_t;
     int                 bilinear;
     int                 alpha_always;
+    int                 note_pixels;
     /* PER-STAGE TEXTURES. `stage_count` is 0 for the single-texture case,
      * which is all but 64 triangles in a boot, and then none of this is
      * touched. See the note where these are filled in. */
@@ -563,6 +565,27 @@ static void raster_span(const RasterSpan* sp, int y0, int y1,
                 }
 
                 pixel = mgs_tev_run_compiled(tev, &in);
+
+                /* WHAT COLOUR ACTUALLY LANDS, for untextured draws.
+                 *
+                 * Everything upstream says these should be white: the
+                 * combiner takes the rasterised colour straight through,
+                 * the vertex colour is 0xFFFFFFFF on all 10.3 million of
+                 * them, they are opaque, blending is off, nothing is
+                 * depth-rejected or masked, and 10.6 million of them land
+                 * fully on screen. The buffer never goes above 39. One of
+                 * those statements is wrong and this is the one place that
+                 * can say which - the value at the moment it is written.
+                 *
+                 * Sampled one pixel in 1024 and racy across the worker
+                 * threads, deliberately: the question is WHICH VALUES
+                 * appear, and a lost count does not change the answer. */
+                if (sp->note_pixels && !sp->tex) {
+                    static unsigned n;
+                    if (((n++) & 1023u) == 0u)
+                        note_value(sp->r->outc_key, sp->r->outc_hits,
+                                   &sp->r->outc_n, pixel);
+                }
 
                 /* The alpha test runs AFTER the combiner and before anything
                  * is written, depth included. Cut-out foliage and text rely
@@ -1025,6 +1048,27 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         if (sy[i] > maxy) maxy = sy[i];
     }
 
+    /* WHERE UNTEXTURED GEOMETRY LANDS, BEFORE ANY CLAMPING.
+     *
+     * 7.8 million triangles a run are drawn white, fully opaque, with
+     * blending off and nothing rejecting them - and the screen is not
+     * white. Either they are painted and covered, or they are not on the
+     * screen at all, and x0/x1 below cannot tell the difference because
+     * they are already clamped to it. These are the raw projected extents.
+     *
+     * Counted by where the box sits relative to the viewport, which is the
+     * only distinction that matters here. */
+    if (!tex_enabled) {
+        if (maxx < 0.0f || minx > (float)r->width ||
+            maxy < 0.0f || miny > (float)r->height)
+            ++r->untex_offscreen;
+        else if (minx >= 0.0f && maxx <= (float)r->width &&
+                 miny >= 0.0f && maxy <= (float)r->height)
+            ++r->untex_onscreen;
+        else
+            ++r->untex_straddle;
+    }
+
     x0 = (int)minx; x1 = (int)maxx + 1;
     y0 = (int)miny; y1 = (int)maxy + 1;
     if (x0 < 0) x0 = 0;
@@ -1155,6 +1199,32 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
                        mgs_bp_get(&gx->bp, BP_TEV_COLOR_ENV));
             note_value(r->rascol_key, r->rascol_hits, &r->rascol_n,
                        a->color[0]);
+            /* WHAT THE BLEND DOES TO THEM.
+             *
+             * 883 of 1,371 million pixels go through blending, none are
+             * depth-rejected and none are masked - so the untextured
+             * geometry IS drawn and the blend is what decides whether any
+             * of it survives. Its colour combiner outputs the rasterised
+             * colour, which is white; the screen is not white. The alpha
+             * and the two factors are the only things left that can make
+             * white invisible, so they are counted here beside the colour
+             * environment that was already being counted. */
+            note_value(r->aenv_key, r->aenv_hits, &r->aenv_n,
+                       mgs_bp_get(&gx->bp, BP_TEV_ALPHA_ENV));
+            note_value(r->blend_key, r->blend_hits, &r->blend_n,
+                       (uint32_t)((r->blend_enable && !r->blend_noop) ? 0x10000u : 0u)
+                       | (uint32_t)(r->blend_src << 4) | (uint32_t)r->blend_dst
+                       | (uint32_t)(r->blend_sub ? 0x20000u : 0u));
+            {   /* And the alpha the combiner actually produces. */
+                MgsTevCompiled tc3;
+                MgsTevInput ti3;
+                mgs_tev_compile(&gx->bp, &tc3);
+                memset(&ti3, 0, sizeof ti3);
+                ti3.raster = a->color[0];
+                ti3.texture = 0xFFFFFFFFu;
+                note_value(r->outa_key, r->outa_hits, &r->outa_n,
+                           (mgs_tev_run_compiled(&tc3, &ti3) >> 24) & 0xFFu);
+            }
         }
 
         if (tex_enabled) {
@@ -1513,6 +1583,7 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
         sp.tex = tex; sp.tex_coord = tex_coord;
         sp.wrap_s = wrap_s; sp.wrap_t = wrap_t; sp.bilinear = bilinear;
         sp.alpha_always = alpha_always; sp.tev = tev;
+        sp.note_pixels = r->note_pixels;
         sp.stage_count = stage_n;
         if (stage_n) {
             unsigned k;

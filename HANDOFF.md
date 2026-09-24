@@ -12799,3 +12799,68 @@ hardware backend with a display.
 alone. A logo on black reads 8% and is perfect; the broken cinematic reads
 71% and is empty. It measures how much is non-black, which is not the same
 as how much is drawn.
+
+### F300 — the movie planes MATCH DOLPHIN EXACTLY, and the framebuffer is not where ours is
+
+The oracle can be read without any rendering backend at all: dump its MEM1
+and look at the same addresses. `dolphin-watch.py` already does the dump
+(`@path`, `DOLPHIN_DUMP_AT`), and Dolphin boots the extracted disc through
+`sys/main.dol` (F294).
+
+**The movie planes, same addresses, same moment:**
+
+                        Dolphin              port
+    luma 0x8120A0C0     min 12 max 119       min 19 max 129
+                        mean 41.3 sd 11.9    mean 42.2
+    chroma U 0x812320C0 mean 133.9           mean 134.4
+    chroma V 0x8123C0C0 mean 120.5           mean 120.3
+
+Those are the same frame. The disc read, the ring, the decoder, the plane
+addresses and the heap layout that produced them are all confirmed against
+the oracle. **Nothing upstream of the composite is wrong.**
+
+**And a thing worth knowing about the oracle.** Dolphin's memory at our
+framebuffer addresses - 0x80066480 and 0x8015A480 - is entirely ZERO and
+does not change between two dumps a second apart. That is not a divergence:
+Dolphin keeps XFB copies on the GPU by default, so nothing is written to
+guest RAM. Reading its screen out of memory needs the SOFTWARE renderer,
+which does the copies for real.
+
+**What not to re-propose:** searching Dolphin's MEM1 for a framebuffer by
+its YUV signature. There isn't one with the default backend, and a sweep of
+all 24 MB finds nothing because there is nothing to find.
+
+### F301 — the scene IS drawn white and then painted over (OPEN)
+
+Chasing "only the subtitles work", every link has now been measured and they
+contradict each other until the last one:
+
+    10,714,608 triangles drawn, only 400,880 asking for a texture
+    all 10.3M untextured ones: vertex colour 0xFFFFFFFF
+    colour env 0x08FACF  = a zero, b RASC, c one, d zero  -> the raster colour
+    alpha env  0x08FFD0  = d RASA                         -> 255, opaque
+    blend: OFF for all 10,313,728 of them
+    0 rejected by the depth test, 0 alpha-killed, 0 writes masked
+    10,675,154 land FULLY ON SCREEN (33,303 entirely off)
+    the colour actually written: 0xFFFFFFFF, sampled 22,788 times in 1024
+
+So white IS written to the embedded buffer, about 23 million pixels a run,
+five per cent of the screen a frame. And across 400 captured buffer states
+within one cinematic frame the brightest value ever seen is 39, with a
+single early state reaching 113.
+
+**It is drawn and then covered.** The buffer starts a frame with some
+brightness (mean 17.1, max 113) and ends flat (mean 23.3, max 39), so the
+full-screen work comes last: 96.9% of all pixels come from triangles larger
+than 1024 px, which are the composite and presentation quads.
+
+**The open question is the ORDER.** If the game renders the scene, copies
+the buffer to a texture and draws that texture back, the quad reproduces the
+scene. If the copy happens before the scene is drawn, the quad paints the
+previous state over it - which is what the screen looks like. Copies now run
+in stream order (F287b), so the sequence we execute should be the game's;
+that needs confirming against the oracle rather than assuming.
+
+**What not to re-propose:** any explanation that has the geometry missing,
+mis-transformed or rejected. It is drawn, on screen, opaque and white, and
+the numbers above say so one at a time.

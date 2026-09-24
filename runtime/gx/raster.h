@@ -85,6 +85,14 @@ typedef struct MgsGxRaster {
     unsigned  col_before[3], col_armed;
     unsigned  col_tex[3], col_tex_a;
     int       col_watch;
+    /* Untextured draws: the alpha environment, the blend state and the
+     * alpha the combiner produces. See the note at their use. */
+    uint32_t  aenv_key[16];   uint64_t aenv_hits[16];   unsigned aenv_n;
+    uint32_t  blend_key[16];  uint64_t blend_hits[16];  unsigned blend_n;
+    uint32_t  outa_key[16];   uint64_t outa_hits[16];   unsigned outa_n;
+    uint64_t  untex_onscreen, untex_offscreen, untex_straddle;
+    int       note_pixels;    /* MGS_TRACE_CENV: sample written colours */
+    uint32_t  outc_key[16];   uint64_t outc_hits[16];   unsigned outc_n;
     int       scissor_box[4], scissor_seen;
     /* Diagnostics, read once at init like every other option here. */
     const char* dump_composite;

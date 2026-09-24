@@ -1904,6 +1904,60 @@ int main(int argc, char** argv)
                                         printf("    0x%08X  x%llu\n",
                                                rs->rascol_key[k],
                                                (unsigned long long)rs->rascol_hits[k]);
+                                    printf("  untextured draws, the colour "
+                                           "ACTUALLY WRITTEN (1 pixel in "
+                                           "1024):\n");
+                                    for (k = 0; k < rs->outc_n; ++k)
+                                        printf("    0x%08X  x%llu\n",
+                                               rs->outc_key[k],
+                                               (unsigned long long)
+                                                   rs->outc_hits[k]);
+                                    printf("  untextured draws, where they "
+                                           "land: %llu fully on screen, "
+                                           "%llu straddling, %llu ENTIRELY "
+                                           "OFF\n",
+                                           (unsigned long long)
+                                               rs->untex_onscreen,
+                                           (unsigned long long)
+                                               rs->untex_straddle,
+                                           (unsigned long long)
+                                               rs->untex_offscreen);
+                                    printf("  untextured draws, "
+                                           "TEV_ALPHA_ENV:\n");
+                                    for (k = 0; k < rs->aenv_n; ++k) {
+                                        uint32_t e = rs->aenv_key[k];
+                                        printf("    0x%06X  a=%u b=%u c=%u "
+                                               "d=%u  bias=%u sub=%u dest=%u"
+                                               "  x%llu\n", e,
+                                               (e >> 13) & 7u, (e >> 10) & 7u,
+                                               (e >> 7) & 7u, (e >> 4) & 7u,
+                                               (e >> 16) & 3u, (e >> 18) & 1u,
+                                               (e >> 22) & 3u,
+                                               (unsigned long long)
+                                                   rs->aenv_hits[k]);
+                                    }
+                                    printf("  untextured draws, the alpha "
+                                           "the combiner produces:\n");
+                                    for (k = 0; k < rs->outa_n; ++k)
+                                        printf("    alpha %3u  x%llu\n",
+                                               rs->outa_key[k],
+                                               (unsigned long long)
+                                                   rs->outa_hits[k]);
+                                    printf("  untextured draws, blend "
+                                           "(0=zero 1=one 2=othercolour "
+                                           "3=1-that 4=srcA 5=1-srcA "
+                                           "6=dstA 7=1-dstA):\n");
+                                    for (k = 0; k < rs->blend_n; ++k) {
+                                        uint32_t b = rs->blend_key[k];
+                                        printf("    %s  src %u  dst %u%s"
+                                               "  x%llu\n",
+                                               (b & 0x10000u) ? "ON " : "off",
+                                               (b >> 4) & 0xFu, b & 0xFu,
+                                               (b & 0x20000u) ? "  subtract"
+                                                              : "",
+                                               (unsigned long long)
+                                                   rs->blend_hits[k]);
+                                    }
                                 }
                             }
                             if (getenv("MGS_TRACE_TEXIMG")) {
