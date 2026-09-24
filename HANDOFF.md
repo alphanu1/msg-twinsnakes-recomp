@@ -14096,3 +14096,46 @@ vertex loader already reads, and only flags a shader-constant update on it
 (`XFStructs.cpp`, `g_needs_cp_xf_consistency_check`). Our CP path is the
 authority and already correct. Recorded because "it is in the dropped list"
 is not the same as "it is a bug", and the next reader will wonder.
+
+### F325 — the frame rate: it is not the fence, and every benchmark so far measured the wrong scene
+
+Ben, with MangoHud over a real-time 3D scene: "it's the frame rate causing
+the issues. look, it shows you how much resource is being used as well, so
+it's not starved of resource." 15 fps, 68.1 ms a frame, GPU 15%, CPU 7%,
+VRAM 3.1 GB of 20.4.
+
+**The machine is not starved; the guest thread is.** Seven per cent of 32
+cores is about two cores, and the guest is single-threaded by design (one
+guest thread runs at a time, per the standing rules), so one fully saturated
+core reads as 3%. A machine-wide percentage cannot show a single-thread
+bound and will always look idle.
+
+**My prior was the readback's fence, and it is wrong.** F316 had already
+shown that cutting readback traffic by 65% bought only 2%, which I read as
+"the cost is the fence, not the bytes". Timing the two halves separately:
+
+    35,558 submits            1.27 s total   0.036 ms each
+     9,264 fenced readbacks   1.27 s total   0.137 ms each
+
+2.5 seconds of blocking in a run that produces 66.85 s of sound - under 4%.
+The fence is not the frame rate. Measured, not assumed, and that is the
+fourth confident wrong answer today, so the habit is now: instrument first.
+
+**THE REAL PROBLEM WITH EVERY PERFORMANCE NUMBER IN THIS PROJECT.** They are
+all of the intro movie. A headless run cannot press Start, so no benchmark
+here has ever reached gameplay, and the movie is a handful of large textured
+quads where a room is thousands of lit triangles. "+27% over real time" is
+true and is about the wrong scene. Ben has been testing the right one all
+along, which is why his numbers and mine never agreed.
+
+`MGS_TIME_FRAME=1` prints, every 50 framebuffer copies: readback, EFB copy,
+presentation, frame-cap sleep, and everything else. It is deliberately a
+report from the RUN THAT HAS THE PROBLEM rather than another benchmark of
+the intro.
+
+**Also from that screenshot:** MangoHud now reads VULKAN, so F323's renderer
+hint took; and the geometry is there - a character, railings, a console -
+which is F322 landing. What Ben reports as remaining is "no textures on the
+3d models". The counters say binds succeed (3,157,577 triangles ask for a
+texture, 0 fail) and 3,684 textures decode with 0 refusals, so whatever it
+is, it is not a decode or a bind failure.
