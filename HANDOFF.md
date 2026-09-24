@@ -267,6 +267,26 @@ renderer.
 
 ## WHAT NOT TO RE-PROPOSE
 
+- **"The frame rate is the recompiled code, there is no hotspot left"
+  (F329).** Flatly wrong, and it cost three sessions. The hotspot was a
+  diagnostic texture scan in our own `mgs_raster_triangle`, worth 12 -> 18
+  fps on the heavy scenes (F331). It hid because the profiler printed only
+  the top forty addresses and the loop's cost was spread over twenty of
+  them. **Before concluding anything from a profile, raise
+  `MGS_PROFILE_LINES` and sum by function** - do not read the top of the
+  list and judge its shape.
+- **Judging a headless audio run (F332).** With no device the mixer had no
+  clock and ran at ~94 MHz; it now self-paces, but a headless run still has
+  no device path, so it cannot settle anything Ben can hear.
+- **`SDL_VIDEODRIVER=dummy` for a GPU measurement (F334).** It has no GPU
+  backend and silently keeps the software rasteriser. Use `offscreen`,
+  which keeps a real Vulkan device and opens no window.
+- **Killing a run to end a timed benchmark (F334).** It throws away the exit
+  report, which is where the profile and the GPU counters are. Use
+  `MGS_RUN_SECONDS`.
+- **44.1 kHz anywhere in the audio path (F333).** The console does 32 kHz or
+  48 kHz; this game starts the interface at 32 kHz and AICR says so.
+
 - **Looking for a panning bug in the AX mixer (F315).** The two output
   channels are bit-identical because the game asks for that: 0 of 62,162
   voice-mixes want different left and right levels, and the only pair it
@@ -14311,6 +14331,16 @@ fallback if it recurs.
 
 ### F329 — after the texture hash, there is no hotspot left: it is the recompiled code
 
+> **WRONG, and corrected by F331.** There *was* a hotspot, it is the
+> line above that says `mgs_raster_triangle 9.79%`, and it was our code
+> rather than the recompiler's. Two things hid it. The profiler printed
+> only the top forty addresses, and the cost was spread across the
+> twenty instructions of an inner loop, so no single address rose above
+> 0.4% and the total was never formed. And the conclusion was drawn from
+> the *shape* of the list - "no single peak" - instead of from a sum.
+> The arithmetic at the end of this entry is still right; it just was
+> not what was limiting the frame rate.
+
 With `mgs_tex_get`'s per-triangle hashing gone (F327), a fresh profile of
 the heavy scene has no single peak at all:
 
@@ -14332,3 +14362,128 @@ that issued around 486M cycles - so the generated code costs on the order of
 45 host cycles per guest instruction on a 5 GHz machine. Making the port
 fast means making the recompiler's output better, or finding work to take
 off the single guest thread; it does not mean finding one more bad function.
+
+### F331 — the frame rate was a diagnostic texture scan running on every triangle
+
+Ben, twice: *"the sheer magnitude of triangles should not be an issue with a
+machine that's 25 years newer"*, and *"my PC resources are still really low"*.
+Both were right, and both were being argued against.
+
+**What the measurement said.** The per-copy decomposition (`MGS_TIME_FRAME=1`,
+the scene in Ben's screenshot, windowed, Vulkan):
+
+    50 frames in 2038.8 ms ( 24.5 fps): readback 146.4, efb copy 38.2,
+      present 66.1, fps-cap sleep 0.0, everything else 1788.1 ms
+      | 497896 drawn, 647162 submitted  =  3.591 us/triangle
+
+Readback, copies and presentation together are 12% of the frame. Everything
+else is 88%. And **4 microseconds per triangle is about 20,000 cycles at
+5 GHz** to hand one triangle to a GPU sitting at 17% - which is the shape of
+something pathological, not of a machine that is too slow.
+
+**Ablation named the half it was in.** `MGS_NO_RASTER=1` counts the triangle
+and returns, so the same run happens with the drawing removed:
+
+    50 frames in 1000.1 ms ( 50.0 fps) ... everything else 861.2 ms
+
+Exactly 50.0 fps, pinned at the guest's PAL rate. So guest execution, FIFO
+parsing, the copies, the readback and the presentation *all together* fit
+inside the frame budget with room to spare, and **100% of the shortfall was
+inside `mgs_raster_triangle`**.
+
+**What it was.** `runtime/gx/raster.c`, in the textured-draw path:
+
+    if (tex) {
+        for (yy = 0; yy < tex->height; yy += 16u)
+            for (xx = 1u; xx < tex->width; xx += 8u)
+                ... read two texels, take their luminance difference ...
+    }
+
+A **roughness scan of the whole bound texture, on every textured triangle,
+behind no flag at all**. For a 512x448 surface that is a 917 KB walk on a
+32-byte stride - cache-hostile by construction - repeated some 600,000 times
+per fifty frames. It was left over from the "which texture turns the buffer
+noisy" hunt and only ever fed two diagnostics: the `last texture ... r<n>`
+field on the `[video]` line, and the `MGS_FIND_TURN` listing.
+
+**The fix is where the value belongs, not a flag.** Roughness is a property
+of the decoded texels, and the texels cannot change while the texture is
+cached - a change re-decodes, which is what the content hash is for. So it
+is computed once per decode and stored in `MgsTexture::rough`: about 300
+decodes per fifty frames instead of 600,000 scans, with every diagnostic
+still working and reporting the same numbers.
+
+**Measured, same scene, same build otherwise:**
+
+| scene | before | after |
+|---|---|---|
+| heaviest (≈1.0M triangles / 50 frames) | 12.0 fps, 4.00 us/tri | **18.1 fps, 2.55 us/tri** |
+| typical (≈0.43M triangles / 50 frames) | 23.1 fps, 4.56 us/tri | 24.6 fps, 4.27 us/tri |
+
+A real gain on the heavy scenes and **not yet the whole story** - the light
+scenes barely moved, so there is more per-triangle cost still to find. What
+is settled is that the remaining cost is ours and is measurable.
+
+**How this was missed for so long, which is the transferable part.** The
+profiler printed the top forty addresses. This loop is about twenty
+instructions, so its cost arrived as twenty lines of 0.3-0.4% each, none of
+them remarkable, and nothing ever summed them. Three sessions of reading the
+top of that list produced F325, F327 and F329 - two dead ends and one flatly
+wrong conclusion. `MGS_PROFILE_LINES` now lifts the cap so every sample can
+be aggregated by function offline, which is how this was found in minutes.
+
+### F332 — the mixer thread free-ran when there was no audio device
+
+`mgs_audio_queued()` answers 0 both for "the card has caught up" and for
+"there is no card", and the new mixer thread (8056fe4) paced itself on
+`queued < 3840`. On a headless run that test is always true, so the thread
+mixed as fast as the machine allowed:
+
+    device: 0 frames queued, 8925030240 dropped (no device), 0 underruns
+
+**8.9 billion samples in 95 seconds** - about 94 MHz instead of 32 kHz - and
+one core saturated. It made `mgs_ax_dsp_frame` 41.6% of all process CPU
+samples in the headless profile, which is an artefact, not a finding about
+audio.
+
+Fixed by giving the no-device path its own sample clock at the nominal rate:
+1,924,000 samples in 60 s = 32,066 Hz. **This never affected a run with a
+real device** - Ben's audio was correct throughout, and he said so - but it
+made every headless audio measurement meaningless, and the earlier
+"`MGS_AUDIO_WAV` measures the mixer, not the device path" blind spot is now
+joined by "a headless mixer runs thousands of times too fast".
+
+### F333 — the audio rate is 32 kHz, and the register says so
+
+Asked whether it should be 44.1 kHz. It should not: the console's audio
+interface offers 32 kHz or 48 kHz and nothing else - 44.1 kHz is a CD rate -
+and which of the two is a fact about the game, not something to recall. AICR
+bit 1 picks it, so the port now prints it once when the game starts the
+interface:
+
+    [ai] the game started the audio interface at 32 kHz (AICR=0x00000021)
+
+Bit 1 clear. `AX_MIX_RATE` of 32000 is correct, from the hardware register
+rather than from memory.
+
+### F334 — benchmarks no longer need Ben's screen, and killing a run is not a way to end it
+
+Two process-level problems, both of which cost real time this session.
+
+**Every benchmark opened a window on Ben's desktop**, and a run that hit its
+time limit and exited looked exactly like a crash - he reported the game
+"crashing at *you have 2 mission objectives*" when what he was watching was
+my benchmark exiting. `SDL_VIDEODRIVER=offscreen` keeps a **real Vulkan
+device** (`[gpu] vulkan, 640x528 colour + depth`) while opening no window,
+so the GPU path is measured exactly and nothing appears on screen.
+`SDL_VIDEODRIVER=dummy` does *not* - it silently falls back to the software
+rasteriser, and a headless measurement taken that way is of the wrong
+renderer.
+
+**`SIGINT` is not a way to stop a timed run.** The flag is read only between
+dispatches, so a run inside a long one prints `[wedged]` and keeps going
+until the kill - and the exit report, which is where the profile and the GPU
+counters live, is thrown away with it. Every measurement before this had to
+be scraped from the periodic lines. `MGS_RUN_SECONDS=<n>` ends the run
+cleanly at a wall-clock time so the report is printed; a step count is not a
+substitute, because a step costs whatever the scene it is drawing costs.

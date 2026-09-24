@@ -70,6 +70,8 @@ static int       s_frame_timing = -1;
  * only honest way to name it: it is everything this file does not time. */
 static long long s_t_readback, s_t_copy, s_t_present, s_t_cap, s_t_last;
 static uint64_t  s_t_tri, s_t_sub, s_t_dec;
+/* The GPU path's own share of the same span. */
+static uint64_t  s_t_flush, s_t_gtri, s_t_up, s_t_subns;
 /* HOW MANY VIDEO FIELDS EACH DRAWN FRAME TOOK.
  *
  * A PAL field is exactly 810,000 ticks of a 40.5 MHz clock, so 20 ms
@@ -797,6 +799,37 @@ static void run_copy(uint32_t cmd)
                                 tri, sub, dec,
                                 tri ? 1000.0 * (span - rb - cp - pr - ca)
                                       / (double)tri : 0.0);
+                        /* AND WHAT THE GPU PATH COST, on this same thread.
+                         *
+                         * "everything else" is guest execution, FIFO
+                         * parsing AND the batch submissions, because
+                         * drawing is synchronous inside the parser. Those
+                         * are three completely different faults and the
+                         * line could not tell them apart. A batch is one
+                         * SDL command buffer - acquire, upload, render
+                         * pass, submit - so the count matters as much as
+                         * the time. */
+                        {
+                            uint64_t g_tri = 0, g_fl = 0, g_up = 0, g_hit = 0;
+                            uint64_t g_ns = 0, g_n = 0, g_fns = 0, g_fn = 0;
+                            mgs_gpu_batch_stats(&g_tri, &g_fl, &g_up, &g_hit);
+                            mgs_gpu_timing(&g_ns, &g_n, &g_fns, &g_fn);
+                            if (s_t_last && g_fl != s_t_flush)
+                                fprintf(stderr,
+                                    "[frametime]   GPU: %llu batches "
+                                    "(%.0f per frame, %.1f triangles each), "
+                                    "%llu texture uploads, submit %6.1f ms"
+                                    "\n",
+                                    (unsigned long long)(g_fl - s_t_flush),
+                                    (double)(g_fl - s_t_flush) / 50.0,
+                                    (g_fl - s_t_flush)
+                                      ? (double)(g_tri - s_t_gtri) /
+                                        (double)(g_fl - s_t_flush) : 0.0,
+                                    (unsigned long long)(g_up - s_t_up),
+                                    (double)(g_ns - s_t_subns) / 1e6);
+                            s_t_flush = g_fl; s_t_gtri = g_tri;
+                            s_t_up = g_up;    s_t_subns = g_ns;
+                        }
                         s_t_tri = s_raster.drawn;
                         s_t_sub = s_raster.submitted;
                         s_t_dec = s_raster.tex.decodes;

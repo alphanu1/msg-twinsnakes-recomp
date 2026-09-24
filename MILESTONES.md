@@ -1453,6 +1453,23 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [ ] Maintain a list of unsupported GX features, gated by game screen. Phase 3
       targets the first playable area only — indirect texturing, EFB
       peek/poke, Z-textures and bump mapping are where this phase overruns.
+- [ ] **The frame rate reaches the guest's own rate — 50 fps in gameplay,
+      25 in cutscenes** (F331). *Not met.* Partly done and measured rather
+      than guessed:
+      - With the drawing ablated (`MGS_NO_RASTER=1`) the run sits at exactly
+        **50.0 fps**, so guest execution, FIFO parsing, the copies, the
+        readback and presentation all fit the budget together. The whole
+        shortfall is inside `mgs_raster_triangle`, which is ours.
+      - A diagnostic roughness scan of the whole bound texture was running
+        on **every textured triangle** behind no flag — a 917 KB
+        cache-hostile walk, 600,000 times per fifty frames. Moved to the
+        decode, where the value actually belongs. Heaviest scene
+        **12.0 → 18.1 fps**, 4.00 → 2.55 us per triangle.
+      - Still ~2.5-4.3 us per triangle, so there is more per-triangle cost
+        to find. Light scenes barely moved, which is where to look next.
+      Measure it with `MGS_TIME_FRAME=1`; run headless with
+      `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
+      the run with `MGS_RUN_SECONDS` so the exit report survives.
 
 ---
 
@@ -1461,6 +1478,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
 *Exit: music, codec calls and SFX match Dolphin's output within tolerance.*
 
 - [ ] AX voice mixer, `AXRegisterCallback` at 5 ms, mix at 32 kHz into SDL3.
+      The rate is confirmed from the hardware register rather than assumed:
+      the game starts the audio interface with AICR bit 1 clear, which is
+      32 kHz (F333). The mixer runs on its own thread with the sound card's
+      clock, and its own 32 kHz clock when there is no card (F332).
 - [ ] DSP-ADPCM / AFC and PCM decoders, per-voice sample-rate conversion.
 - [ ] ARAM as a second 16 MB host buffer; DMA is a memcpy plus completion.
 - [ ] Disc streaming for voice-over and music.

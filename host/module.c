@@ -805,6 +805,9 @@ volatile const char* mgs_module_phase = "start";
 /* Cycles the translated code may run per dispatch call. See MGS_BUDGET. */
 static uint32_t s_budget = 100000u;
 
+/* MGS_RUN_SECONDS: when the run must stop, or zero for never. */
+static uint64_t run_until_ns;
+
 /* MGS_CYCLE_CENSUS: guest cycles run per dispatch call. */
 static int s_cycle_census;
 static uint64_t s_cycles_run, s_dispatches;
@@ -1010,6 +1013,17 @@ static double mgs_speed(void)
         if (sp <= 0.0) sp = 1.0;
     }
     return sp;
+}
+
+/* Plain monotonic nanoseconds. Separate from mgs_wall_ticks, which is in
+ * GUEST ticks and is scaled by mgs_speed(): a run limit measured in those
+ * would change length with the speed setting, which is the opposite of
+ * what a benchmark wants. */
+static uint64_t mgs_wall_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
 static uint64_t mgs_wall_ticks(void)
@@ -1559,6 +1573,24 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         heartbeat = env ? (uint64_t)strtoull(env, NULL, 0) : 0u;
         profile = getenv("MGS_PROFILE") != NULL;
         s_cycle_census = getenv("MGS_CYCLE_CENSUS") != NULL;
+        /* MGS_RUN_SECONDS=<n>: STOP THE RUN AT A WALL-CLOCK TIME.
+         *
+         * A benchmark needs a fixed amount of the SAME work, and the only
+         * limit this loop had was a step count - which is not a fixed
+         * amount of work, because a step costs whatever the scene it is
+         * drawing costs. Worse, the exit report is where the profile and
+         * the GPU counters are printed, and killing the process to end a
+         * timed run throws all of it away: every measurement so far has
+         * had to be read from the periodic lines instead.
+         *
+         * SIGINT is not a substitute. It is read only between dispatches,
+         * so a run inside a long one prints "[wedged]" and keeps going. */
+        env = getenv("MGS_RUN_SECONDS");
+        if (env) {
+            double sec = strtod(env, NULL);
+            if (sec > 0.0) run_until_ns = mgs_wall_now_ns() +
+                                          (uint64_t)(sec * 1e9);
+        }
         env = getenv("MGS_BUDGET");
         if (env) {
             unsigned long v = strtoul(env, NULL, 0);
@@ -2013,6 +2045,15 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         mgs_module_phase = "run-loop";
 
         if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
+        /* Checked on a stride, because clock_gettime per step would be a
+         * measurable share of what is being measured. 65,536 steps is well
+         * under a millisecond of guest execution. */
+        if (run_until_ns && (r.steps & 0xFFFFull) == 0ull &&
+            mgs_wall_now_ns() >= run_until_ns) {
+            fprintf(stderr, "[run] MGS_RUN_SECONDS reached; stopping "
+                            "cleanly so the exit report is printed\n");
+            mgs_module_interrupted = 1;
+        }
 
         if (caller_of && pc == caller_of) {
             const uint32_t* g = mgs_module_gpr(cpu);

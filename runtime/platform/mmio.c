@@ -1465,6 +1465,23 @@ void mgs_mmio_advance_ticks(MgsMmio* m, uint32_t ticks)
 
     if (!(control & AI_PLAYING)) return;
 
+    /* WHICH RATE THE GAME ASKED FOR, said once, from the register.
+     *
+     * The console's audio interface does 32 kHz or 48 kHz and nothing else
+     * - 44.1 kHz is a CD rate and is not one of its options - but which of
+     * the two this game picks is a fact about the game, not something to
+     * be recalled. Bit 1 of AICR is the answer and it costs one branch to
+     * print it. */
+    {
+        static int said;
+        if (!said) {
+            said = 1;
+            fprintf(stderr, "[ai] the game started the audio interface at "
+                            "%u kHz (AICR=0x%08X, bit 1 picks the rate)\n",
+                    (control & AI_48KHZ) ? 48u : 32u, control);
+        }
+    }
+
     m->ai_ticks += ticks;
 
     /* The Gekko timebase is the 162 MHz bus divided by four. */

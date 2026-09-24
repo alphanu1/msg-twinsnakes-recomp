@@ -39,6 +39,21 @@ typedef struct MgsTexture {
     uint32_t tlut_format;
     uint32_t* texels;         /* ARGB8888, width * height */
     uint64_t generation;      /* for least-recently-used replacement */
+    /* HOW BUSY THE DECODED TEXELS ARE, 0..255, computed ONCE HERE.
+     *
+     * The noise hunt wanted this per draw and got it by scanning the whole
+     * bound texture inside mgs_raster_triangle, on every textured triangle.
+     * For a 512x448 surface that is a 917 KB walk on a 32-byte stride -
+     * cache-hostile - repeated 600,000 times per fifty frames, and it was
+     * not behind any diagnostic flag. It was the single largest cost in the
+     * renderer and it held the game at 17-25 fps.
+     *
+     * Roughness is a property of the TEXELS, and the texels do not change
+     * while the texture is cached; a change re-decodes, because that is
+     * what the content hash is for. So it is computed where they are
+     * produced - some 300 decodes per fifty frames instead of 600,000
+     * scans - and every diagnostic that wanted it still has it. */
+    uint8_t  rough;
     int      valid;
 } MgsTexture;
 

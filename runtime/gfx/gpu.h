@@ -180,5 +180,11 @@ void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear);
 void mgs_gpu_stats(uint64_t* frames, uint64_t* readbacks, uint64_t* bytes);
 void mgs_gpu_batch_stats(uint64_t* tris, uint64_t* flushes,
                          uint64_t* uploads, uint64_t* cache_hits);
+/* Nanoseconds spent in SDL_SubmitGPUCommandBuffer and in the fenced
+ * readback, with the counts. MGS_TIME_GPU=1 fills these; without it they
+ * stay zero, because reading the clock twice per batch is not free at the
+ * rate batches are submitted. */
+void mgs_gpu_timing(uint64_t* ns_submit, uint64_t* n_submit,
+                    uint64_t* ns_fence, uint64_t* n_fence);
 
 #endif

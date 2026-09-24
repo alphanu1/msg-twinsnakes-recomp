@@ -159,6 +159,26 @@ void mgs_profile_report(void)
     }
     /* Offsets, not absolute addresses: an offset can be fed straight to
      * addr2line against the binary, which is the point of printing them. */
+    /* MGS_PROFILE_LINES raises the cap. Forty names the hottest function
+     * and cannot say how a COST is spread: the per-draw texture scan that
+     * held the renderer at 17 fps never put one address above 0.4%, because
+     * its samples were spread over the twenty instructions of an inner
+     * loop. Summed by function it was the largest thing in the program.
+     * Aggregating needs every line, not the top of the list. */
+    {
+        const char* e = getenv("MGS_PROFILE_LINES");
+        unsigned long lim = e ? strtoul(e, NULL, 0) : 40ul;
+        if (lim < 1ul) lim = 40ul;
+        if (lim > PROF_SLOTS) lim = PROF_SLOTS;
+        for (i = 0; i < n && i < lim; ++i) {
+            unsigned s = order[i];
+            fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx\n",
+                    100.0 * (double)prof_hits[s] /
+                    (double)(prof_total ? prof_total : 1ul),
+                    prof_hits[s], prof_pc[s] - prof_base);
+        }
+        return;
+    }
     for (i = 0; i < n && i < 40u; ++i) {
         unsigned s = order[i];
         fprintf(stderr, "[profile] %6.2f%%  %8lu  +0x%lx\n",

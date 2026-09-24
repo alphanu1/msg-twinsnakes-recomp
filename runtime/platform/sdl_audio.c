@@ -143,6 +143,8 @@ void mgs_audio_pace(void)
     }
 }
 
+int mgs_audio_have_device(void) { return s_stream != NULL; }
+
 unsigned mgs_audio_queued(void)
 {
     int bytes;
@@ -158,6 +160,7 @@ int  mgs_audio_open(unsigned rate) { (void)rate; return 0; }
 void mgs_audio_close(void) { }
 void mgs_audio_push(const int16_t* s, unsigned n) { (void)s; s_dropped += n; }
 unsigned mgs_audio_queued(void) { return 0u; }
+int  mgs_audio_have_device(void) { return 0; }
 void mgs_audio_pace(void) { }
 
 #endif

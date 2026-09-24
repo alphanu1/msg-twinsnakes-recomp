@@ -375,16 +375,50 @@ static void*      s_ax_cpu;
 int mgs_ax_thread_active(void);
 int mgs_ax_thread_active(void) { return s_ax_thread_on; }
 
+/* Monotonic nanoseconds, for the case where there is no card to pace on. */
+static uint64_t ax_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
 static void* ax_thread_main(void* arg)
 {
     /* Roughly 120 ms of slack at 32 kHz. Deep enough that a slow frame on
      * the guest thread cannot be heard, shallow enough that a sound follows
      * its picture. */
     const unsigned target = 3840u;
+    /* WITH NO CARD, THE WALL CLOCK IS THE CARD.
+     *
+     * mgs_audio_queued answers 0 for "caught up" AND for "no device", so
+     * the queue-depth test was always true on a headless run and this loop
+     * mixed as fast as the machine allowed: 8.9 billion samples in 95
+     * seconds, one core saturated, and every headless audio measurement
+     * taken against a mixer running thousands of times too fast.
+     *
+     * So when there is no device the thread keeps its own sample clock at
+     * the nominal rate. Audio is still never paced by the frame rate -
+     * which is the whole point of this thread - it is paced by a clock
+     * that runs at 32 kHz whether or not anything is listening. */
+    const int have_dev = mgs_audio_have_device();
+    uint64_t t0 = ax_now_ns();
+    uint64_t produced = 0ull;      /* output samples, no-device path only */
     (void)arg;
     while (!s_ax_stop) {
-        if (mgs_audio_queued() < target) {
+        int behind;
+        if (have_dev) {
+            behind = mgs_audio_queued() < target;
+        } else {
+            /* How many samples a 32 kHz card would have consumed by now,
+             * plus the same slack the real path keeps ahead. */
+            uint64_t due = (uint64_t)((double)(ax_now_ns() - t0) *
+                                      (double)AX_MIX_RATE / 1e9);
+            behind = produced < due + target;
+        }
+        if (behind) {
             mgs_ax_dsp_frame(s_ax_cpu);
+            produced += AX_FRAME_SAMPLES;
         } else {
             struct timespec ts;
             ts.tv_sec = 0; ts.tv_nsec = 1000000L;   /* 1 ms */

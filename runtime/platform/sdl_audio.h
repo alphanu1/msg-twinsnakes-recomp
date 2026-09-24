@@ -30,6 +30,13 @@ void mgs_audio_push(const int16_t* stereo, unsigned frames);
  * bug this whole subsystem exists to expose. */
 unsigned mgs_audio_queued(void);
 
+/* Whether a device was actually opened. mgs_audio_queued answers 0 both for
+ * "the card has caught up" and for "there is no card", and the mixer thread
+ * cannot pace itself on a number that means both: with no device it read 0
+ * for ever and mixed flat out, producing 8.9 BILLION samples in 95 seconds
+ * and burning a core. A headless run needs a clock of its own. */
+int mgs_audio_have_device(void);
+
 /* Hold the guest to the device's clock. Called from the RUN LOOP, not from
  * the mixer: sleeping inside the DSP interrupt stops the guest mid-service
  * and lets the audio interrupt backlog through in a burst when it wakes. */

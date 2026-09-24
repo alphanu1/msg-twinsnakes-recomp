@@ -1551,31 +1551,20 @@ void mgs_raster_triangle(MgsGx* gx, const MgsGxVertex* a,
              * noisy while the last LARGE texture sampled is clean, so what
              * does it is smaller than the old threshold - or is not a
              * texture at all, which an empty log would say just as clearly. */
+            /* THE DRAW LOG: four stores, and the roughness read from the
+             * texture rather than measured here.
+             *
+             * This used to scan the whole bound texture at this point, on
+             * every textured triangle - see MgsTexture::rough for what that
+             * cost and why it moved to the decode. */
             if (tex) {
-                unsigned yy, c2 = 0u, r2 = 0u;
-                for (yy = 0; yy < tex->height; yy += 16u) {
-                    unsigned xx;
-                    for (xx = 1u; xx < tex->width; xx += 8u) {
-                        uint32_t a = tex->texels[yy * tex->width + xx - 1u];
-                        uint32_t b = tex->texels[yy * tex->width + xx];
-                        int va = (int)(((a >> 16) & 0xFF) + ((a >> 8) & 0xFF)
-                                       + (a & 0xFF)) / 3;
-                        int vb = (int)(((b >> 16) & 0xFF) + ((b >> 8) & 0xFF)
-                                       + (b & 0xFF)) / 3;
-                        r2 += (unsigned)(va > vb ? va - vb : vb - va);
-                        ++c2;
-                    }
-                }
-                {
-                    unsigned i2 = r->drawlog_at & 63u;
-                    r->drawlog_addr[i2] = tex->addr;
-                    r->drawlog_w[i2] = (uint16_t)tex->width;
-                    r->drawlog_h[i2] = (uint16_t)tex->height;
-                    r->drawlog_fmt[i2] = (uint8_t)tex->format;
-                    r->drawlog_rough[i2] = (uint8_t)(c2 ? (r2 / c2 > 255u ? 255u
-                                                          : r2 / c2) : 0u);
-                    ++r->drawlog_at;
-                }
+                unsigned i2 = r->drawlog_at & 63u;
+                r->drawlog_addr[i2] = tex->addr;
+                r->drawlog_w[i2] = (uint16_t)tex->width;
+                r->drawlog_h[i2] = (uint16_t)tex->height;
+                r->drawlog_fmt[i2] = (uint8_t)tex->format;
+                r->drawlog_rough[i2] = tex->rough;
+                ++r->drawlog_at;
             }
 
             /* MGS_DUMP_COMPOSITE=<dir>: the three planes a composite draw

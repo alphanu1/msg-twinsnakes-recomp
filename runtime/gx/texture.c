@@ -965,6 +965,26 @@ no_dump:
     t->width = (uint16_t)width; t->height = (uint16_t)height;
     t->tlut_addr = tlut_addr; t->tlut_format = tlut_format;
     t->generation = ++c->clock;
+    /* The roughness the draw log reports. Same stride the per-draw scan
+     * used, so the numbers in an old log and a new one mean the same
+     * thing. */
+    {
+        unsigned yy, c2 = 0u, r2 = 0u;
+        for (yy = 0; yy < height; yy += 16u) {
+            unsigned xx;
+            for (xx = 1u; xx < width; xx += 8u) {
+                uint32_t p0 = t->texels[yy * width + xx - 1u];
+                uint32_t p1 = t->texels[yy * width + xx];
+                int va = (int)(((p0 >> 16) & 0xFF) + ((p0 >> 8) & 0xFF)
+                               + (p0 & 0xFF)) / 3;
+                int vb = (int)(((p1 >> 16) & 0xFF) + ((p1 >> 8) & 0xFF)
+                               + (p1 & 0xFF)) / 3;
+                r2 += (unsigned)(va > vb ? va - vb : vb - va);
+                ++c2;
+            }
+        }
+        t->rough = (uint8_t)(c2 ? (r2 / c2 > 255u ? 255u : r2 / c2) : 0u);
+    }
     t->valid = 1;
     ++c->decodes;
     return memo_put(c, addr, format, width, height, tlut_addr, tlut_format, t);
