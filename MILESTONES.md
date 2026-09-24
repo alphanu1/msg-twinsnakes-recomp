@@ -1481,10 +1481,12 @@ This is the project. ~200 functions and the widest error bars in the plan.
         (F343): +19% throughput on the step clock, heavy scenes 21.9-23.8
         fps. Textures made from EFB copies are now cached on the GPU
         instead of re-uploaded per batch (F345): uploads ~1,900 -> ~270 per
-        fifty frames, heaviest scene 24.0 fps. Remaining, in order of size:
-        render-to-texture copies kept on the GPU (80% of the readback
-        stall), the patched-call round trip through the host loop (~5%,
-        recompiler structure), per-primitive draw state (~5%).
+        fifty frames, heaviest scene 24.0 fps. Render-to-texture copies
+        now stay on the GPU (F346): 7% less CPU and 9% less wall time for
+        the same guest work, readbacks 13,324 -> 4,331 a run. Remaining:
+        the patched-call round trip through the host loop (~5%, recompiler
+        structure), per-primitive draw state (~5%), and presenting the frame
+        copy from the GPU instead of reading it back.
       Measure it with `MGS_TIME_FRAME=1`; run headless with
       `SDL_VIDEODRIVER=offscreen` (a real Vulkan device, no window) and end
       the run with `MGS_RUN_SECONDS` so the exit report survives. Read the

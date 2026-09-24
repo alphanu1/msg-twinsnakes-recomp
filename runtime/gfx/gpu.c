@@ -27,6 +27,11 @@ static SDL_GPUBuffer*         s_vbuf;
 static unsigned               s_vbuf_verts;
 static SDL_GPUTexture*        s_white;
 static SDL_GPUTextureFormat   s_depth_format;
+/* The colour target's format, which a GPU-resident copy must share. */
+static SDL_GPUTextureFormat   s_colour_format;
+static uint64_t              s_gpu_copies;
+uint64_t mgs_gpu_copies(void);
+uint64_t mgs_gpu_copies(void) { return s_gpu_copies; }
 
 /* One sampler per (wrap_s, wrap_t, filter). Eighteen at most, built on
  * first sight and kept - a sampler object is cheap and there is no reason
@@ -134,6 +139,7 @@ int mgs_gpu_init(unsigned width, unsigned height)
     memset(&ci, 0, sizeof ci);
     ci.type = SDL_GPU_TEXTURETYPE_2D;
     ci.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    s_colour_format = ci.format;
     ci.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
     ci.width = width;
     ci.height = height;
@@ -1006,6 +1012,76 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
     s_batch[s_batch_n++] = *c;
 }
 
+int mgs_gpu_copy_to_texture(unsigned x, unsigned y, unsigned w, unsigned h,
+                            uint64_t key)
+{
+    /* A COPY TO A TEXTURE THAT NEVER LEAVES THE GPU.
+     *
+     * Every render-to-texture copy used to be read back through a fence,
+     * encoded into guest memory as RGBA8 tiles, snapshotted, decoded again
+     * when the game bound it, and uploaded again: 80% of the readback stall
+     * - about five a frame - for texels that were on the GPU to begin
+     * with. Here the rectangle is copied GPU to GPU into a texture of its
+     * own and filed in the texture cache under the key the lookup will ask
+     * for (mgs_tex_efb_key), so the draw that samples it binds it directly.
+     *
+     * Recorded after the draws in the same command buffer, so it copies
+     * exactly what they produced. Returns 0 if it could not, and the caller
+     * falls back to the readback path. */
+    SDL_GPUTextureCreateInfo ci;
+    SDL_GPUTexture* t;
+    SDL_GPUCommandBuffer* cmd;
+    SDL_GPUCopyPass* cp;
+    SDL_GPUTextureLocation src, dst;
+    unsigned i, victim = 0;
+    uint64_t oldest = ~0ull;
+
+    if (!s_dev || !s_colour || !w || !h || !key) return 0;
+    if (x >= s_w || y >= s_h) return 0;
+    if (w > s_w - x) w = s_w - x;
+    if (h > s_h - y) h = s_h - y;
+
+    mgs_gpu_batch_flush();
+    memset(&ci, 0, sizeof ci);
+    ci.type = SDL_GPU_TEXTURETYPE_2D;
+    ci.format = s_colour_format;
+    ci.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ci.width = w; ci.height = h;
+    ci.layer_count_or_depth = 1; ci.num_levels = 1;
+    ci.sample_count = SDL_GPU_SAMPLECOUNT_1;
+    t = SDL_CreateGPUTexture(s_dev, &ci);
+    if (!t) return 0;
+    cmd = gpu_cmd();
+    if (!cmd) { SDL_ReleaseGPUTexture(s_dev, t); return 0; }
+    cp = SDL_BeginGPUCopyPass(cmd);
+    if (!cp) { SDL_ReleaseGPUTexture(s_dev, t); return 0; }
+    memset(&src, 0, sizeof src);
+    memset(&dst, 0, sizeof dst);
+    src.texture = s_colour; src.x = x; src.y = y;
+    dst.texture = t;
+    SDL_CopyGPUTextureToTexture(cp, &src, &dst, w, h, 1, false);
+    SDL_EndGPUCopyPass(cp);
+
+    /* Into the cache, replacing anything already filed under this key and
+     * otherwise the least recently used entry. Releasing an entry that a
+     * recorded draw still samples is safe: SDL frees it once the command
+     * buffers using it have finished. */
+    for (i = 0; i < GPU_TEX_SLOTS; ++i)
+        if (s_gtex[i].tex && s_gtex[i].key == key) { victim = i; oldest = 0; break; }
+    if (oldest) {
+        for (i = 0; i < GPU_TEX_SLOTS; ++i) {
+            if (!s_gtex[i].tex) { victim = i; break; }
+            if (s_gtex[i].used < oldest) { oldest = s_gtex[i].used; victim = i; }
+        }
+    }
+    if (s_gtex[victim].tex) SDL_ReleaseGPUTexture(s_dev, s_gtex[victim].tex);
+    s_gtex[victim].tex = t;
+    s_gtex[victim].key = key;
+    s_gtex[victim].used = ++s_gtex_clock;
+    ++s_gpu_copies;
+    return 1;
+}
+
 void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                         uint32_t argb, uint32_t z24,
                         int colour, int alpha, int depth)
@@ -1179,6 +1255,10 @@ void mgs_gpu_batch_tri(const MgsGpuVertex* a, const MgsGpuVertex* b,
 void mgs_gpu_batch_flush(void) { }
 void mgs_gpu_submit(void) { }
 void mgs_gpu_begin_frame(uint32_t c, int d) { (void)c; (void)d; }
+int mgs_gpu_copy_to_texture(unsigned x, unsigned y, unsigned w, unsigned h,
+                            uint64_t key)
+{ (void)x; (void)y; (void)w; (void)h; (void)key; return 0; }
+uint64_t mgs_gpu_copies(void) { return 0; }
 void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                         uint32_t argb, uint32_t z24, int c, int a, int d)
 { (void)x; (void)y; (void)w; (void)h; (void)argb; (void)z24;

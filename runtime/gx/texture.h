@@ -108,6 +108,9 @@ typedef struct MgsTexCache {
      * handful. Counted in a 65,536-entry bitset over RGB565-quantised
      * colour, which is exact in that space and costs 8 KB of stack. */
     uint64_t dec_colours[16];
+    /* Copy-derived textures bound without a decode because the copy
+     * lives on the GPU. */
+    uint64_t gpu_copies_bound;
 
 } MgsTexCache;
 
@@ -170,6 +173,15 @@ uint32_t mgs_tex_sample(const MgsTexture* t, float u, float v,
  * place does. Saying so here is what lets the cache keep serving texels that
  * main memory no longer holds - which is what the hardware does. */
 void mgs_tex_note_efb_copy(uint32_t addr);
+
+/* GPU-resident copies. The serial the latest copy to `addr` was given; mark
+ * that copy as living on the GPU (its texels were never written to memory);
+ * and the key both caches know it by. See texture.c. */
+uint32_t mgs_tex_efb_copy_serial(uint32_t addr);
+void     mgs_tex_mark_gpu_copy(uint32_t addr, uint32_t format,
+                               unsigned width, unsigned height);
+uint64_t mgs_tex_efb_key(uint32_t addr, uint32_t serial, uint32_t format,
+                         unsigned width, unsigned height, uint32_t tlut_addr);
 
 /* ...and keep the bytes it deposited, because the decode happens later, at
  * bind time, and a copy to the framebuffer in between rewrites the same

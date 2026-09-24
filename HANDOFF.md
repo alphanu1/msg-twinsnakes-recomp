@@ -308,6 +308,7 @@ renderer.
   The transform is 0.5% of the program; parsing the vertex stream is the
   cost, and it stays on the CPU either way.
 - **Benchmarking while the machine is shared (F343).** Check `uptime` first.
+  If it is shared anyway, compare CPU time over fixed steps (F346).
 
 
 - **Looking for a panning bug in the AX mixer (F315).** The two output
@@ -14855,3 +14856,44 @@ not misses outside the window: `OSDisableInterrupts` and
 in the engine - and a patched call returns all the way to the host loop and
 re-enters at the caller. That round trip is the cost, and it is the
 recompiler's structure, not the lookup.
+
+### F346 — render-to-texture copies stay on the GPU
+
+Every texture copy this game makes is RGBA8 (`MGS_TRACE_RTT`): three 64x64
+caption surfaces and a 512x448 scene a frame, one of them into the
+framebuffer's own memory. Each was read back through a fence, encoded into
+guest RAM as RGBA8 tiles, snapshotted, decoded when bound, and uploaded -
+for texels that were on the GPU to begin with, and 80% of the readback
+stall (F345).
+
+Now such a copy is a GPU-to-GPU copy of the colour target's rectangle into
+a texture of its own, filed in the GPU texture cache under the copy's key.
+The texture cache marks the copy as GPU-resident and binds it without a
+decode (zeroed texels on the CPU side, so the diagnostics that read them on
+a decode stay defined). One key function, `mgs_tex_efb_key`, serves both
+sides so they cannot drift, and the lookup uses the key the copy was FILED
+under - its own format and size - so a game sampling it at a different size
+still finds it.
+
+Dolphin runs this game the same way: its settings for it leave "store EFB
+copies to texture only" at its default, on. Frame copies, other formats,
+the software renderer and the diagnostics that inspect a copy's bytes keep
+the readback path, and `MGS_RTT_READBACK=1` forces it for an A/B.
+
+**Measured under load** (Quartus was using the machine again, load average
+50, so wall-clock frame rates were meaningless): the same fixed number of
+guest steps on the deterministic clock, both paths run side by side -
+
+| | user CPU | sys | wall |
+|---|---|---|---|
+| readback path | 114.8 s | 3.0 s | 126.3 s |
+| GPU-resident | 107.0 s | 1.8 s | 115.0 s |
+
+**7% less CPU, 9% less wall time.** Readbacks in a run fell from 13,324 to
+4,331 - the frame copies alone. Stable frames on the step clock are
+byte-identical to the previous build, and a contact sheet across the whole
+intro - captions, the scene composite, the name cards - renders correctly.
+
+**How to measure when the machine is shared:** fix `MGS_STEPS` on
+`MGS_GUEST_CLOCK=steps`, run the two variants concurrently, and compare
+CPU time. Wall-clock fps from a shared machine is not evidence.

@@ -325,7 +325,8 @@ void mgs_gx_order_dump(const char* label)
  * COPY made it, not by what main memory says now. A serial per address,
  * bumped by each copy there; ordinary textures keep the content hash,
  * because those really are changed by writing to them. */
-static struct { uint32_t addr, serial; } s_efb_copy[32];
+static struct { uint32_t addr, serial, gpu_serial, gpu_fmt;
+                unsigned gpu_w, gpu_h; } s_efb_copy[32];
 static unsigned s_efb_copy_n;
 
 void mgs_tex_note_efb_copy(uint32_t addr)
@@ -336,8 +337,71 @@ void mgs_tex_note_efb_copy(uint32_t addr)
     if (s_efb_copy_n < 32u) {
         s_efb_copy[s_efb_copy_n].addr = addr;
         s_efb_copy[s_efb_copy_n].serial = 1u;
+        s_efb_copy[s_efb_copy_n].gpu_serial = 0u;
         ++s_efb_copy_n;
     }
+}
+
+uint32_t mgs_tex_efb_copy_serial(uint32_t addr)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr) return s_efb_copy[i].serial;
+    return 0u;
+}
+
+/* THIS COPY LIVES ON THE GPU. Its texels were never written to main memory
+ * or snapshotted, so decoding them would read whatever was there before;
+ * the GPU texture cache holds the real thing under mgs_tex_efb_key. */
+void mgs_tex_mark_gpu_copy(uint32_t addr, uint32_t format,
+                           unsigned width, unsigned height)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr) {
+            s_efb_copy[i].gpu_serial = s_efb_copy[i].serial;
+            s_efb_copy[i].gpu_fmt = format;
+            s_efb_copy[i].gpu_w = width;
+            s_efb_copy[i].gpu_h = height;
+            return;
+        }
+}
+
+/* The key a GPU-resident copy was FILED under - its own format and size,
+ * not the ones it is being sampled with, which the game is free to choose
+ * differently. Zero if the latest copy here is not on the GPU. */
+static uint64_t efb_gpu_key(uint32_t addr, uint32_t serial)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr && serial &&
+            s_efb_copy[i].gpu_serial == serial)
+            return mgs_tex_efb_key(addr, serial, s_efb_copy[i].gpu_fmt,
+                                   s_efb_copy[i].gpu_w, s_efb_copy[i].gpu_h, 0u);
+    return 0u;
+}
+
+static int efb_copy_on_gpu(uint32_t addr, uint32_t serial)
+{
+    unsigned i;
+    for (i = 0; i < s_efb_copy_n; ++i)
+        if (s_efb_copy[i].addr == addr)
+            return serial && s_efb_copy[i].gpu_serial == serial;
+    return 0;
+}
+
+/* The key a copy-derived texture is known by, to both the texture cache
+ * and the GPU's own cache: which copy, and how it is being read. One
+ * function, so the side that CREATES a GPU-resident copy and the side that
+ * LOOKS IT UP cannot drift apart. */
+uint64_t mgs_tex_efb_key(uint32_t addr, uint32_t serial, uint32_t format,
+                         unsigned width, unsigned height, uint32_t tlut_addr)
+{
+    uint64_t k = 0xEFBC0000000000ull
+               ^ ((uint64_t)addr << 20) ^ ((uint64_t)serial << 1)
+               ^ ((uint64_t)format << 56) ^ ((uint64_t)width * 2654435761ull)
+               ^ ((uint64_t)height * 40503ull) ^ ((uint64_t)tlut_addr << 8);
+    return k ? k : 1u;
 }
 
 /* AND WHAT THE COPY PUT THERE.
@@ -608,11 +672,10 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
          * ~250 decodes, almost all of them copies being re-sent unchanged.
          * The copy's own identity - where, which copy, and how it is being
          * read - is a key that changes exactly when the texels can. */
-        hash = 0xEFBC0000000000ull
-             ^ ((uint64_t)addr << 20) ^ ((uint64_t)serial << 1)
-             ^ ((uint64_t)format << 56) ^ ((uint64_t)width * 2654435761ull)
-             ^ ((uint64_t)height * 40503ull) ^ ((uint64_t)tlut_addr << 8);
-        if (!hash) hash = 1u;
+        hash = efb_gpu_key(addr, serial);
+        if (!hash)
+            hash = mgs_tex_efb_key(addr, serial, format, width, height,
+                                   tlut_addr);
     } else {
         unsigned nbytes = texture_bytes(format, width, height);
         const uint8_t* src = nbytes ? guest_ptr(mem, addr, nbytes) : NULL;
@@ -751,6 +814,15 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
     }
 
     t = reuse ? reuse : find_slot(c);
+    /* A copy that lives on the GPU is not decoded: nothing wrote its texels
+     * to memory. Zeroed rather than left uninitialised, because the
+     * diagnostics that run on a decode read them. */
+    if (serial && efb_copy_on_gpu(addr, serial)) {
+        t->texels = (uint32_t*)calloc((size_t)width * height, sizeof(uint32_t));
+        if (!t->texels) { ++c->refused; ++c->refused_alloc; return NULL; }
+        ++c->gpu_copies_bound;
+        goto decoded;
+    }
     t->texels = (uint32_t*)malloc((size_t)width * height * sizeof(uint32_t));
     if (!t->texels) { ++c->refused; ++c->refused_alloc; return NULL; }
 
@@ -764,6 +836,7 @@ const MgsTexture* mgs_tex_get(MgsTexCache* c, const GuestMemory* mem,
                     format, width, height, addr);
         return NULL;
     }
+decoded:
 
     /* WHAT IS ACTUALLY BEING DECODED, by shape.
      *

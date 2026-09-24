@@ -187,6 +187,12 @@ void mgs_gpu_clear_rect(unsigned x, unsigned y, unsigned w, unsigned h,
                         uint32_t argb, uint32_t z24,
                         int colour, int alpha, int depth);
 
+/* Copy a rectangle of the colour target into a texture kept on the GPU and
+ * filed in its texture cache under `key`. 0 if it could not. */
+int mgs_gpu_copy_to_texture(unsigned x, unsigned y, unsigned w, unsigned h,
+                            uint64_t key);
+uint64_t mgs_gpu_copies(void);
+
 /* Clear the colour target, for the copy that clears. */
 void mgs_gpu_begin_frame(uint32_t clear_argb, int do_clear);
 

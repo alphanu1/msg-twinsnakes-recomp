@@ -362,6 +362,30 @@ void mgs_display_set_best_path(const char* p) { s_best_path = p; }
  * of the byte stream. The stream cannot be read without knowing where
  * commands begin, and a destination address taken from a false match writes
  * 600 KB of framebuffer over whatever it points at. */
+/* SHOULD THIS COPY STAY ON THE GPU?
+ *
+ * A copy to a TEXTURE in RGBA8 - every render-to-texture copy this game
+ * makes (MGS_TRACE_RTT: three 64x64 caption surfaces and a 512x448 scene a
+ * frame) - is copied GPU to GPU and never read back, encoded or decoded.
+ * Dolphin runs this game the same way by default: its settings for it
+ * leave "store EFB copies to texture only" on.
+ *
+ * Copies to the framebuffer, other formats, the software renderer, and the
+ * diagnostics that inspect a copy's bytes all keep the readback path.
+ * MGS_RTT_READBACK=1 forces it everywhere, for an A/B. */
+static uint64_t s_rtt_fallbacks;
+static int rtt_on_gpu(uint32_t cmd)
+{
+    static int off = -1;
+    if (off < 0)
+        off = getenv("MGS_RTT_READBACK") != NULL ||
+              getenv("MGS_NO_RTT") != NULL ||
+              getenv("MGS_TRACE_COPYSRC") != NULL ||
+              getenv("MGS_CHECK_ENCODE") != NULL;
+    return !off && mgs_gpu_ready() && !(cmd & COPY_TO_XFB) &&
+           copy_tex_format(cmd) == 0x6u;
+}
+
 static void run_copy(uint32_t cmd)
 {
     /* BRING THE GPU'S WORK BACK BEFORE ANYTHING LOOKS AT THE BUFFER.
@@ -420,12 +444,18 @@ static void run_copy(uint32_t cmd)
         uint32_t box_wh = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_WH);
         unsigned bx = box_tl & 0x3FFu, by = (box_tl >> 10) & 0x3FFu;
         long long t0 = s_frame_timing ? frame_now_ns() : 0ll;
+        if (rtt_on_gpu(cmd)) goto no_readback;
         mgs_gpu_batch_flush();
         mgs_gpu_read_back_rect(s_efb.pixels, 0u, 0u,
                                bx + (box_wh & 0x3FFu) + 1u,
                                by + ((box_wh >> 10) & 0x3FFu) + 1u,
                                MGS_EFB_WIDTH);
-        if (s_frame_timing) {
+        if (0) {
+no_readback:
+            /* A render-to-texture copy kept on the GPU needs nothing from
+             * this side. See rtt_on_gpu. */
+            (void)t0; (void)bx; (void)by; (void)box_wh;
+        } else if (s_frame_timing) {
             long long dt = frame_now_ns() - t0;
             s_t_readback += dt;
             /* Which kind of copy the stall belongs to: the one frame copy,
@@ -892,7 +922,64 @@ static void run_copy(uint32_t cmd)
                  * the code did before render-to-texture existed, and the
                  * screen was better for it. */
                 uint32_t tl = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
+                /* MGS_TRACE_RTT: what the render-to-texture copies are, by
+                 * shape and destination, so keeping them on the GPU is
+                 * designed for the copies the game actually makes. */
+                {
+                    static int on = -1;
+                    static struct { uint32_t key, dest; uint64_t n; } seen[32];
+                    static unsigned ns, total;
+                    if (on < 0) on = getenv("MGS_TRACE_RTT") != NULL;
+                    if (on) {
+                        uint32_t key = (copy_tex_format(cmd) << 24) ^
+                                       (copy_w << 12) ^ copy_h;
+                        unsigned k;
+                        for (k = 0; k < ns; ++k)
+                            if (seen[k].key == key &&
+                                seen[k].dest == s_efb.copy_dest) break;
+                        if (k == ns && ns < 32u) {
+                            seen[ns].key = key; seen[ns].dest = s_efb.copy_dest;
+                            seen[ns].n = 0; ++ns;
+                        }
+                        if (k < 32u) ++seen[k].n;
+                        if (++total % 3000u == 0u)
+                            for (k = 0; k < ns; ++k)
+                                fprintf(stderr, "[rtt] fmt 0x%X %ux%u -> "
+                                        "0x%08X  x%llu  (src %u,%u)\n",
+                                        seen[k].key >> 24,
+                                        (seen[k].key >> 12) & 0xFFFu,
+                                        seen[k].key & 0xFFFu, seen[k].dest,
+                                        (unsigned long long)seen[k].n,
+                                        tl & 0x3FFu, (tl >> 10) & 0x3FFu);
+                    }
+                }
                 mgs_gx_order_note('T');
+                if (rtt_on_gpu(cmd)) {
+                    uint32_t dest = s_efb.copy_dest;
+                    uint32_t serial;
+                    mgs_tex_note_efb_copy(dest);
+                    serial = mgs_tex_efb_copy_serial(dest);
+                    if (dest && serial &&
+                        mgs_gpu_copy_to_texture(tl & 0x3FFu, (tl >> 10) & 0x3FFu,
+                            copy_w, copy_h,
+                            mgs_tex_efb_key(dest, serial, copy_tex_format(cmd),
+                                            copy_w, copy_h, 0u))) {
+                        mgs_tex_mark_gpu_copy(dest, copy_tex_format(cmd),
+                                              copy_w, copy_h);
+                        ++s_efb.tex_copies;   /* as mgs_efb_copy_tex counts */
+                    } else {
+                        /* Could not: fall back to the readback path, which
+                         * needs the pixels this copy skipped fetching. */
+                        mgs_gpu_batch_flush();
+                        mgs_gpu_read_back_rect(s_efb.pixels, 0u, 0u,
+                            (tl & 0x3FFu) + copy_w, ((tl >> 10) & 0x3FFu) + copy_h,
+                            MGS_EFB_WIDTH);
+                        mgs_efb_copy_tex(&s_efb, s_mem, tl & 0x3FFu,
+                                         (tl >> 10) & 0x3FFu,
+                                         copy_w, copy_h, copy_tex_format(cmd));
+                        ++s_rtt_fallbacks;
+                    }
+                } else
                 mgs_efb_copy_tex(&s_efb, s_mem, tl & 0x3FFu,
                                  (tl >> 10) & 0x3FFu,
                                  copy_w, copy_h, copy_tex_format(cmd));
