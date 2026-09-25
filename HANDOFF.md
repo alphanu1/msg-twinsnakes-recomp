@@ -15919,3 +15919,24 @@ both, no constant-lag echo like F-era 95 ms one; voice starvations 7,591
 against 7,463 in 180 s. Starvation (~42 a second, each played on into the
 next block) is long-standing, not from F370-F372.
 
+### F374 — `mixerCtrl` honoured; it is NOT why the menu is loud
+
+Ben: *"the menu screen sound is much louder than anything else"*. Theory:
+our mixer ignored `AXPB.mixerCtrl` (0x0C), so a stereo stream's left and
+right voices would each play in both speakers - mono and +6 dB. Now
+honoured the way Dolphin maps the newer GameCube microcode
+(`AXUCode::ConvertMixerControl`: main left on bit 0x0001, right on
+0x0002); `MGS_AX_MIX_ALL=1` restores the old behaviour, and the exit
+report lists the values seen. **Measured, the theory is wrong:** in the
+logos and menu the game sets `0x0603` on 31,151 of 31,153 voice-mixes -
+left, right and aux-B - so every voice really does feed both speakers, and
+the change alters nothing here. It stays because it is what the console
+does.
+
+Still open: why the menu is louder. The output after the limiter reads
+-12 to -15 dB in every section, which the limiter would produce whatever
+the raw mix did, so it cannot answer. Not modelled and possibly related:
+the aux-B bus (every voice sends to it; on the console it returns through
+the game's effect callback into the main mix) and AX's compressor. The way
+to settle it is a Dolphin audio dump of the same menu against ours.
+

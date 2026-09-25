@@ -52,6 +52,7 @@
 #define PB_ADDR_LOOP_HI    0x72u
 #define PB_ADDR_END_HI     0x76u
 #define PB_ADDR_CURR_HI    0x7Au
+#define PB_MIXER_CTRL      0x0Cu      /* AXPB.mixerCtrl                  */
 #define PB_MIX_VL          0x12u      /* AXPBMIX.vL                      */
 #define PB_MIX_VR          0x16u      /* AXPBMIX.vR                      */
 #define PB_VE_VOLUME       0x64u      /* AXPBVE.currentVolume            */
@@ -257,6 +258,9 @@ static uint64_t s_head_n, s_head_sum;
 static uint32_t s_head_min = 0xFFFFFFFFu, s_head_first;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
+static uint32_t s_mctrl_key[8];
+static uint64_t s_mctrl_hits[8];
+static unsigned s_mctrl_n;
 static uint64_t s_rd_pcm, s_nz_pcm, s_rd_adpcm, s_nz_adpcm;
 static uint64_t s_vol_zero, s_mix_zero;
 /* IS ANYTHING PANNED AT ALL?
@@ -579,6 +583,32 @@ void mgs_ax_dsp_frame(void* cpu)
         vdelta = (int)(int16_t)rd16(cpu, pb + PB_VE_DELTA);
         vl  = rd16(cpu, pb + PB_MIX_VL);
         vr  = rd16(cpu, pb + PB_MIX_VR);
+        /* WHICH OUTPUTS THE VOICE FEEDS (F374). `mixerCtrl` enables each
+         * bus per voice; the newer GameCube microcode (Dolphin,
+         * AXUCode::ConvertMixerControl) mixes into main left only with bit
+         * 0x0001 and main right only with 0x0002. Ignoring it put every
+         * voice in both speakers: a stereo stream - one voice per side,
+         * both at full level - came out mono and twice as loud, which is
+         * the menu Ben heard as far louder than anything else. The mix
+         * levels of a disabled bus are left at whatever the game last
+         * wrote (0x7FFF here), so they cannot be used to tell.
+         * MGS_AX_MIX_ALL=1 restores mixing every voice into both. */
+        {
+            static int mix_all = -1;
+            uint32_t mctrl = rd16(cpu, pb + PB_MIXER_CTRL);
+            unsigned mi;
+            if (mix_all < 0) mix_all = getenv("MGS_AX_MIX_ALL") != NULL;
+            for (mi = 0; mi < s_mctrl_n; ++mi)
+                if (s_mctrl_key[mi] == mctrl) break;
+            if (mi < 8u) {
+                if (mi == s_mctrl_n) { s_mctrl_key[mi] = mctrl; ++s_mctrl_n; }
+                ++s_mctrl_hits[mi];
+            }
+            if (!mix_all) {
+                if (!(mctrl & 0x0001u)) vl = 0;
+                if (!(mctrl & 0x0002u)) vr = 0;
+            }
+        }
 
 
         /* MGS_AX_NO_ADPCM restores the pre-F248 behaviour - ADPCM voices
@@ -1208,6 +1238,11 @@ void mgs_ax_dsp_report(void)
                    (unsigned)(s_pan_key[pi] & 0xFFFFu),
                    (unsigned long long)s_pan_hits[pi]);
         printf("%s\n", s_pan_n >= 8u ? "  (list full)" : "");
+        printf("   mixerCtrl values:");
+        for (pi = 0; pi < s_mctrl_n; ++pi)
+            printf("  %04X x%llu", (unsigned)s_mctrl_key[pi],
+                   (unsigned long long)s_mctrl_hits[pi]);
+        printf("%s\n", s_mctrl_n >= 8u ? "  (list full)" : "");
     }
     printf("  gain: %llu voice-mixes had envelope volume 0, "
            "%llu had both mix levels 0, of %llu\n",
