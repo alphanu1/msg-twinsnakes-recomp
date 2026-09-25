@@ -532,8 +532,16 @@ static void frame_pump(void)
          * decision is made there, at this retrace's point in the stream;
          * see mgs_display_gx_retrace. Presenting inline still needs the
          * wait below, since this thread then draws the picture itself. */
-        static int flip_drain = -1;     /* MGS_FLIP_DRAIN=1: the old wait */
-        if (flip_drain < 0) flip_drain = getenv("MGS_FLIP_DRAIN") != NULL;
+        /* OFF BY DEFAULT: it broke presentation with a window (F371).
+         * Frames flagged from the render thread arrive in bursts, and the
+         * frame cap refuses and DROPS the second of a close pair - Ben saw
+         * the menu at 25 and the logos at 36-48 with audio popping; under
+         * a virtual display the presentation cadence went from even 1-2
+         * field steps to hundreds of 3-7 field gaps, with the old module as
+         * with the new. Headless runs only count cadence, never pass the
+         * cap, and could not see it. MGS_FLIP_MARKS=1 to use it. */
+        static int flip_drain = -1;
+        if (flip_drain < 0) flip_drain = getenv("MGS_FLIP_MARKS") == NULL;
         if (!flip_drain && (s_present_threaded || !s_display_windowed) &&
             mgs_display_gx_retrace(vi, retrace_drawn))
             return;

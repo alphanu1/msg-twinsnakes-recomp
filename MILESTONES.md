@@ -1502,8 +1502,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
         +18-22% (cutscene at double speed 48 fps against 41), engine code
         442 -> 310 MB, first build ~4-5 minutes. Full Dock run: 0
         fallbacks, cutscene 25.0, gameplay 50.
-      - The game thread no longer waits for the render thread at a flip
-        (F370): the render thread decides at a retrace mark.
+      - Presentation decided on the render thread (F370) broke windowed
+        pacing - menu at 25, logos 36-48 - and is reverted (F371); the
+        flip wait is the default again.
       - First-run build: engine ~8 minutes on an idle machine (was 25-30)
         at the same runtime speed (F369).
       - The game no longer presents its own frames (F368): a main-thread

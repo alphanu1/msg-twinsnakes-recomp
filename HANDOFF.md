@@ -298,10 +298,11 @@ is done.
   enters in the DOL. Every-block costs 18-22% of guest speed and 3x the
   build. If a new resume appears, the host stops with the dispatch path -
   find its cause; do not turn every-block back on.
-- **The game thread waiting for the render thread at a flip
-  (`mgs_display_gx_drain` in frame_pump; `MGS_FLIP_DRAIN=1`) (F370).** It
-  waited for the next frame's commands too. The render thread decides at a
-  retrace mark.
+- **Deciding presentation on the render thread (retrace marks,
+  `MGS_FLIP_MARKS=1`) as it stands (F371).** It broke windowed pacing - the
+  frame cap drops the second of a burst - and headless runs cannot see that.
+  Any rework must be checked with a window (Xvfb :99), by the presentation
+  cadence histogram, against the old build.
 
 - **DolRecomp's native call ABI for this game (`DOLRECOMP_NATIVE_SERVICES=1`,
   `--native-abi`) (F366).** Code 3-6x larger (the engine no longer links at
@@ -15804,4 +15805,57 @@ current generation; the module in it had been copied from
 build) are below F369's (46-51) for the same module - the run setup, not
 the build; confirmed by the old flip wait giving the same 36.7. Only
 side-by-side runs are compared.
+
+### F371 — WRONG in F370: the retrace marks broke windowed presentation; reverted to the flip wait
+
+Ben, on the F370 build: *"its worse than it ever been. Menu is back at 25
+fps. Intro logos used to be a solid 50 and not 36-48. audio popping"*.
+
+**Cause, established by elimination with a real window** (Xvfb :99, same
+scripted inputs, 150 s each, presentation cadence histogram from the exit
+report):
+
+| | host | module | presentation cadence |
+|---|---|---|---|
+| A | before F370 | every-block | 1 field 1,235, 2 fields 1,233, 3-7 fields 14 |
+| B | F370 | F370 | 0 fields 331, 3-7 fields 1,285 |
+| C | F370, `MGS_FLIP_DRAIN=1` | F370 | 2 fields 1,888, 3-7 fields 17 |
+| D | F370 | every-block | 0 fields 247, 3-7 fields 1,256 |
+| F | F370 + this fix | F370 | 1 field 834, 2 fields 1,316, 3-7 fields 42 |
+
+B and D are equally broken, so it is the host change, not the new native
+module. With the decision on the render thread, frames are flagged in
+bursts when it catches up; `mgs_display_may_present` refuses a present more
+than half a frame early and the refused frame is DROPPED, not retried - so
+every other frame of a burst was lost. Headless runs only count the cadence
+at the decision point and never pass the cap, which is why every F370
+measurement looked fine. **F370's claim that the change was an improvement
+was measured headless only and is withdrawn.** The flip wait is the default
+again; `MGS_FLIP_MARKS=1` keeps the marks for rework (a refused frame
+should be held and presented when the cap allows, and the decision paced by
+retrace, not by the render thread's progress).
+
+**Lesson, recorded because it cost Ben an evening:** anything that touches
+presentation is verified with a window, against the previous build, before
+it is called better. The virtual display renders in software, so its
+absolute frame rates are low for every build (the old one's menu too); the
+cadence histogram and the side-by-side comparison are what it can show.
+
+**Also tried tonight and withdrawn: a longer native slice.** Native code
+returns to the run loop at a loop header or call once 256 guest cycles have
+run (upstream's constant). Made a runtime global (`DOLRECOMP_RUNTIME_BUDGET`)
+and swept 256 / 4,096 / 32,768 at double speed: **cycles per dispatch
+63.1 / 64.6 / 65.7** - the slice is not what brings native code back to the
+run loop (the idle loop's thread switches and patched calls are). The
+payout change it needed (guest time bounded only by the retrace and DSP
+deadlines) was reverted with it. Not committed.
+
+**Kept, not yet measured:** the native-region answer for main.dol
+functions is memoised in the module (`dispatch.c`), one byte per
+instruction slot, instead of a host call on every native function entry.
+In `build/phase1/module-llvm13`, not installed.
+
+**Next:** the patched SDK calls that are no-ops here (DCFlushRange 4.1M,
+DCInvalidateRange 0.56M in 200 s; memset 1.8M, OSGetTime 1.0M) each leave
+native code and come back through the run loop twice.
 

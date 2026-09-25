@@ -208,6 +208,8 @@ bool __wrap_ppc_fp_raise_unavailable(CPUState* cpu, u32 cia)
  * with ppc_host_call's query convention unset, so this asks it directly:
  * the host installs a query-only lookup alongside the hook. */
 static int (*s_patch_query)(u32 address);
+/* See ppc_native_region_available. */
+static u8 s_dol_native_memo[(MGS_DOL_TEXT_END - MGS_DOL_TEXT_BASE) / 4u];
 
 /* Read by native code on every MSR[EE] 0 -> 1 when it was generated with
  * DOLRECOMP_EE_EXIT_WHEN_PENDING=1 (local DolRecomp patch): it leaves for
@@ -216,14 +218,34 @@ static int (*s_patch_query)(u32 address);
  * until the host takes it over, which is the upstream behaviour. */
 u32 dolrecomp_msr_ee_exit_wanted = 1u;
 
+
 void mgs_dispatch_set_patch_query(int (*query)(u32));
-void mgs_dispatch_set_patch_query(int (*query)(u32)) { s_patch_query = query; }
+void mgs_dispatch_set_patch_query(int (*query)(u32))
+{
+    s_patch_query = query;
+    memset(s_dol_native_memo, 0, sizeof s_dol_native_memo);
+}
+
+/* Asked on EVERY native function entry, and for main.dol's functions the
+ * host's answer was a range test, two special cases and a patch-table
+ * search - for PSMTX44Concat and its neighbours, hundreds of thousands of
+ * times a second, and never a different answer: the patch table is fixed
+ * once installed. So main.dol's answers are remembered, one byte per
+ * instruction slot (0 not asked yet, 1 runs natively, 2 patched). The REL's
+ * entries still ask; the host rejects them on its first comparison. */
 
 bool ppc_native_region_available(CPUState* cpu, u32 start, u32 end);
 bool ppc_native_region_available(CPUState* cpu, u32 start, u32 end)
 {
+    u32 slot = (start - MGS_DOL_TEXT_BASE) >> 2;
     (void)cpu; (void)end;
-    return !(s_patch_query && s_patch_query(start));
+    if (!s_patch_query) return true;
+    if (slot < sizeof s_dol_native_memo) {
+        u8* m = &s_dol_native_memo[slot];
+        if (!*m) *m = s_patch_query(start) ? 2u : 1u;
+        return *m == 1u;
+    }
+    return !s_patch_query(start);
 }
 
 /* --- tracing ------------------------------------------------------------ */
