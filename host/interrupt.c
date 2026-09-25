@@ -80,6 +80,9 @@ uint64_t mgs_interrupt_failed(void) { return s_failed; }
  * anyway would break exactly the atomicity the cooperative scheduler exists to
  * preserve.
  */
+/* See mgs_interrupt_set_ee_flag. */
+static uint32_t* s_ee_exit_flag;
+
 int mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit)
 {
     MgsMmio* mmio = mgs_host_mmio();
@@ -98,7 +101,13 @@ int mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit)
      *
      * PI's mask is the interrupt controller's, and says which SOURCES the
      * guest has armed. */
-    if (!(mgs_module_msr(cpu) & 0x8000u)) { ++s_refused; return 0; }
+    if (!(mgs_module_msr(cpu) & 0x8000u)) {
+        ++s_refused;
+        /* Native code re-enabling EE will now leave for the run loop, so
+         * this is taken as soon as the guest can take it. */
+        if (s_ee_exit_flag) *s_ee_exit_flag = 1u;
+        return 0;
+    }
 
     mask = mgs_mmio_read(mmio, MMIO_PI + PI_INTMR, 4);
     if (!(mask & cause_bit)) { ++s_refused; return 0; }   /* guest is not listening */
@@ -152,7 +161,16 @@ int mgs_interrupt_raise(const MgsModule* mod, void* cpu, uint32_t cause_bit)
     }
 
     ++s_delivered;
+    if (s_ee_exit_flag) *s_ee_exit_flag = 0u;
     return 1;
+}
+
+/* The native module's "leave on EE" flag (game/module/dispatch.c). */
+void mgs_interrupt_set_ee_flag(uint32_t* flag);
+void mgs_interrupt_set_ee_flag(uint32_t* flag)
+{
+    s_ee_exit_flag = flag;
+    if (flag) *flag = 0u;
 }
 
 /* THE EXTERNAL INTERRUPT IS LEVEL-TRIGGERED, AND THAT IS NOT A DETAIL.

@@ -105,6 +105,13 @@ void mgs_dispatch_set_vmem(u8* base) { g_mgs_vmem = base; }
  * the host installs a query-only lookup alongside the hook. */
 static int (*s_patch_query)(u32 address);
 
+/* Read by native code on every MSR[EE] 0 -> 1 when it was generated with
+ * DOLRECOMP_EE_EXIT_WHEN_PENDING=1 (local DolRecomp patch): it leaves for
+ * the run loop only while this is set. The host sets it when it has had to
+ * refuse an interrupt because EE was clear, and clears it on delivery. One
+ * until the host takes it over, which is the upstream behaviour. */
+u32 dolrecomp_msr_ee_exit_wanted = 1u;
+
 void mgs_dispatch_set_patch_query(int (*query)(u32));
 void mgs_dispatch_set_patch_query(int (*query)(u32)) { s_patch_query = query; }
 

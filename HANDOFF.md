@@ -15459,3 +15459,56 @@ progress signal the port never gives.
 
 The C build stays the default. `build/phase1/module-llvm/` is the native
 one: `./build/runtime/host/twin-snakes --module build/phase1/module-llvm/gGGSPA4_recomp.so`.
+
+### F363 — the native build without its emulator habits: interrupts, float, and where the time really is
+
+Three generator changes (local patches, THIRD_PARTY.md) and their host
+halves, each found from a profile of the F362 build:
+
+- **Interrupt re-enable no longer leaves native code unless something is
+  waiting** (`DOLRECOMP_EE_EXIT_WHEN_PENDING=1`). The host sets
+  `dolrecomp_msr_ee_exit_wanted` when it has had to refuse an interrupt
+  because EE was clear and clears it on delivery. With that, the game's own
+  `OSDisableInterrupts`/`OSRestoreInterrupts` run natively in native modules
+  (they are replaced only for the C backend, where mtmsr is a host fallback)
+  - they were called 142.8 million times each in 200 s.
+- **Float arithmetic is native** (`DOLRECOMP_FP_NATIVE=1`, new
+  `fp_native.cpp`): fadd/fsub/fmul/fdiv, single and double, as the same
+  double operation the runtime helper performs, rounded to single for the
+  single forms, fmuls' C rounded to 25 bits. The helper stays on a cold path
+  for a NaN result, a denormal fmuls C, and any FPSCR enable or NI; FPSCR's
+  class bits are not maintained (this engine never reads FPSCR). DolRecomp's
+  suite, which compares recompiled results against its interpreter: 33/33
+  with it on and off. Frames 4, 6 and 7 of the step-clock comparison - the 3D
+  Silicon Knights logo among them - differ from the C build by at most 8
+  counts, a fade step. Paired-single maths was already native (the DOL
+  objects reference no paired helper at all).
+- All five local patches apply in order to pristine upstream and reproduce
+  the working tree exactly (checked in a scratch worktree).
+
+**Measured, and the honest conclusion.** Twice guest speed, alternating
+builds at similar load: Dock cutscene 36.8 fps C, 36.9 and 37.9 native;
+Dock gameplay ~97 both (the cap is 100). With drawing on the game's own
+thread the cutscene falls to 28.9, so the render thread helps and is not the
+limit (37.6% busy). A categorised profile of the game thread in the
+double-speed cutscene, native build:
+
+| | |
+|---|---|
+| guest SDK code (`main.dol`) | 30.6% |
+| guest engine code (REL) | 27.9% |
+| our run loop and dispatch | 12.8% |
+| float/psq helpers (cold paths, psq) | 4.4% |
+| clock | 4.3% |
+| hardware registers / FIFO | 2.4% |
+
+The biggest SDK item is the paired-single matrix library - PSMTX44Concat
+4.7%, PSMTXMultVec 3.2%, with its neighbours ~17% - which is already native
+vector code: real work. The native build is now native where it counts;
+what remains is the game's own work plus ~20% of ours (run loop, clock,
+registers), which is the next thing to take down.
+
+A full real-time Dock run on the native build: cutscene 24.9 (correct 25),
+gameplay 50 with two ~5 s dips to 16-24 at frames ~9,500 and ~10,600 while
+the machine's load rose; whether those are load or the build is being
+checked against the C build under the same conditions.

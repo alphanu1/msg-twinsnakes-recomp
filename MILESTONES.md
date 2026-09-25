@@ -1494,8 +1494,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
         a frame, of which ~28 ms is guest code, parsing and our triangle
         path. `MGS_PROFILE_AFTER` profiles gameplay alone, game thread only.
       - **Native (LLVM-backend) build runs end to end, nothing
-        interpreted** (F362); not yet faster than the C build, and the
-        reasons are measured. The C build stays the default.
+        interpreted** (F362), with native float and no needless exits
+        (F363). Level with the C build: the heavy scene's cost is the
+        game's own work (matrix maths, already native) plus ~20% of our
+        run loop. The C build stays the default for now.
       - **50.0 fps in gameplay at the Dock, measured** (F360): drawing on
         its own thread, as the console's graphics processor does, on top of
         F361. The Dock cutscene holds its correct 25. Not yet ticked: one

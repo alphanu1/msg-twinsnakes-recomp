@@ -1,0 +1,197 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 556bb20..836c022 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -126,6 +126,7 @@ if(DOLRECOMP_ENABLE_LLVM)
+         src/backend/llvm/instructions.cpp
+         src/backend/llvm/runtime.cpp
+         src/backend/llvm/floating_point.cpp
++        src/backend/llvm/fp_native.cpp
+         src/backend/llvm/fp_fixups.cpp
+         src/backend/llvm/fpr_state.cpp
+         src/backend/llvm/paired_single.cpp
+diff --git a/src/backend/llvm/emitter.h b/src/backend/llvm/emitter.h
+index 0e60098..1cd1434 100644
+--- a/src/backend/llvm/emitter.h
++++ b/src/backend/llvm/emitter.h
+@@ -177,11 +177,11 @@ private:
+   void emitInstructionService(u32 pc);
+   llvm::Value *emitRuntimeBoundary(const DolIRInstruction &instruction);
+   void emitExactFloat(u64 descriptor);
++  bool emitNativeExactFloat(DolIRExactFloat op, u32 d, u32 a, u32 b, u32 c);
+   void emitExactPaired(u64 descriptor);
+   llvm::Value *emitPSQ(const DolIRInstruction &instruction);
+   llvm::Value *emitPSQLoad(const DolIRInstruction &, llvm::Value *, llvm::Value *, llvm::Value *);
+-  llvm::Value *emitKnownPSQ(const DolIRInstruction &instruction, u32 type,
+-                            s32 scale);
++  llvm::Value *emitKnownPSQ(const DolIRInstruction &instruction, u32 type, s32 scale);
+   void emitStoreConditional(const DolIRInstruction &instruction);
+   llvm::Value *emitFPAvailable(u32 pc);
+ 
+diff --git a/src/backend/llvm/floating_point.cpp b/src/backend/llvm/floating_point.cpp
+index ad4c59e..9e97623 100644
+--- a/src/backend/llvm/floating_point.cpp
++++ b/src/backend/llvm/floating_point.cpp
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "backend/llvm/emitter.h"
+ #include "cpu/cpu.h"
+ 
+@@ -50,6 +51,10 @@ void FunctionEmitter::emitExactFloat(u64 descriptor) {
+ 
+   DolIRStateSlot destination = fprSlot(d);
+   Value *old = stateValue(destination);
++
++  if (emitNativeExactFloat(op, d, a, b, c))
++    return;
++
+   if (op >= DOLIR_EXACT_FADDS && op <= DOLIR_EXACT_FRSP) {
+     const char *name = nullptr;
+     switch (op) {
+diff --git a/src/backend/llvm/fp_native.cpp b/src/backend/llvm/fp_native.cpp
+new file mode 100644
+index 0000000..68df5ca
+--- /dev/null
++++ b/src/backend/llvm/fp_native.cpp
+@@ -0,0 +1,141 @@
++#include <cstdlib>
++
++#include "backend/llvm/emitter.h"
++#include "cpu/cpu.h"
++
++#include <llvm/IR/BasicBlock.h>
++#include <llvm/IR/Constants.h>
++#include <llvm/IR/Function.h>
++#include <llvm/IR/Module.h>
++
++namespace dolllvm {
++
++using namespace llvm;
++
++// Called from emitExactFloat after the destination's FP analysis is reset.
++bool FunctionEmitter::emitNativeExactFloat(DolIRExactFloat op, u32 d, u32 a,
++                                           u32 b, u32 c) {
++  auto fprSlot = [](u32 reg) {
++    return static_cast<DolIRStateSlot>(DOLIR_STATE_FPR0 + reg);
++  };
++  auto ps1Slot = [](u32 reg) {
++    return static_cast<DolIRStateSlot>(DOLIR_STATE_PS1_0 + reg);
++  };
++  Type *ptr = PointerType::getUnqual(context_);
++  Type *f64 = Type::getDoubleTy(context_);
++  DolIRStateSlot destination = fprSlot(d);
++  // NATIVE ARITHMETIC, EXACT RESULTS (DOLRECOMP_FP_NATIVE=1).
++  //
++  // The runtime helpers below compute each of these as a double-precision
++  // operation - after rounding a multiply's C operand to 25 bits, as the
++  // Gekko does for fmuls - then round to single for the single forms, and
++  // maintain FPSCR's class and exception bits alongside. The arithmetic is
++  // emitted here directly, in the same order and the same precision, so the
++  // result is the same bits. What is NOT done is the FPSCR bookkeeping, and
++  // the helper is kept, on a cold path, for every case where FPSCR could
++  // change the answer: a NaN result (payload and quieting rules), an
++  // enabled exception or non-IEEE mode (FPSCR & 0xFC), and a denormal C
++  // operand to fmuls (whose 25-bit rounding is shifted). A title may opt in
++  // only if it never reads FPSCR for its own logic - Twin Snakes' engine has
++  // no mffs at all, and its SDK only saves and restores it.
++  static const bool fp_native = [] {
++    const char *env = getenv("DOLRECOMP_FP_NATIVE");
++    return env && env[0] && env[0] != '0';
++  }();
++  if (!fp_native || op < DOLIR_EXACT_FADDS || op > DOLIR_EXACT_FDIV)
++    return false;
++  {
++    const bool single = op <= DOLIR_EXACT_FDIVS;
++    const bool mul = op == DOLIR_EXACT_FMULS || op == DOLIR_EXACT_FMUL;
++    Type *i64 = Type::getInt64Ty(context_);
++    Type *i32 = Type::getInt32Ty(context_);
++    Value *left = stateValue(fprSlot(a));
++    Value *right = stateValue(fprSlot(mul ? c : b));
++    Value *fpscr = stateValue(DOLIR_STATE_FPSCR);
++    Value *cold = builder_.CreateICmpNE(
++        builder_.CreateAnd(fpscr, ConstantInt::get(i32, 0xFCu)),
++        ConstantInt::get(i32, 0u));
++    if (op == DOLIR_EXACT_FMULS) {
++      // force_25bit_c: round C to 25 significant bits, ties away (by adding
++      // the bit below the kept ones). Denormals shift the mask; cold.
++      Value *bits = builder_.CreateBitCast(right, i64);
++      Value *exponent = builder_.CreateAnd(bits, ConstantInt::get(i64, 0x7FF0000000000000ull));
++      Value *fraction = builder_.CreateAnd(bits, ConstantInt::get(i64, 0x000FFFFFFFFFFFFFull));
++      Value *denormal = builder_.CreateAnd(
++          builder_.CreateICmpEQ(exponent, ConstantInt::get(i64, 0u)),
++          builder_.CreateICmpNE(fraction, ConstantInt::get(i64, 0u)));
++      cold = builder_.CreateOr(cold, denormal);
++      Value *rounded = builder_.CreateAdd(
++          builder_.CreateAnd(bits, ConstantInt::get(i64, 0xFFFFFFFFF8000000ull)),
++          builder_.CreateAnd(bits, ConstantInt::get(i64, 0x0000000008000000ull)));
++      right = builder_.CreateBitCast(rounded, f64);
++    }
++    Value *result = nullptr;
++    switch (op) {
++    case DOLIR_EXACT_FADDS: case DOLIR_EXACT_FADD:
++      result = builder_.CreateFAdd(left, right); break;
++    case DOLIR_EXACT_FSUBS: case DOLIR_EXACT_FSUB:
++      result = builder_.CreateFSub(left, right); break;
++    case DOLIR_EXACT_FMULS: case DOLIR_EXACT_FMUL:
++      result = builder_.CreateFMul(left, right); break;
++    default:
++      result = builder_.CreateFDiv(left, right); break;
++    }
++    if (single)
++      result = builder_.CreateFPExt(
++          builder_.CreateFPTrunc(result, Type::getFloatTy(context_)), f64);
++    cold = builder_.CreateOr(cold, builder_.CreateFCmpUNO(result, result));
++
++    BasicBlock *fast = BasicBlock::Create(context_, "fp.native", function_);
++    BasicBlock *slow = BasicBlock::Create(context_, "fp.exact", function_);
++    BasicBlock *join = BasicBlock::Create(context_, "fp.join", function_);
++    builder_.CreateCondBr(cold, slow, fast);
++
++    builder_.SetInsertPoint(fast);
++    builder_.CreateStore(result, state_[destination]);
++    if (single)
++      builder_.CreateStore(result, state_[ps1Slot(d)]);
++    builder_.CreateBr(join);
++
++    builder_.SetInsertPoint(slow);
++    {
++      const char *name = nullptr;
++      switch (op) {
++      case DOLIR_EXACT_FADDS: name = "ppc_fadds"; break;
++      case DOLIR_EXACT_FSUBS: name = "ppc_fsubs"; break;
++      case DOLIR_EXACT_FMULS: name = "ppc_fmuls"; break;
++      case DOLIR_EXACT_FDIVS: name = "ppc_fdivs"; break;
++      case DOLIR_EXACT_FADD:  name = "ppc_fadd"; break;
++      case DOLIR_EXACT_FSUB:  name = "ppc_fsub"; break;
++      case DOLIR_EXACT_FMUL:  name = "ppc_fmul"; break;
++      default:                name = "ppc_fdiv"; break;
++      }
++      syncState(destination);
++      if (single)
++        syncState(ps1Slot(d));
++      syncState(fprSlot(a));
++      syncState(fprSlot(mul ? c : b));
++      auto callee = module_.getOrInsertFunction(
++          name, FunctionType::get(Type::getVoidTy(context_),
++                                  {ptr, Type::getInt8Ty(context_),
++                                   Type::getInt8Ty(context_),
++                                   Type::getInt8Ty(context_)},
++                                  false));
++      builder_.CreateCall(callee, {ctx_, builder_.getInt8(d), builder_.getInt8(a),
++                                   builder_.getInt8(mul ? c : b)});
++      reloadState(destination);
++      if (single)
++        reloadState(ps1Slot(d));
++      reloadState(DOLIR_STATE_FPSCR);
++    }
++    builder_.CreateBr(join);
++    builder_.SetInsertPoint(join);
++    known_state_[destination] = nullptr;
++    if (single)
++      known_state_[ps1Slot(d)] = nullptr;
++    return true;
++  }
++
++}
++
++} // namespace dolllvm

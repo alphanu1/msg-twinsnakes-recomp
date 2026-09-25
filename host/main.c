@@ -691,6 +691,8 @@ static int mem_shim_disabled(void)
     return cached;
 }
 
+static int native_keeps(uint32_t address);
+
 static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 {
     MgsSdkFn fn;
@@ -704,6 +706,7 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
         (address == 0x800050B4u || address == 0x800050E4u ||
          address == 0x8000519Cu))
         return 0;
+    if (native_keeps(address)) return 0;
 
     fn = mgs_patch_lookup(address);
     if (!fn) return 0;
@@ -730,9 +733,24 @@ static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
 /* The same decision as mgs_host_patch_dispatch, without making the call:
  * whether this address is served natively. Native code from the LLVM
  * backend asks it on entry to every function (game/module/dispatch.c). */
+/* Set when the module is native (LLVM backend). OSDisableInterrupts and
+ * OSRestoreInterrupts are then left to the game's own code: they were
+ * replaced because the C backend sent mtmsr to a slow host fallback, and in
+ * native code they are three instructions - where a replacement costs an
+ * exit from native code, a trip through the run loop and a re-entry, some
+ * 1.4 million times a second (HANDOFF F362). */
+static int s_native_module;
+
+static int native_keeps(uint32_t address)
+{
+    return s_native_module &&
+           (address == 0x8001FCCCu || address == 0x8001FCF4u);
+}
+
 static int mgs_host_patch_query(uint32_t address)
 {
     if (address - MGS_PATCH_LO > MGS_PATCH_SPAN) return 0;
+    if (native_keeps(address)) return 0;
     if (mem_shim_disabled() &&
         (address == 0x800050B4u || address == 0x800050E4u ||
          address == 0x8000519Cu))
@@ -1905,7 +1923,14 @@ int main(int argc, char** argv)
                             void (*q)(int (*)(uint32_t)) =
                                 (void (*)(int (*)(uint32_t)))
                                 mgs_module_symbol(&mod, "mgs_dispatch_set_patch_query");
-                            if (q) q(mgs_host_patch_query);
+                            if (q) {
+                                void mgs_interrupt_set_ee_flag(uint32_t*);
+                                q(mgs_host_patch_query);
+                                s_native_module = 1;
+                                mgs_interrupt_set_ee_flag((uint32_t*)
+                                    mgs_module_symbol(&mod,
+                                        "dolrecomp_msr_ee_exit_wanted"));
+                            }
                         }
                         printf("  patch table  : installed\n");
                     } else {

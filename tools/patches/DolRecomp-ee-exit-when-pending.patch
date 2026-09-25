@@ -1,0 +1,34 @@
+diff --git a/src/backend/llvm/special_instructions.cpp b/src/backend/llvm/special_instructions.cpp
+index e4c2432..98b9530 100644
+--- a/src/backend/llvm/special_instructions.cpp
++++ b/src/backend/llvm/special_instructions.cpp
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "backend/llvm/emitter.h"
+ #include "cpu/cpu.h"
+ 
+@@ -28,6 +29,24 @@ void FunctionEmitter::emitStateWrite(const DolIRInstruction &inst) {
+   enabled = builder_.CreateICmpNE(
+       builder_.CreateAnd(enabled, builder_.getInt32(0x8000)),
+       builder_.getInt32(0));
++  // ONLY WHEN SOMETHING IS WAITING (DOLRECOMP_EE_EXIT_WHEN_PENDING=1).
++  //
++  // The exit exists so a runtime can deliver an interrupt that arrived while
++  // EE was clear. A runtime that knows whether one did can say so through
++  // `dolrecomp_msr_ee_exit_wanted`, and code that re-enables interrupts with
++  // nothing pending then carries on natively. Twin Snakes calls
++  // OSRestoreInterrupts ~700,000 times a second; each exit is a round trip
++  // through the host's run loop.
++  if (const char *pending = getenv("DOLRECOMP_EE_EXIT_WHEN_PENDING")) {
++    if (pending[0] && pending[0] != '0') {
++      auto *flag = module_.getOrInsertGlobal("dolrecomp_msr_ee_exit_wanted",
++                                             Type::getInt32Ty(context_));
++      Value *wanted = builder_.CreateICmpNE(
++          builder_.CreateLoad(Type::getInt32Ty(context_), flag),
++          builder_.getInt32(0));
++      enabled = builder_.CreateAnd(enabled, wanted);
++    }
++  }
+   BasicBlock *exit = BasicBlock::Create(context_, "msr_ee_exit", function_);
+   BasicBlock *resume = BasicBlock::Create(context_, "msr_ee_resume", function_);
+   builder_.CreateCondBr(enabled, exit, resume);

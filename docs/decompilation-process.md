@@ -1789,6 +1789,8 @@ shared runtime prototypes identical).
 ```sh
 export DOLRECOMP_ENTER_EVERY_BLOCK=1          # tools/patches/DolRecomp-enter-every-block.patch
 export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
+export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
+export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
 extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
     discs/GGSPA4/disc1/sys/main.dol build/phase1/dol-llvm
 extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
@@ -1813,6 +1815,14 @@ both local patches.
 **Not yet faster, measured:** at twice guest speed (`MGS_SPEED=2`) gameplay
 reaches 80.5 fps native against 83.5 for the C build. See HANDOFF F362 for
 where the time goes instead.
+
+**With native float and the interrupt-exit change (F363):** the object
+count and fallbacks are unchanged (2,287 + 21,594; 1,649 embedded-data
+fallbacks, 0 in the engine). Checked by DolRecomp's own suite with native
+float on - it compares recompiled results against its interpreter - 33/33;
+and on the step clock, frames 4, 6 and 7 (the 3D logo among them) are within
+8 counts of the C build. Measured level with the C build in the heavy
+cutscene at twice speed (36.9-37.9 fps against 36.8).
 
 ### "99.87% decoded" is not "99.87% decompiled"
 

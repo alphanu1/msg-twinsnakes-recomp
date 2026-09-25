@@ -17,6 +17,8 @@
     mgs_dispatch_set_vmem;
     /* The patch lookup, as a question only, for the native-region guard. */
     mgs_dispatch_set_patch_query;
+    /* Whether native code must leave when interrupts are re-enabled. */
+    dolrecomp_msr_ee_exit_wanted;
   local:
     *;
 };
