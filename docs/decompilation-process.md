@@ -1797,10 +1797,10 @@ export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-nati
 export DOLRECOMP_PURE_EXTERNAL=1               # tools/patches/DolRecomp-pure-external.patch
 export DOLRECOMP_LLVM_OPT_LEVEL=2 DOLRECOMP_NO_THINLTO=1   # DolRecomp-pipeline-switches.patch
 extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm \
-    --native-abi off -j24 \
+    --native-abi off --targets x86-64-v3 -j24 \
     discs/GGSPA4/disc1/sys/main.dol build/phase1/dol-llvm
 extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm \
-    --native-abi off -j24 \
+    --native-abi off --targets x86-64-v3 -j24 \
     --rel-base 0x7F008000 --rel-bss 0x8054A180 \
     discs/GGSPA4/disc1/files/shared/mgso_pal.rel build/phase1/rel-llvm
 ```
@@ -1853,6 +1853,16 @@ every-block entries the engine builds in 64 CPU-minutes, but native code
 then resumes where it has no entry; entries only at lazy-FPU trap points
 were measured NOT enough (an integer-only re-entry at 0x7F0F7E18 remains
 unexplained).
+
+**For x86-64-v3 (F383):** `--targets x86-64-v3` (AVX2, FMA, BMI2 - every
+x86 CPU since about 2013, the Steam Deck's Zen 2 included). The default
+`host` profile compiles for a generic x86-64 with no FMA instruction, so
+every fused multiply-add of the paired-single maths became a call to the C
+library's `fma`: the hottest engine routine (0x7F1161A8, 27 instructions,
+7.6% of the game thread) carried twelve. With v3 each is one
+`vfmadd213pd`. Engine generation 4 min 33 s, text 312.6 MB (unchanged).
+**Measured**, heavy cutscene at double speed, alternating: 47.7 and 48.1
+fps against 46.6 and 44.2 - about +5%.
 
 **Without every-block entries (F370).** Every-block entries
 (`DOLRECOMP_ENTER_EVERY_BLOCK`, still in the enter-every-block patch, now

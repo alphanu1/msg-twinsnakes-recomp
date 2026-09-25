@@ -16193,3 +16193,40 @@ system's SDL3; CMake's install rpath fixed it.
 compiled from the disc - for the owner's own machines only (Ben's Deck),
 never distributed; its README says so. A player's launcher builds theirs.
 
+### F383 — where the game thread's time goes in a heavy scene, and hardware FMA
+
+Profiled at double speed through the Dock cutscene, game thread only, with
+guest-thread occupancy: the game's main thread (0x80209D78) is current 79%
+of the time, the idle poller 17.5%, and waiting on the render thread
+(`mgs_display_gx_drain`) is only 4.4% - so **the game's own thread is the
+limit**, not drawing. Of its time: game and SDK code ~75% (the paired-single
+matrix library ~15%, one 27-instruction engine vector routine at 0x7F1161A8
+7.6%); our plumbing ~15% (run loop 5.7, `clock_gettime` 2.9, the per-call
+native-region guard 2.0, cross-module calls 1.2, FIFO writes 1.4); float
+helpers not inlined ~3%.
+
+**That routine compiled to 74,736 bytes of host code** for 27 PowerPC
+instructions, with 12 calls to `ppc_psq_load` (the GQR is not known at
+compile time), 12 calls to libm `fma` and 106 indirect memory-service
+calls. The `fma` calls are the target: DolRecomp's default `host` profile
+is generic x86-64, which has no FMA instruction. Regenerated with
+`--targets x86-64-v3` (Ben's 5950X and the Steam Deck both have it): every
+multiply-add is one `vfmadd213pd`. (An earlier count of "12 fma calls
+remaining" in the v3 build was my grep matching `fix_pair_fma_*`; there are
+none.) +5% at double speed; installed; the Deck package rebuilt with it.
+
+Still to take, in order of what the profile says: `ppc_psq_load` inline for
+the float case (the common GQR); the native-region guard on every call
+(emit it only for functions in the patch table); `clock_gettime` in the run
+loop; the patched no-op SDK calls' round trip through the run loop.
+
+**Steam Deck:** Ben ran the F382 package on his Deck - it starts and plays;
+**30 fps at most**. Its CPU is about half this machine's per core, and one
+game thread does nearly all the work, so every gain above shows there
+twice over.
+
+Also: the config folder on a Mac is now `~/Library/Application
+Support/twin-snakes` (was `~/.config`); the Linux release README says where
+settings, discs and the memory card live on each platform, and flags a
+package containing the module as a personal build (rule 8).
+

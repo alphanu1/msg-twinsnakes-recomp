@@ -21,13 +21,19 @@ static int exists(const char* path)
 /* ONE CONFIG FOLDER, ON EVERY PLATFORM THE PORT BUILDS FOR: %APPDATA% on
  * Windows, $XDG_CONFIG_HOME or ~/.config on Linux - each with a
  * twin-snakes folder. The remembered disc paths and the launcher's settings
- * both live here, never in the install. */
+ * both live here, never in the install. On a Mac it is
+ * ~/Library/Application Support/twin-snakes. */
 int mgs_config_dir(char* out, size_t n)
 {
 #ifdef _WIN32
     const char* app = getenv("APPDATA");
     if (!app || !*app) return 0;
     snprintf(out, n, "%s\\twin-snakes", app);
+#elif defined(__APPLE__)
+    /* Where a Mac keeps an application's settings. */
+    const char* home = getenv("HOME");
+    if (!home || !*home) return 0;
+    snprintf(out, n, "%s/Library/Application Support/twin-snakes", home);
 #else
     const char* xdg = getenv("XDG_CONFIG_HOME");
     const char* home = getenv("HOME");

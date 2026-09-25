@@ -56,6 +56,40 @@ docker run --rm -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" \
     cp "$M/gGGSPA4_recomp.so" "$P/module/"
   fi
 '
+cat > "$OUT/twin-snakes/README.txt" <<'README'
+Metal Gear Solid: The Twin Snakes - native PC port (Linux / Steam Deck build)
+
+START
+  Run play.sh. The launcher asks for disc 1 and disc 2 the first time -
+  .iso, .gcm or NKit images of the European release, with any file names -
+  checks them, and remembers them.
+  Steam Deck: in desktop mode, Steam > Add a Game > Add a Non-Steam Game >
+  play.sh, then start it from Game Mode with the Deck's controls.
+
+CONTROLS
+  Any controller (Xbox, PlayStation, Switch Pro, Steam Deck), or keyboard:
+  X=A  Z=B  S=X  A=Y  arrows=D-pad  Enter=Start  Q/W/E=L/R/Z  Esc=quit.
+
+WHERE THINGS ARE KEPT
+  Settings (volume, fullscreen, "start straight away") and the chosen discs:
+    Linux / Steam Deck  ~/.config/twin-snakes/settings.ini
+                        (Deck: /home/deck/.config/twin-snakes/)
+    Windows             %APPDATA%\twin-snakes\settings.ini
+    Mac                 ~/Library/Application Support/twin-snakes/settings.ini
+  Plain text, safe to edit. Delete it and the launcher starts from defaults.
+  disc1.path and disc2.path beside it hold the remembered disc images.
+
+  Memory card: saves/slot_a.raw in this folder. If a save goes wrong and the
+  game stops after the logos, use "Reset memory card" in the launcher - the
+  old card is kept beside it as slot_a.raw.backup-<date>-<time>.raw.
+
+  Start without the launcher: ./play.sh --play   Bring it back: --launcher
+README
+if [ -n "$MODULE_DIR" ]; then
+    printf '%s\n' "" "PERSONAL BUILD: module/ holds the native game compiled from YOUR disc." \
+        "Do not share this folder with anyone." "" | cat - "$OUT/twin-snakes/README.txt" \
+        > "$OUT/twin-snakes/README.tmp" && mv "$OUT/twin-snakes/README.tmp" "$OUT/twin-snakes/README.txt"
+fi
 cat > "$OUT/twin-snakes/play.sh" <<'PLAY'
 #!/bin/bash
 # Start the game from this folder. On a Steam Deck: add this script to Steam
