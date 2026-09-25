@@ -39,7 +39,8 @@
     "extern/libogc",
     "extern/dolphin",
     "extern/ww",
-    "extern/RecompCore"
+    "extern/RecompCore",
+    "extern/imgui"
   ],
 
   // Keep the file watcher off vendored source, its history, and the

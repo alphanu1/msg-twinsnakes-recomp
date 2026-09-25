@@ -39,6 +39,7 @@ int main(void)
     SDL_JoystickID id;
     SDL_Joystick* joy;
     uint64_t v;
+    unsigned port = 0u, p;
 
     /* No controller at all: neutral, no buttons - never a stick pushed
      * hard left because an unset byte read as 0. */
@@ -68,11 +69,17 @@ int main(void)
      * at rest it is -32768 (0 would be half pressed). */
     SDL_SetJoystickVirtualAxis(joy, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, -32768);
     SDL_SetJoystickVirtualAxis(joy, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, -32768);
-    mgs_input_poll();                       /* opens it into port 1 */
-    CHECK(mgs_input_name(0u) != NULL);
+    mgs_input_poll();                       /* opens it into a port */
+    /* A real controller plugged into this machine takes port 1 first;
+     * the virtual one is found by its name. */
+    for (p = 0; p < PAD_MAX_CONTROLLERS; ++p) {
+        const char* n = mgs_input_name(p);
+        if (n && !SDL_strcmp(n, "mgs virtual pad")) { port = p; break; }
+    }
+    CHECK(p < PAD_MAX_CONTROLLERS);
 
     /* At rest. */
-    v = mgs_input_gc_raw(0u);
+    v = mgs_input_gc_raw(port);
     CHECK(BUTTONS(v) == 0u);
     CHECK(SX(v) == 0x80u && SY(v) == 0x80u);
     CHECK(CX(v) == 0x80u && CY(v) == 0x80u);
@@ -94,7 +101,7 @@ int main(void)
     SDL_SetJoystickVirtualButton(joy, SDL_GAMEPAD_BUTTON_START, true);
     SDL_SetJoystickVirtualButton(joy, SDL_GAMEPAD_BUTTON_DPAD_UP, true);
     mgs_input_poll();                       /* SDL applies the new state */
-    v = mgs_input_gc_raw(0u);
+    v = mgs_input_gc_raw(port);
 
     CHECK(SX(v) >= 0xE0u && SX(v) <= 0xE8u);        /* ~128 + 100 */
     CHECK(SY(v) >= 0xE0u && SY(v) <= 0xE8u);        /* up reads high */
@@ -113,8 +120,14 @@ int main(void)
     SDL_CloseJoystick(joy);
     SDL_DetachVirtualJoystick(id);
     mgs_input_poll();
-    v = mgs_input_gc_raw(0u);
-    CHECK(BUTTONS(v) == 0u && SX(v) == 0x80u && SY(v) == 0x80u);
+    for (p = 0; p < PAD_MAX_CONTROLLERS; ++p) {
+        const char* n = mgs_input_name(p);
+        CHECK(!n || SDL_strcmp(n, "mgs virtual pad") != 0);
+    }
+    if (!mgs_input_name(port)) {
+        v = mgs_input_gc_raw(port);
+        CHECK(BUTTONS(v) == 0u && SX(v) == 0x80u && SY(v) == 0x80u);
+    }
 
     mgs_input_shutdown();
     if (failures) printf("%d failure(s)\n", failures);

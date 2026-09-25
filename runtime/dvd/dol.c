@@ -83,30 +83,55 @@ int mgs_dol_load(GuestMemory* mem, const void* data, size_t size, MgsDolInfo* in
     return info->section_count != 0u;
 }
 
+static uint32_t dol_be32(const uint8_t* p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+
+/* main.dol as the console loads it: from the offset in the disc header
+ * (0x420) for an image - raw, GCM or NKit alike - and sys/main.dol for an
+ * extracted folder. main.dol lives outside the FST. A DOL's length is where
+ * its furthest section ends. The caller frees. */
+uint8_t* mgs_disc_read_main_dol(MgsDisc* disc, size_t* len)
+{
+    uint8_t hdr[0x100];
+    uint8_t* buf;
+    uint32_t off, end = 0, i;
+    if (disc->kind == MGS_DISC_FOLDER) {
+        char path[1200];
+        FILE* f;
+        long n;
+        snprintf(path, sizeof path, "%s/sys/main.dol", disc->root);
+        if (!(f = fopen(path, "rb"))) return NULL;
+        fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+        if (n <= 0 || !(buf = (uint8_t*)malloc((size_t)n))) { fclose(f); return NULL; }
+        if (fread(buf, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(buf); return NULL; }
+        fclose(f);
+        *len = (size_t)n;
+        return buf;
+    }
+    if (mgs_disc_read_abs(disc, hdr, 0x420u, 4u) != 4) return NULL;
+    off = dol_be32(hdr);
+    if (mgs_disc_read_abs(disc, hdr, off, sizeof hdr) != (long)sizeof hdr) return NULL;
+    for (i = 0; i < 18u; ++i) {
+        uint32_t o = dol_be32(hdr + 4u * i), sz = dol_be32(hdr + 0x90u + 4u * i);
+        if (sz && o + sz > end) end = o + sz;
+    }
+    if (!end || end > 16u * 1024u * 1024u) return NULL;
+    if (!(buf = (uint8_t*)malloc(end))) return NULL;
+    if (mgs_disc_read_abs(disc, buf, off, end) != (long)end) { free(buf); return NULL; }
+    *len = end;
+    return buf;
+}
+
 int mgs_dol_load_from_disc(GuestMemory* mem, MgsDisc* disc, MgsDolInfo* info)
 {
-    /* main.dol lives in sys/, outside the FST, so it is read from the disc
-     * layer's own path rather than looked up. */
-    char path[1200];
-    FILE* f;
-    long n;
-    uint8_t* buf;
+    size_t n = 0;
+    uint8_t* buf = mgs_disc_read_main_dol(disc, &n);
     int ok;
-
-    if (disc->kind != MGS_DISC_FOLDER) return 0;   /* image path: TODO */
-    snprintf(path, sizeof path, "%s/sys/main.dol", disc->root);
-
-    f = fopen(path, "rb");
-    if (!f) return 0;
-    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
-    if (n <= 0) { fclose(f); return 0; }
-
-    buf = (uint8_t*)malloc((size_t)n);
-    if (!buf) { fclose(f); return 0; }
-    ok = fread(buf, 1, (size_t)n, f) == (size_t)n;
-    fclose(f);
-
-    ok = ok && mgs_dol_load(mem, buf, (size_t)n, info);
+    if (!buf) return 0;
+    ok = mgs_dol_load(mem, buf, n, info);
     free(buf);
     return ok;
 }

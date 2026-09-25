@@ -46,4 +46,9 @@ const char* mgs_disc_source_name(MgsDiscSource source);
  */
 int mgs_disc_remember(unsigned number, const char* path);
 
+/* The per-user config folder (%APPDATA%\\twin-snakes, or
+ * ~/.config/twin-snakes), and creating it. */
+int mgs_config_dir(char* out, size_t n);
+int mgs_config_make_dir(void);
+
 #endif

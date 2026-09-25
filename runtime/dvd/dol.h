@@ -20,5 +20,7 @@ typedef struct MgsDolInfo {
 
 int mgs_dol_load(GuestMemory* mem, const void* data, size_t size, MgsDolInfo* info);
 int mgs_dol_load_from_disc(GuestMemory* mem, MgsDisc* disc, MgsDolInfo* info);
+/* main.dol's bytes from an image or an extracted folder; the caller frees. */
+uint8_t* mgs_disc_read_main_dol(MgsDisc* disc, size_t* len);
 
 #endif

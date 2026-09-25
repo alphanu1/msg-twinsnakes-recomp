@@ -35,6 +35,11 @@ add_executable(test_pad test_pad.c)
 target_link_libraries(test_pad PRIVATE mgs_runtime m)
 add_test(NAME pad COMMAND test_pad)
 
+add_executable(test_launcher test_launcher.c ${CMAKE_SOURCE_DIR}/host/sha1.c
+               ${CMAKE_SOURCE_DIR}/host/launcher_core.c)
+target_link_libraries(test_launcher PRIVATE mgs_runtime)
+add_test(NAME launcher COMMAND test_launcher WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
 # The controller path end to end on SDL3's virtual gamepad: no hardware.
 if(SDL3_FOUND)
   add_executable(test_gamepad test_gamepad.c)

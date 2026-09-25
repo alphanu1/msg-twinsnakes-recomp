@@ -241,6 +241,12 @@ Build flow, run by `cmake --build`:
 3. `gen-patch-table` produces the guest-address to native-function table from `symbols.txt` and the runtime's exported shims.
 4. Normal compile and link: generated code, runtime, game glue, patches.
 
+**The launcher is part of the game, drawn with Dear ImGui (decided
+2026-09-25, Ben).** One program: it opens to the launcher - discs, the hash
+check, settings, the build of the native game - and Play starts the game in
+the same window. A player double-clicks one thing. `--play` skips the
+launcher for development runs.
+
 **On a player's machine there is no compiler (decided 2026-09-25).** The flow
 above is the developer's. A player downloads one package and points it at
 their disc; they do not have, and must not need, GCC, Clang, CMake or a

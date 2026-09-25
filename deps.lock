@@ -14,6 +14,7 @@ decomp-toolkit                0645e16511814920ffb05b25615dd71f1af73e4c  https://
 ghidra-gekko-broadway-lang    48228fb828dfb6bbec93d250c6f7b78db6d91aa1  https://github.com/aldelaro5/ghidra-gekko-broadway-lang           full     core
 Ghidra-GameCube-Loader        921504c9ddba6e8d9b3655b665a60f1a33306220  https://github.com/Cuyler36/Ghidra-GameCube-Loader                full     core
 VulkanMemoryAllocator         3aa921224c154a0d2c43912bc88e1c42ce1f7607  https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator  full     core
+imgui                         f1cc2ae15e53a861a874c3034aae6798fde194ab  https://github.com/ocornut/imgui                                  full     core
 libogc                        49b62a0dc6c8915229c4f40f04b2a18ce30aea82  https://github.com/devkitPro/libogc                               full     reference
 dolphin                       ee018d00e60b9eb727489908a8daec5c537f44a8  https://github.com/dolphin-emu/dolphin                            sparse   reference
 ww                            b9fcecd24ee25c75d18c6bcba18a10f449c5b68a  https://github.com/sp00nznet/ww                                   full     reference

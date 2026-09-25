@@ -16043,3 +16043,35 @@ for 0..full; 0 is half pressed.)
 the binary, the module, its own memory card and a start script, so builds
 and test runs here cannot disturb a playthrough or touch its save.
 
+### F378 — launcher, first layer: the disc check, settings, and games straight from an image
+
+Ben chose (2026-09-25): **the launcher is part of the game** (one program -
+it opens to the launcher, Play starts the game in the same window) and it is
+drawn with **Dear ImGui** (MIT; pinned in deps.lock at v1.92.9b `f1cc2ae`,
+fetched by bootstrap, hidden from VS Code per rule 6). Recorded in the
+design document.
+
+This commit is the part that is not drawing:
+
+- `host/sha1.c` - our own SHA-1 (FIPS 180-4), checked against the standard
+  vectors.
+- `host/launcher_core.c` - settings (`settings.ini` in the per-user config
+  folder; applied as the environment variables the game already reads), and
+  `mgs_launcher_check_disc`: mounts the image, checks game ID and disc
+  number, and SHA-1s `main.dol` and `shared/mgso_pal.rel` as extracted
+  against the values in `config/GGSPA4.toml` (carried in the binary, since
+  players have no config; `tests/test_launcher.c` checks they agree).
+- `mgs_config_dir` - one config folder on every platform (`%APPDATA%` on
+  Windows, XDG on Linux); the remembered disc paths use it too, and
+  creating it no longer assumes POSIX `mkdir`.
+- **The game can run from a disc image, not only an extracted folder.**
+  `mgs_dol_load_from_disc` had an "image path: TODO" and refused; it now
+  reads main.dol from the header's offset (`mgs_disc_read_main_dol`, shared
+  with the check). **Checked on Ben's own NKit images**: both verify (disc
+  1 and 2, executables matching), a disc in the wrong slot is refused, and
+  the Dock script runs from them - logos, movie, menus, cutscene, 772 disc
+  reads, 0 unhandled.
+
+`tests/test_gamepad.c` finds its virtual pad by name: Ben has plugged in a
+Razer Wolverine V2 Pro, which takes port 1. 22/22 tests.
+

@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 static int exists(const char* path)
 {
@@ -15,16 +18,57 @@ static int exists(const char* path)
  * game data are kept apart deliberately: the remembered PATH is ours to
  * write, the image it points at is the user's and we never copy or move it.
  */
-static int config_path(char* out, size_t n, unsigned number)
+/* ONE CONFIG FOLDER, ON EVERY PLATFORM THE PORT BUILDS FOR: %APPDATA% on
+ * Windows, $XDG_CONFIG_HOME or ~/.config on Linux - each with a
+ * twin-snakes folder. The remembered disc paths and the launcher's settings
+ * both live here, never in the install. */
+int mgs_config_dir(char* out, size_t n)
 {
+#ifdef _WIN32
+    const char* app = getenv("APPDATA");
+    if (!app || !*app) return 0;
+    snprintf(out, n, "%s\\twin-snakes", app);
+#else
     const char* xdg = getenv("XDG_CONFIG_HOME");
     const char* home = getenv("HOME");
     if (xdg && *xdg)
-        snprintf(out, n, "%s/twin-snakes/disc%u.path", xdg, number);
+        snprintf(out, n, "%s/twin-snakes", xdg);
     else if (home && *home)
-        snprintf(out, n, "%s/.config/twin-snakes/disc%u.path", home, number);
+        snprintf(out, n, "%s/.config/twin-snakes", home);
     else
         return 0;
+#endif
+    return 1;
+}
+
+static int config_path(char* out, size_t n, unsigned number)
+{
+    char dir[900];
+    if (!mgs_config_dir(dir, sizeof dir)) return 0;
+    snprintf(out, n, "%s/disc%u.path", dir, number);
+    return 1;
+}
+
+/* mkdir -p for the config folder, portable. */
+static void make_dir(const char* d)
+{
+#ifdef _WIN32
+    _mkdir(d);
+#else
+    mkdir(d, 0755);                 /* EEXIST is the normal case */
+#endif
+}
+
+int mgs_config_make_dir(void)
+{
+    char dir[1024];
+    char* p;
+    if (!mgs_config_dir(dir, sizeof dir)) return 0;
+    for (p = dir + 1; *p; ++p) {
+        if (*p != '/' && *p != '\\') continue;
+        { char c = *p; *p = '\0'; make_dir(dir); *p = c; }
+    }
+    make_dir(dir);
     return 1;
 }
 
@@ -164,19 +208,8 @@ int mgs_disc_remember(unsigned number, const char* path)
      * assuming the parent is there is wrong in exactly the case where this
      * matters.
      */
-    snprintf(dir, sizeof dir, "%s", cfg);
-    slash = strrchr(dir, '/');
-    if (slash) {
-        char* p;
-        *slash = '\0';
-        for (p = dir + 1; *p; ++p) {
-            if (*p != '/') continue;
-            *p = '\0';
-            mkdir(dir, 0755);        /* EEXIST is the normal case */
-            *p = '/';
-        }
-        mkdir(dir, 0755);
-    }
+    (void)dir; (void)slash;
+    mgs_config_make_dir();
 
     f = fopen(cfg, "w");
     if (!f) return 0;
