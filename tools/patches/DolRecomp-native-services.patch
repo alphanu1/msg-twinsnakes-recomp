@@ -1,0 +1,22 @@
+diff --git a/src/app/pipeline.c b/src/app/pipeline.c
+index 9526e45..7fcd938 100644
+--- a/src/app/pipeline.c
++++ b/src/app/pipeline.c
+@@ -539,7 +539,16 @@ static int prepare_llvm_function_abis(const LoadedCodeSection* sections,
+             }
+             dolir_module_free(&module);
+         }
+-    if (runtime == DOLLLVM_RUNTIME_MODERNGEKKO)
++    /* DOLRECOMP_NATIVE_SERVICES=1 lifts the exception and memory-service
++     * blockers for the default runtime too, so functions with generic memory
++     * accesses can still be called natively. Valid when the runtime's
++     * external_read/external_write never raise a guest exception and never
++     * need the guest's registers - true of Twin Snakes' host, whose calls
++     * between native functions otherwise all went back through its run
++     * loop (HANDOFF F366). */
++    const char* native_services = getenv("DOLRECOMP_NATIVE_SERVICES");
++    if (runtime == DOLLLVM_RUNTIME_MODERNGEKKO ||
++        (native_services && native_services[0] && native_services[0] != '0'))
+         dolllvm_enable_native_services(ranges, range_count);
+     if (!dolllvm_propagate_function_abis(ranges, range_count, edges,
+                                          edge_count))

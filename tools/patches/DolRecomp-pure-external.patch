@@ -1,0 +1,75 @@
+diff --git a/src/backend/llvm/memory_service.cpp b/src/backend/llvm/memory_service.cpp
+index 2ab38e1..a1a774c 100644
+--- a/src/backend/llvm/memory_service.cpp
++++ b/src/backend/llvm/memory_service.cpp
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "backend/llvm/emitter.h"
+ #include "cpu/cpu.h"
+ 
+@@ -21,6 +22,20 @@ constexpr u32 ExitStop = 5;
+ 
+ } // namespace
+ 
++// DOLRECOMP_PURE_EXTERNAL=1: the runtime's external_read/external_write
++// never read or change guest registers and never raise a guest exception, so
++// the slow path is a plain call - no state written back before it, no
++// exception test and no state reloaded after. Without this, every load and
++// store in a natively-callable function carried a full write-back and reload
++// on its slow path, and the engine's code grew fivefold (HANDOFF F366).
++static bool pureExternal() {
++  static const bool pure = [] {
++    const char *env = getenv("DOLRECOMP_PURE_EXTERNAL");
++    return env && env[0] && env[0] != '0';
++  }();
++  return pure;
++}
++
+ Value *FunctionEmitter::externalRead(Value *address, u32 width) {
+   if (modern_runtime_) {
+     Type *i32 = Type::getInt32Ty(context_);
+@@ -74,6 +89,22 @@ Value *FunctionEmitter::externalRead(Value *address, u32 width) {
+   builder_.CreateCondBr(builder_.CreateIsNotNull(function), call, zero,
+                         MDBuilder(context_).createBranchWeights(2000, 1));
+   builder_.SetInsertPoint(call);
++  if (pureExternal()) {
++    auto *pureType = FunctionType::get(
++        Type::getInt64Ty(context_),
++        {pointer, Type::getInt32Ty(context_), Type::getInt8Ty(context_)}, false);
++    Value *pureValue = builder_.CreateCall(
++        pureType, function, {ctx_, address, builder_.getInt8(width)});
++    BasicBlock *pureEnd = builder_.GetInsertBlock();
++    builder_.CreateBr(join);
++    builder_.SetInsertPoint(zero);
++    builder_.CreateBr(join);
++    builder_.SetInsertPoint(join);
++    PHINode *purePhi = builder_.CreatePHI(Type::getInt64Ty(context_), 2);
++    purePhi->addIncoming(pureValue, pureEnd);
++    purePhi->addIncoming(builder_.getInt64(0), zero);
++    return purePhi;
++  }
+   materialize(current_pc_);
+   auto *functionType = FunctionType::get(
+       Type::getInt64Ty(context_),
+@@ -153,6 +184,21 @@ void FunctionEmitter::externalWrite(Value *address, Value *value, u32 width) {
+       BasicBlock::Create(context_, "write_slow_done", function_);
+   builder_.CreateCondBr(builder_.CreateIsNotNull(function), call, done);
+   builder_.SetInsertPoint(call);
++  if (pureExternal()) {
++    auto *pureType = FunctionType::get(
++        Type::getVoidTy(context_),
++        {pointer, Type::getInt32Ty(context_), Type::getInt64Ty(context_),
++         Type::getInt8Ty(context_)},
++        false);
++    builder_.CreateCall(
++        pureType, function,
++        {ctx_, address,
++         builder_.CreateZExtOrTrunc(value, Type::getInt64Ty(context_)),
++         builder_.getInt8(width)});
++    builder_.CreateBr(done);
++    builder_.SetInsertPoint(done);
++    return;
++  }
+   materialize(current_pc_);
+   auto *functionType = FunctionType::get(
+       Type::getVoidTy(context_),

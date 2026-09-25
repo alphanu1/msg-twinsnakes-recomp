@@ -291,6 +291,12 @@ is done.
 
 ## WHAT NOT TO RE-PROPOSE
 
+- **DolRecomp's native call ABI for this game (`DOLRECOMP_NATIVE_SERVICES=1`,
+  `--native-abi`) (F366).** Code 3-6x larger (the engine no longer links at
+  3.59 GB), and measured slower where it fits: 31-33 fps against 37 in the
+  double-speed cutscene. Cutting run-loop trips has to come from the SDK
+  boundary (threads, GX, VI, AX going native), not from native call chains.
+
 - **Running an engine module generated without `--rel-bss 0x8054A180`
   (F355).** The host forces OSLink onto that address; an old module keeps
   its globals at 0x7F499BA0 and reads them from the wrong place. Regenerate.
@@ -15553,3 +15559,40 @@ YUV zero. **Fixed** three ways, each for its own reason:
 **Measured**, menu stretch headless: copies alternate buffers every field
 again, and presentation matches the copies - 2,784 one-field presents
 against 2,835 one-field copies (before the fix: 211 against 2,848).
+
+### F366 — native calls between functions: tried, measured slower, withdrawn
+
+Ben: *"why is there still host side activity - if it's truly native we
+should not need it."* A dispatch profile of the busy cutscene answered part
+of it: in the native build every call from one guest function to another
+left native code for the run loop and came back - `func_8005BF50` contains
+no call to `func_8005BF44` at all, both the call to that three-instruction
+fixed-point helper and every return from it were dispatches. Code runs
+natively inside each function; calls between functions do not.
+
+DolRecomp's direct native calls need a function to be "native-ABI clean",
+and the exception and memory-service blockers are lifted only for
+ModernGekko's runtime. `DOLRECOMP_NATIVE_SERVICES=1` (local patch) lifts
+them for ours - valid, since this host's external accesses never raise a
+guest exception or read guest registers - and `func_8005BF50` then calls
+`func_8005BF44_budget` directly; `main.dol` still boots with frames matching.
+
+**But the code grew, and it got slower.** `main.dol`'s code: 38.8 MB
+without native calls, 238 MB with them, and the engine 691 MB -> 3.59 GB,
+which no longer links (x86-64 PC-relative relocations reach 2 GB). The
+growth is the native call convention itself - each call passes the callee's
+live state as arguments and unpacks its outputs - and is the same with or
+without every-block entries. The `compact` policy: 179 MB. A plain slow
+path for hardware accesses (below) halves it, to 124 MB. Measured anyway on
+`main.dol` alone (which fits), the double-speed cutscene at load ~4,
+alternating: **32.9 and 30.8 fps with native calls against 37.1 and 36.7
+without.** Withdrawn; the patch is kept, off, for the record.
+
+**Kept from it: a plain slow path** (`DOLRECOMP_PURE_EXTERNAL=1`, local
+patch). Every load and store's rarely-taken hardware-register path wrote the
+whole register state back before calling the host and reloaded it after;
+this host's handlers never touch guest registers, so it is now a call.
+`main.dol`'s code shrinks 38.8 -> 26.7 MB with no native calls at all.
+Measured with `main.dol` alone rebuilt that way, alternating at load 3-4:
+cutscene 37.3 and 37.5 fps against 36.7 and 36.9 - small and consistent;
+the engine gets it at its next regeneration.

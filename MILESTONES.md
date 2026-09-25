@@ -1496,6 +1496,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - The menu's 25 fps and the green flashing with the render thread
         (F365): its last commands waited for a retrace; fixed, the menu
         copies and presents every field again.
+      - Native calls between guest functions tried and withdrawn (F366):
+        code 3-6x, slower. The next gains come from the SDK boundary.
       - A windowed game has no step ceiling any more (F364): the old
         default stopped play after about 45 minutes.
       - **Native (LLVM-backend) build runs end to end, nothing
