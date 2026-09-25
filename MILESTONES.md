@@ -1636,7 +1636,9 @@ Cost here depends entirely on the phase-0 answer about custom microcode.
 - [ ] Resolution scaling, keyboard and mouse.
 - [ ] Launcher with ISO picker and hash check.
 - [ ] Packaging: portable zip on Windows; AppImage or Flatpak on Linux, with
-      Steam Deck as a first-class target.
+      Steam Deck as a first-class target. **Linux release build done**
+      (F382): Steam Runtime sniper, glibc 2.29 at most, SDL3 bundled; runs
+      from its own folder. Still to come: Windows, and the packaged form.
 
 ---
 

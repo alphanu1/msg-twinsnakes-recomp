@@ -16155,3 +16155,41 @@ movie and menus unchanged; booting does not write the card.
 **Not yet checked: an actual save.** No scripted route reaches one; Ben's
 playthrough is the test.
 
+### F382 — a Linux release that runs on the Steam Deck: built in Valve's Steam Runtime
+
+Ben: the build did not run on his Steam Deck - "an issue with glibc
+version... can we statically link glibc?" **No:** glibc does not support
+static linking for a program that loads libraries at run time, and ours
+`dlopen`s the game module while SDL loads the Vulkan driver and audio
+backend. The standard answer is the opposite - build against an OLD glibc,
+which runs on every newer system.
+
+Measured before: the game needed GLIBC_2.43 (built on this machine's 2.44),
+the module 2.38, plus SDL3 3.4 and a new libstdc++ that a Deck lacks.
+
+`tools/linux-release/build.sh [module build dir]` builds in **Valve's Steam
+Runtime 3 "sniper" SDK** (Debian 11 base, glibc 2.31, CMake 3.25, gcc 10),
+with SDL3 `release-3.4.14` built from source in the image, libstdc++ and
+libgcc linked statically, RUNPATH `$ORIGIN/lib` and SDL3 shipped in `lib/`,
+and the shaders' SPIR-V taken from this machine's build (platform-independent;
+the SDK has no glslc - new `MGS_PREBUILT_SHADERS`). Output
+`build/linux-release/twin-snakes/`. **Result:** the game and SDL need at
+most GLIBC_2.29, the module 2.2.5; the bundled SDL3 is the one loaded; a
+headless run of the package from its own folder - Vulkan, the module found
+in its `module/`, logos at 50, movie at 25, 0 unhandled.
+
+Tried and failed on the way, recorded: `debian:bullseye` directly - Debian
+11's support ended in 2026, its security updates are not on
+archive.debian.org yet and the base image's newer packages then block the
+-dev packages; and Valve's layered image
+`registry.gitlab.steamos.cloud/steamrt/sniper/sdk` - "invalid hardlink
+target /bin/bunzip2" on this Docker. The flat sysroot tarball
+(`latest-container-runtime-public-beta`, 1.2 GB) imported with
+`docker import` works; build.sh fetches it when missing. The `-rpath`
+first came out as `/lib` (a shell ate `$ORIGIN`) and would have loaded the
+system's SDL3; CMake's install rpath fixed it.
+
+**Rule 8:** with a module argument the package contains the native module
+compiled from the disc - for the owner's own machines only (Ben's Deck),
+never distributed; its README says so. A player's launcher builds theirs.
+

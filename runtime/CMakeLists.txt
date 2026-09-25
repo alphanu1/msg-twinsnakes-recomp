@@ -45,6 +45,9 @@ add_library(mgs_runtime STATIC
 # keeps shaderc off the runtime's critical path and out of the link for a
 # build that never generates one.
 find_program(MGS_GLSLC glslc)
+# A release build in a container without glslc (Debian 11) uses the SPIR-V
+# compiled on the development machine: it is platform-independent.
+set(MGS_PREBUILT_SHADERS "" CACHE PATH "compiled shader .inc files to use instead of glslc")
 if(MGS_GLSLC)
   set(MGS_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/shaders")
   file(MAKE_DIRECTORY "${MGS_SHADER_DIR}")
@@ -67,6 +70,10 @@ if(MGS_GLSLC)
   add_dependencies(mgs_runtime mgs_shaders)
   target_include_directories(mgs_runtime PRIVATE "${MGS_SHADER_DIR}")
   target_compile_definitions(mgs_runtime PRIVATE MGS_HAVE_SHADERS=1)
+elseif(MGS_PREBUILT_SHADERS AND EXISTS "${MGS_PREBUILT_SHADERS}/gx.vert.inc")
+  target_include_directories(mgs_runtime PRIVATE "${MGS_PREBUILT_SHADERS}")
+  target_compile_definitions(mgs_runtime PRIVATE MGS_HAVE_SHADERS=1)
+  message(STATUS "shaders: prebuilt SPIR-V from ${MGS_PREBUILT_SHADERS}")
 else()
   message(STATUS "glslc not found: the GPU backend will have no shaders")
 endif()
