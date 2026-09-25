@@ -45,6 +45,16 @@ typedef enum {
 MgsDiscStatus mgs_launcher_check_disc(const char* path, unsigned number,
                                       char* message, size_t message_size);
 
+/* The memory card file the game uses: $MGS_CARD_PATH, else
+ * saves/slot_a.raw from where the game was started. The game and the
+ * launcher both ask here, so they cannot disagree. */
+const char* mgs_card_path(void);
+
+/* Put the current card aside as <card>.backup-<date>-<time>.raw; the game
+ * formats a fresh one at the next start. Writes the backup's name into
+ * `backup`. Returns 1 when moved (or when there was nothing to move). */
+int mgs_card_reset(char* backup, size_t backup_size);
+
 #ifdef __cplusplus
 }
 #endif

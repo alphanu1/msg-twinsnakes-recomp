@@ -180,6 +180,8 @@ native function never would: the SRAM said MONO for weeks (F377).
 - [ ] **Audio (AI/DSP mailboxes/ARAM DMA):** AX's frame hand-off and the
       audio DMA native; the mixer is already ours.
 - [ ] **Memory card and clock (EXI):** `CARD*` and `OSGetTime` native.
+      **First: saving is broken** - a save erased the card's block map and
+      never wrote it back (F380), which stops the game at the next boot.
 - [ ] Anything the engine does to hardware directly, bypassing the SDK,
       found by the register-access log and replaced per call site.
 
@@ -1384,7 +1386,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [ ] **A first-run launcher** (design document, phase 6). Part of the
       game, drawn with Dear ImGui (Ben, 2026-09-25). Done so far (F378):
       the disc check on ISO/GCM/NKit/folder, settings file, running from an
-      image; the screen itself - discs, settings, controller, Play (F379).
+      image; the screen itself - discs, settings, controller, Play (F379);
+      the memory card's state and a reset that keeps a backup (F380).
       Next: the build step (the native game from the player's discs). Asks for the two
       images, hash-checks them, runs the recompile, and leaves the module in
       `module/` beside the executable — where the app already finds it. Not

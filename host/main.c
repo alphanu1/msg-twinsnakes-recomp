@@ -2076,9 +2076,8 @@ int main(int argc, char** argv)
                         {
                             /* Slot A. MGS_CARD_PATH moves it; the default
                              * keeps saves out of the tree's way. */
-                            const char* cp = getenv("MGS_CARD_PATH");
                             mgs_mmio_attach_card(mgs_host_mmio(), &rt.mem,
-                                                 cp && *cp ? cp : "saves/slot_a.raw");
+                                                 mgs_card_path());
                         }
                     s_display_mem = &rt.mem;
                     mgs_profile_set_guest_ram(rt.mem.ram);

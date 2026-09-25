@@ -426,3 +426,72 @@ void mgs_exi_card_byte(MgsExiCard* c, uint8_t* byte)
 
     ++c->position;
 }
+
+/* ---- the launcher's view of a card file (F380) ------------------------- */
+
+static int region_ok(const uint8_t* p, unsigned len, unsigned at)
+{
+    uint16_t sum, inv, ssum, sinv;
+    card_checksum(p, len, &sum, &inv);
+    ssum = (uint16_t)((p[at] << 8) | p[at + 1u]);
+    sinv = (uint16_t)((p[at + 2u] << 8) | p[at + 3u]);
+    return sum == ssum && inv == sinv;
+}
+
+int mgs_card_summarize(const char* path, MgsCardSummary* out)
+{
+    FILE* f;
+    long n;
+    uint8_t* img;
+    const uint8_t *dir, *d1, *d2, *b1, *b2, *bat;
+    int d1ok, d2ok, b1ok, b2ok;
+    unsigned i;
+
+    memset(out, 0, sizeof *out);
+    if (!path || !(f = fopen(path, "rb"))) return 0;
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    out->exists = 1;
+    if (n < (long)(5u * MGS_CARD_SECTOR) || !(img = (uint8_t*)malloc((size_t)n))) {
+        fclose(f); out->damaged = 1; return 1;
+    }
+    if (fread(img, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(img); out->damaged = 1; return 1; }
+    fclose(f);
+
+    d1 = img + 1u * MGS_CARD_SECTOR; d2 = img + 2u * MGS_CARD_SECTOR;
+    b1 = img + 3u * MGS_CARD_SECTOR; b2 = img + 4u * MGS_CARD_SECTOR;
+    d1ok = region_ok(d1, DIR_CHECKSUM, DIR_CHECKSUM);
+    d2ok = region_ok(d2, DIR_CHECKSUM, DIR_CHECKSUM);
+    {   /* the BAT's checksum sits at its start and covers what follows */
+        uint16_t sum, inv;
+        card_checksum(b1 + 4u, MGS_CARD_SECTOR - 4u, &sum, &inv);
+        b1ok = sum == (uint16_t)((b1[0] << 8) | b1[1]) && inv == (uint16_t)((b1[2] << 8) | b1[3]);
+        card_checksum(b2 + 4u, MGS_CARD_SECTOR - 4u, &sum, &inv);
+        b2ok = sum == (uint16_t)((b2[0] << 8) | b2[1]) && inv == (uint16_t)((b2[2] << 8) | b2[3]);
+    }
+    /* Either copy failing is damage worth reporting: the SDK can repair one
+     * from the other in principle, and an interrupted save that erased one
+     * is exactly what stopped Ben's game at boot. */
+    out->damaged = !region_ok(img, HDR_CHECKSUM, HDR_CHECKSUM) ||
+                   !d1ok || !d2ok || !b1ok || !b2ok;
+
+    /* The directory copy the SDK would use: valid, newer update counter. */
+    if (d1ok && d2ok)
+        dir = ((d1[DIR_UPDATE] << 8) | d1[DIR_UPDATE + 1u]) >=
+              ((d2[DIR_UPDATE] << 8) | d2[DIR_UPDATE + 1u]) ? d1 : d2;
+    else
+        dir = d1ok ? d1 : (d2ok ? d2 : NULL);
+    bat = b1ok ? b1 : (b2ok ? b2 : NULL);
+    if (bat) out->free_blocks = (unsigned)((bat[BAT_FREE] << 8) | bat[BAT_FREE + 1u]);
+    for (i = 0; dir && i < 127u; ++i) {
+        const uint8_t* e = dir + 64u * i;
+        if (e[0] == 0xFFu && e[1] == 0xFFu && e[2] == 0xFFu && e[3] == 0xFFu) continue;
+        if (out->saves < 4u) {
+            memcpy(out->codes[out->saves], e, 6); out->codes[out->saves][6] = '\0';
+            memcpy(out->names[out->saves], e + 8, 32); out->names[out->saves][32] = '\0';
+        }
+        ++out->saves;
+    }
+    free(img);
+    return 1;
+}
+

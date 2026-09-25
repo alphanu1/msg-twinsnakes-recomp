@@ -16103,3 +16103,29 @@ the slow build; the launcher showed it as "Ready". The native
 Seen, not yet looked at: a one-pixel green line along the bottom edge of
 the picture in the window (the frame's last row unwritten - YUV zero).
 
+### F380 — a save broke the card and stopped the game at boot; the launcher can now reset it
+
+Ben's first playthrough: saving crashed the game, and afterwards the game
+stopped at a black screen after the logos. The card file (his play copy)
+had changed in exactly ONE block - block 3, the block-allocation table -
+which was all 0xFF: **erased, never rewritten**. A card save is sector
+erase then page program; our card model did the erase and the write never
+landed (or the game failed between the two). That is the save bug to find
+next; the damaged card is kept (`MGS-play/saves/slot_a.broken-20260925-2313.raw`)
+and a clean card restored for him.
+
+Ben: "saving crashed the game and then stops you playing after - Clear save
+game should be added" to the launcher. Done:
+
+- `mgs_card_summarize` (runtime, beside the format it reads): the header,
+  both directory copies and both BAT copies checked against their checksum
+  pairs, the saves in the directory, free blocks. Ben's broken card reads
+  DAMAGED; the clean one ok, 0 saves, 251 blocks free.
+- The launcher's **Memory card** section: "Damaged - usually a save that was
+  interrupted", "Ready - no saves", or the saves' names; **Reset memory
+  card...** confirms, then moves the card aside as
+  `<card>.backup-<date>-<time>.raw` (never deleted) - the card model formats
+  a fresh one, matched to the console's flash ID, at the next start.
+- `mgs_card_path` is now the one place the card's path is decided, for the
+  game and the launcher both.
+

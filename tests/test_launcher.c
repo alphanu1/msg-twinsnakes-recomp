@@ -7,6 +7,7 @@
  * development layout's extracted folders are used if present. */
 #include "../host/sha1.h"
 #include "../host/launcher_core.h"
+#include "platform/exi_card.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,20 @@ int main(void)
     if (!d2) d2 = "discs/GGSPA4/disc2";
     check_disc(d1, 1u);
     check_disc(d2, 2u);
+
+    {   /* The card summary: a card the game formats is clean and empty;
+         * MGS_TEST_CARD names another to describe (a damaged one, say). */
+        MgsCardSummary cs;
+        const char* card = getenv("MGS_TEST_CARD");
+        if (card && mgs_card_summarize(card, &cs)) {
+            unsigned k;
+            printf("card %s: %s, %u save(s), %u blocks free\n", card,
+                   cs.damaged ? "DAMAGED" : "ok", cs.saves, cs.free_blocks);
+            for (k = 0; k < cs.saves && k < 4u; ++k)
+                printf("  %s  %s\n", cs.codes[k], cs.names[k]);
+        }
+        CHECK(mgs_card_summarize("/nonexistent/card.raw", &cs) == 0 && !cs.exists);
+    }
 
     if (failures) printf("%d failure(s)\n", failures);
     else printf("launcher: ok\n");

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 /* THE EXECUTABLES THIS PORT WAS BUILT FROM, as config/GGSPA4.toml records
  * them - repeated here because the launcher ships to players, who have no
@@ -157,3 +158,26 @@ MgsDiscStatus mgs_launcher_check_disc(const char* path, unsigned number,
     snprintf(msg, msg_size, "Disc %u of the European release; executables verified.", number);
     return MGS_DISC_OK;
 }
+
+/* ---- the memory card (F380) ------------------------------------------- */
+
+const char* mgs_card_path(void)
+{
+    const char* cp = getenv("MGS_CARD_PATH");
+    return cp && *cp ? cp : "saves/slot_a.raw";
+}
+
+int mgs_card_reset(char* backup, size_t backup_size)
+{
+    const char* path = mgs_card_path();
+    struct stat st;
+    time_t now = time(NULL);
+    struct tm* t = localtime(&now);
+    if (backup_size) backup[0] = '\0';
+    if (stat(path, &st) != 0) return 1;         /* nothing there: already fresh */
+    snprintf(backup, backup_size, "%s.backup-%04d%02d%02d-%02d%02d%02d.raw", path,
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+             t->tm_hour, t->tm_min, t->tm_sec);
+    return rename(path, backup) == 0;
+}
+

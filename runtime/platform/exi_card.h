@@ -17,6 +17,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MGS_CARD_SECTOR 8192u
 
 typedef struct MgsExiCard {
@@ -56,5 +60,23 @@ void mgs_exi_card_byte(MgsExiCard* c, uint8_t* byte);
 
 /* Write the image back if anything changed. Cheap when nothing has. */
 void mgs_exi_card_flush(MgsExiCard* c);
+
+/* WHAT IS ON A CARD FILE, for the launcher (F380): read-only, no machine
+ * needed. `damaged` means a reserved block's checksum fails - which is what
+ * an interrupted save leaves, and what stops the game at boot. */
+typedef struct MgsCardSummary {
+    int      exists;
+    int      damaged;
+    unsigned saves;             /* directory entries in use */
+    unsigned free_blocks;
+    char     names[4][33];      /* the first few saves' file names */
+    char     codes[4][7];       /* and their game and maker codes */
+} MgsCardSummary;
+
+int mgs_card_summarize(const char* path, MgsCardSummary* out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

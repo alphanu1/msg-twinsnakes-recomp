@@ -9,6 +9,7 @@
  */
 #include "launcher.h"
 #include "launcher_core.h"
+#include "platform/exi_card.h"
 
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -187,6 +188,59 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
             ImGui::TextColored(kDim, "Building it from your discs is the next step "
                                      "of the launcher; for now build it with the "
                                      "development tools.");
+        }
+
+        ImGui::SeparatorText("Memory card");
+        {
+            /* Re-read now and then rather than every frame: it is a 2 MB
+             * file, and it only changes when the game or Reset writes it. */
+            static MgsCardSummary card;
+            static Uint64 card_at;
+            static char card_note[512];
+            if (!card_at || SDL_GetTicks() - card_at > 2000) {
+                mgs_card_summarize(mgs_card_path(), &card);
+                card_at = SDL_GetTicks();
+            }
+            if (!card.exists) {
+                ImGui::TextColored(kDim, "No card yet - a fresh one is made when the game starts.");
+            } else if (card.damaged) {
+                ImGui::TextColored(kBad, "Damaged - usually a save that was interrupted. "
+                                         "The game may stop after the logos until it is reset.");
+            } else if (card.saves == 0) {
+                ImGui::TextColored(kGood, "Ready - no saves on it.");
+            } else {
+                ImGui::TextColored(kGood, "%u save%s on it:", card.saves, card.saves == 1 ? "" : "s");
+                for (unsigned k = 0; k < card.saves && k < 4u; ++k) {
+                    ImGui::SameLine();
+                    ImGui::TextUnformatted(card.names[k]);
+                }
+            }
+            if (card.exists && ImGui::Button("Reset memory card..."))
+                ImGui::OpenPopup("reset card");
+            if (card_note[0]) {
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "%s", card_note);
+            }
+            if (ImGui::BeginPopupModal("reset card", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted("Start again with an empty memory card?");
+                ImGui::TextColored(kDim, "The current card is not deleted: it is kept beside it "
+                                         "as a dated backup.");
+                if (ImGui::Button("Reset", ImVec2(140.0f, 0.0f))) {
+                    char backup[1200];
+                    if (mgs_card_reset(backup, sizeof backup))
+                        SDL_snprintf(card_note, sizeof card_note, backup[0]
+                                     ? "Reset. The old card is kept as %s"
+                                     : "Reset.%s", backup);
+                    else
+                        SDL_snprintf(card_note, sizeof card_note,
+                                     "Could not move the card aside.");
+                    card_at = 0;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(140.0f, 0.0f))) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
         }
 
         ImGui::SeparatorText("Settings");
