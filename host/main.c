@@ -1953,8 +1953,12 @@ int main(int argc, char** argv)
                          * A WINDOW is a person watching, and stopping after
                          * a minute reads as a hang on whatever was on screen
                          * - which is exactly how it was read. */
-                        uint64_t limit = headless ? 40000000ull
-                                                  : 40000000000ull;
+                        /* NO CEILING WITH A WINDOW. A step is one trip
+                         * through the run loop, about 15 million a second,
+                         * so the old 40,000,000,000 ended a game after some
+                         * 45 minutes of play - a person playing stops when
+                         * they close the window. MGS_STEPS still sets one. */
+                        uint64_t limit = headless ? 40000000ull : UINT64_MAX;
                         {
                             const char* env = getenv("MGS_STEPS");
                             if (env) limit = strtoull(env, NULL, 0);

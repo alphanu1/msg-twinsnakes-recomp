@@ -15512,3 +15512,14 @@ A full real-time Dock run on the native build: cutscene 24.9 (correct 25),
 gameplay 50 with two ~5 s dips to 16-24 at frames ~9,500 and ~10,600 while
 the machine's load rose; whether those are load or the build is being
 checked against the C build under the same conditions.
+
+### F364 — a windowed game stopped after about 45 minutes
+
+Ben asked why `MGS_STEPS` was on the command line again. It should not be:
+the windowed default was already 40,000,000,000 steps - but a step is one
+trip through the run loop, about 15 million a second, so that default ended
+a game after roughly 45 minutes of play, frozen on its last frame. With a
+window there is now no ceiling (the game runs until the window is closed);
+headless runs keep their short default, and `MGS_STEPS` still sets one.
+`build/run.sh` (local, git-ignored) no longer passes one either, and takes
+`MGS_MODULE_PATH` to choose a module.

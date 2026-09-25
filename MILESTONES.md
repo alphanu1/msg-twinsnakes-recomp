@@ -1493,6 +1493,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - **Gameplay measured (F359): a steady 33 fps at the Dock**, ~30 ms
         a frame, of which ~28 ms is guest code, parsing and our triangle
         path. `MGS_PROFILE_AFTER` profiles gameplay alone, game thread only.
+      - A windowed game has no step ceiling any more (F364): the old
+        default stopped play after about 45 minutes.
       - **Native (LLVM-backend) build runs end to end, nothing
         interpreted** (F362), with native float and no needless exits
         (F363). Level with the C build: the heavy scene's cost is the
