@@ -1791,9 +1791,12 @@ export DOLRECOMP_ENTER_EVERY_BLOCK=1          # tools/patches/DolRecomp-enter-ev
 export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
 export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
 export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
-extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
+export DOLRECOMP_PURE_EXTERNAL=1               # tools/patches/DolRecomp-pure-external.patch
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm \
+    --native-abi off -j24 \
     discs/GGSPA4/disc1/sys/main.dol build/phase1/dol-llvm
-extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm \
+    --native-abi off -j24 \
     --rel-base 0x7F008000 --rel-bss 0x8054A180 \
     discs/GGSPA4/disc1/files/shared/mgso_pal.rel build/phase1/rel-llvm
 ```
@@ -1823,6 +1826,18 @@ float on - it compares recompiled results against its interpreter - 33/33;
 and on the step clock, frames 4, 6 and 7 (the 3D logo among them) are within
 8 counts of the C build. Measured level with the C build in the heavy
 cutscene at twice speed (36.9-37.9 fps against 36.8).
+
+**With `--native-abi off` and the plain slow path (F367)** - every direct
+call between guest functions now stays in native code. Engine code 691 MB
+-> 497 MB, module 529 MB, 21,594 + 2,287 objects as before, 0 engine
+fallbacks. **Checked:** on the step clock, frames 0-5 and 8 are identical to
+the C build and frames 6 and 7 differ by 3,799 and 7 bytes - the same
+numbers two runs of the C build produce against each other. **Measured**
+by a count the machine's load cannot distort - guest cycles executed in
+100 s of real time, the same script, two runs each: C backend 27.0 and 29.0
+billion; native with calls through the run loop 33.1 and 37.6; **native
+with direct calls 44.7 and 48.3** - about 1.66x the C build - with run-loop
+dispatches halved (0.77-0.85 billion against 1.42-1.63).
 
 ### "99.87% decoded" is not "99.87% decompiled"
 

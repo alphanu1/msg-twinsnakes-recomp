@@ -1496,6 +1496,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - The menu's 25 fps and the green flashing with the render thread
         (F365): its last commands waited for a retrace; fixed, the menu
         copies and presents every field again.
+      - **Direct calls between guest functions (F367): guest code runs
+        1.66x the C build's rate**, run-loop trips halved; installed as the
+        native module. Menu 49.9, cutscene 25.0, gameplay 49.2.
       - Native calls between guest functions tried and withdrawn (F366):
         code 3-6x, slower. The next gains come from the SDK boundary.
       - A windowed game has no step ceiling any more (F364): the old

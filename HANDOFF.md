@@ -15596,3 +15596,41 @@ this host's handlers never touch guest registers, so it is now a call.
 Measured with `main.dol` alone rebuilt that way, alternating at load 3-4:
 cutscene 37.3 and 37.5 fps against 36.7 and 36.9 - small and consistent;
 the engine gets it at its next regeneration.
+
+### F367 — direct calls between functions, the right way: 1.66x the C build
+
+F366's diagnosis was half right. Calls between two functions on DolRecomp's
+ordinary convention ARE direct in its LLVM backend - write back what changed,
+call, check the return, reload - exactly the C backend's model. What sent
+calls back through the run loop was the MIXING of conventions: small leaf
+functions with no memory access (like `0x8005BF44`, the audio layer's
+three-instruction fixed-point multiply) qualify for the native-call
+convention automatically, and a caller on the ordinary convention is not
+allowed to call one directly (`externalDestination`: `!native_abi_ &&
+nativeTarget` -> exit). The most-called functions were exactly those leaves.
+
+`--native-abi off` puts every function on the ordinary convention. No patch
+needed - it is upstream's own switch. `main.dol`'s code is unchanged in size
+(26.8 MB), the engine's shrinks 691 -> 497 MB, and `func_8005BF50` calls
+`func_8005BF44_budget` directly.
+
+**Checked:** step-clock frames 0-5 and 8 identical to the C build, 6 and 7
+off by 3,799 and 7 bytes - what two C runs produce against each other.
+**Measured** by guest cycles executed in 100 s of real time, which the
+machine's load does not distort (frame rates did: Quartus took the load to
+39 and paired runs of one build disagreed by 11 fps):
+
+| build | guest cycles in 100 s | run-loop dispatches | cycles per dispatch |
+|---|---|---|---|
+| C backend | 27.0 / 29.0 billion | 1.52 / 1.65 billion | 17.6 |
+| native, calls via the run loop | 33.1 / 37.6 | 1.42 / 1.63 | 23.2 |
+| **native, direct calls** | **44.7 / 48.3** | **0.77 / 0.85** | **57** |
+
+A real-time Dock run on it (load 7-14): menu 49.9, cutscene 25.0 (min
+23.9), gameplay 49.2 (min 44.6), no stalls. Installed as
+`build/phase1/module-llvm/gGGSPA4_recomp.so` (the previous one is kept
+beside it as `.calls-via-loop-20260925`).
+
+**Also decided** (design document, build section): the release uses the LLVM
+backend with DolRecomp and a linker bundled, so a player needs no compiler;
+the half-hour regeneration has to come down to minutes for a first run.

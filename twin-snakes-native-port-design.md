@@ -241,6 +241,25 @@ Build flow, run by `cmake --build`:
 3. `gen-patch-table` produces the guest-address to native-function table from `symbols.txt` and the runtime's exported shims.
 4. Normal compile and link: generated code, runtime, game glue, patches.
 
+**On a player's machine there is no compiler (decided 2026-09-25).** The flow
+above is the developer's. A player downloads one package and points it at
+their disc; they do not have, and must not need, GCC, Clang, CMake or a
+command line - on Windows least of all. *Believed until now:* "the
+recompiler runs as a build step" left open what that step needs. *Now
+decided:* the release uses DolRecomp's **LLVM backend**, which carries LLVM
+as a library and emits finished machine code itself, so the one remaining
+tool is a linker - bundled too (LLD as a library, or the port loading the
+objects itself). DolRecomp (GPL-3, with this project's recorded patches) and
+LLVM (Apache-2.0 with the LLVM exception) are both redistributable with a
+GPL-3 port, and ship inside the launcher; the player never sees them. What
+the player sees: pick the disc image, the hash check, one progress bar while
+their native game is built - a few minutes is the target, not the half hour
+a full optimised regeneration takes today - and every later launch goes
+straight into the game. The generated code is created on the player's
+machine from their own disc and never leaves it, which is what keeps the
+release free of game code (rule 8). The C backend stays a development tool.
+How the native build was brought up is in docs/decompilation-process.md.
+
 Platform decisions:
 
 | Concern | Windows | Linux |
