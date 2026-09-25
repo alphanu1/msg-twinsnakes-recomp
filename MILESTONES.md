@@ -155,6 +155,34 @@ continuous, audible check on pacing** that no counter in a log replaces.
 
 `twin-snakes-native-port-design.md` is updated in the same change (rule 12).
 
+## Retiring the register models (2026-09-25)
+
+Ben: *"it will all be converted to native along the way, yes?"* - yes, and
+this is the list that says how far along it is. The game's code is native;
+what is not yet is the layer UNDER the SDK, where the SDK's own translated
+code talks to hardware registers and we answer with a model of the chip.
+The design document's boundary is the SDK's public API: each of these
+becomes native SDK functions with no register model beneath them, and each
+is checked against Dolphin when it moves. A model can hold a wrong value a
+native function never would: the SRAM said MONO for weeks (F377).
+
+- [ ] **Console settings (EXI/SRAM):** `OSGetSoundMode`, `OSGetLanguage`,
+      progressive-scan and the like, answered natively from the launcher's
+      settings.
+- [ ] **Controller (SI):** `PADRead`/`PADControlMotor` fill the status
+      straight from SDL3; no SI poll registers.
+- [ ] **Video timing (VI):** `VIWaitForRetrace`, `VISetNextFrameBuffer`,
+      `VIFlush` and the retrace callbacks native; the frame handed to the
+      presenter directly.
+- [ ] **Graphics FIFO status (CP/PE):** draw-done and FIFO pointers
+      answered natively (39 million register polls in 25 s today); then GX
+      at the API level (design document).
+- [ ] **Audio (AI/DSP mailboxes/ARAM DMA):** AX's frame hand-off and the
+      audio DMA native; the mixer is already ours.
+- [ ] **Memory card and clock (EXI):** `CARD*` and `OSGetTime` native.
+- [ ] Anything the engine does to hardware directly, bypassing the SDK,
+      found by the register-access log and replaced per call site.
+
 ## Why this order
 
 **Phase 1 is deliberately throwaway.** Running under the Dolphin-derived

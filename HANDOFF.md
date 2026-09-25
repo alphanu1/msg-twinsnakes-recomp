@@ -16027,3 +16027,8 @@ not F-era play-on (no constant-lag repeat at 20-300 ms in either build), not
 aux-A, at 0x80035340, whose sends are all zero), and not DPL2 (the AX
 command-list mode reads 0).
 
+**Register models to retire** are now a checklist in MILESTONES.md
+("Retiring the register models"), at Ben's request: every hardware
+register model under the SDK becomes native SDK functions, each checked
+against Dolphin as it moves.
+
