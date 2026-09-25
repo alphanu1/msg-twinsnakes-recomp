@@ -291,6 +291,18 @@ is done.
 
 ## WHAT NOT TO RE-PROPOSE
 
+- **Every-block entries (`DOLRECOMP_ENTER_EVERY_BLOCK=1`) or trap-point
+  entries (F369, F370).** Every mid-function resume found so far has an
+  exact cause and an exact fix: the FPU switch done in place, entries from
+  data words that hold code addresses, and entries for what the engine
+  enters in the DOL. Every-block costs 18-22% of guest speed and 3x the
+  build. If a new resume appears, the host stops with the dispatch path -
+  find its cause; do not turn every-block back on.
+- **The game thread waiting for the render thread at a flip
+  (`mgs_display_gx_drain` in frame_pump; `MGS_FLIP_DRAIN=1`) (F370).** It
+  waited for the next frame's commands too. The render thread decides at a
+  retrace mark.
+
 - **DolRecomp's native call ABI for this game (`DOLRECOMP_NATIVE_SERVICES=1`,
   `--native-abi`) (F366).** Code 3-6x larger (the engine no longer links at
   3.59 GB), and measured slower where it fits: 31-33 fps against 37 in the
@@ -15704,3 +15716,92 @@ every object, which nothing here reads), with every-block entries off -
   in 100 s: 50.6/49.6 billion against 51.6/46.1 at `-O3`). Installed as the
   native module; the `-O3` one is kept as `.O3-20260925`. A full Dock run on
   it: 0 unhandled, menu 50.0, cutscene 24.5, gameplay 49.1.
+
+### F370 — native code without an entry at every instruction: +18-22%, and the game no longer waits at a flip
+
+Ben: *"still getting fps slowdown"*. Reproduced headless once Quartus ran
+(load 30): cutscene blocks of 50 frames at 2.4-3.4 s (15-20 fps, correct is
+25), gameplay 28-45. Two causes, found by measurement.
+
+**1. The game thread waited for the render thread at every flip.** The
+flip drain (F365) waited for everything written so far - the next frame's
+commands included - and was the largest single item on the game thread in
+gameplay under load (9.1% of its samples). Now each retrace leaves a mark
+(stream position, VI address) and the render thread, on reaching it,
+decides whether a new frame is complete and flags the presenter
+(`mgs_display_gx_retrace`, `retrace_drawn`). Headless cadence is counted
+there too. Measured side by side at load ~6: gameplay 49.7 against 49.0,
+cutscene 23.3 against 23.1, 0 unhandled either way. Small, but the game
+thread no longer depends on the render thread's progress at all.
+`MGS_FLIP_DRAIN=1` restores the old wait.
+
+**2. How the time really splits: `MGS_PROFILE_OCC=1`** (new) samples the
+guest's `__OSCurrentThread` (0x800000E4) per wall-clock second. The game
+host thread is ~95% busy whether the guest works or idles (the idle is a
+guest thread, 0x8020BCF0, that polls and yields), so CPU time cannot say
+when the guest was short. The occupancy can: in the slow cutscene seconds
+the game's main thread (0x80209D78) holds 85-95% of samples - genuinely
+CPU-bound - while in good seconds it holds 35-60%. `MGS_PROFILE_GUEST=
+80209D78` profiles only while that thread runs: the paired-single matrix
+library tops it (PSMTX44Concat 7.2%, PSMTXMultVec 3.6%), and
+`MGS_PROFILE_WALL=<s>` starts sampling at a wall-clock second (the old
+`MGS_PROFILE_AFTER` counts process CPU time, which runs at an unknown
+multiple of the wall clock).
+
+**3. Why guest code was slow: every instruction was an entry.**
+PSMTXMultVec (21 instructions) compiled to ~40 KB: a 21-way entry switch,
+and no guest register held in a host register across an instruction.
+Every-block entries existed because native code was resumed mid-function
+and nothing could interpret. With the host's fallback fatal (F369) and no
+every-block entries, each resume was found and fixed at its cause:
+
+- **0x8000D804: the SDK's lazy FPU switch.** FP-unavailable's handler,
+  OSSwitchFPUContext, rfi's back to the faulting instruction. Now
+  `ppc_fp_available` does the handler's work in place and returns true -
+  the generated code already writes back and reloads state around that
+  call - using the game's own `__OSSaveFPUContext`/`__OSLoadFPUContext`
+  (0x8001D7C8/0x8001D6A4) so the float semantics are the ones that ran
+  before, restoring r3-r5/CR/LR/CTR/XER and leaving SRR0/SRR1 as the
+  handler's rfi does (`game/module/dispatch.c`; the module links with
+  `--wrap` so vendored GXRuntime is untouched). Not reproduced: the
+  exception prologue's saves into the running thread's OSContext, which
+  OSSaveContext overwrites before anything reads them. `MGS_FPU_TRAP=1`
+  traps as before. On the every-block build: 138,414 switches in place, 0
+  unhandled, no change in speed (the wrap itself costs nothing: 36.4
+  against 36.5/36.9 billion cycles).
+- **0x7F0F7E18: a jump table.** The engine's inflate state machine; both
+  0x7F0F7D58 and 0x7F0F7E18 are cases of its `switch`, reached by `bctr`.
+  Upstream makes direct branch targets entries, not addresses held in data.
+  **This was F369's "unexplained integer re-entry"** - not a trap at all.
+  `DOLRECOMP_ENTER_DATA_REFS=1` makes every aligned data word holding a
+  code address an entry (the REL is relocated before that scan).
+- **0x8000D278: `_savegpr_27`.** The engine enters the DOL's register-save
+  helpers part-way; the DOL never enters that one itself, and DolRecomp
+  sees one binary at a time. `tools/rel-dol-entries.py` lists the DOL
+  addresses in the REL's relocations against module 0 (390), passed to the
+  DOL's generation as `DOLRECOMP_EXTRA_ENTRIES`.
+
+Then a full Dock run: **0 instructions reaching the fallback**, 128,589 FPU
+switches in place, menu 50, cutscene exactly 25 throughout, gameplay 50.
+
+**Measured**, alternating with the every-block build at load 4-6: heavy
+cutscene at double speed 47.8/48.5 fps against 40.8/40.6; guest cycles in
+100 s at double speed 45.7/45.0 billion against 37.4/37.1. Engine text
+442.5 -> 309.7 MB; engine generation 4 min 20 s, 55.8 CPU-minutes (193
+with every-block). Installed as the native module
+(`build/phase1/module-llvm13`; the every-block one kept as
+`.every-block-20260925`). `build/run.sh` now defaults to the native module
+- it was still starting the C build.
+
+**Wrong on the way, recorded:** (a) I first read 0x7F0F7E18 as a
+loop-header budget exit; upstream already makes loop headers, call
+continuations and post-mtmsr instructions leaders, so it could not be.
+(b) A relink in `build/phase1/module-llvm` silently used that directory's
+12:37 objects - the directory points at `dol-llvm`/`rel-llvm`, not the
+current generation; the module in it had been copied from
+`module-llvm10`. Build in the generation's own module directory and copy.
+(c) Absolute census numbers today (36-37 billion for the every-block
+build) are below F369's (46-51) for the same module - the run setup, not
+the build; confirmed by the old flip wait giving the same 36.7. Only
+side-by-side runs are compared.
+

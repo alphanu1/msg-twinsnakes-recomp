@@ -418,6 +418,21 @@ static void note_present_cadence(void)
     s_present_last_field = f;
 }
 
+/* The render thread's half of the frame decision: runs there, at a
+ * retrace's mark, once every copy before that retrace has been drawn.
+ * The key is the one described in frame_pump. */
+static void retrace_drawn(uint32_t vi)
+{
+    uint64_t mgs_display_frame_in(uint32_t xfb_addr);
+    static uint64_t shown = ~0ull;
+    uint64_t key = ((uint64_t)(vi & ~0xFFFu) << 32) ^ mgs_display_frame_in(vi);
+    if (key == shown) return;
+    shown = key;
+    note_present_cadence();
+    if (s_display_windowed)
+        __atomic_store_n(&s_present_pending, 1, __ATOMIC_RELEASE);
+}
+
 static void frame_pump(void)
 {
     /* Retrace: whatever the game has written this field goes to the
@@ -511,7 +526,17 @@ static void frame_pump(void)
      * picture has not changed. */
     {
         uint64_t mgs_display_frame_in(uint32_t xfb_addr);
+        int mgs_display_gx_retrace(uint32_t vi, void (*cb)(uint32_t));
         uint32_t vi = mgs_mmio_xfb_address(mgs_host_mmio());
+        /* WITH A RENDER THREAD, NOTHING HERE WAITS FOR IT (F370). The
+         * decision is made there, at this retrace's point in the stream;
+         * see mgs_display_gx_retrace. Presenting inline still needs the
+         * wait below, since this thread then draws the picture itself. */
+        static int flip_drain = -1;     /* MGS_FLIP_DRAIN=1: the old wait */
+        if (flip_drain < 0) flip_drain = getenv("MGS_FLIP_DRAIN") != NULL;
+        if (!flip_drain && (s_present_threaded || !s_display_windowed) &&
+            mgs_display_gx_retrace(vi, retrace_drawn))
+            return;
         /* THE FRAME HAS TO BE IN THE BUFFER BEFORE IT IS SHOWN.
          *
          * With drawing on the render thread, the copy that fills a
@@ -1934,6 +1959,7 @@ int main(int argc, char** argv)
                                                  cp && *cp ? cp : "saves/slot_a.raw");
                         }
                     s_display_mem = &rt.mem;
+                    mgs_profile_set_guest_ram(rt.mem.ram);
                     /* The mixer reads its samples out of ARAM, so it needs
                      * the same guest memory everything else uses. */
                     mgs_ax_dsp_set_memory(&rt.mem);
@@ -3340,6 +3366,14 @@ int main(int argc, char** argv)
                         mgs_mmio_report_hot(mgs_host_mmio(), 6u);
                         printf("host instructions handled: %lu  (unhandled: %lu)\n",
                                mgs_host_spr_handled(), mgs_host_spr_unknown());
+                        {
+                            const unsigned long long* fs =
+                                (const unsigned long long*)mgs_module_symbol(
+                                    &mod, "mgs_dispatch_fpu_switches");
+                            if (fs)
+                                printf("FPU switches done in place: %llu "
+                                       "(MGS_FPU_TRAP=1 traps instead)\n", *fs);
+                        }
                         printf("system calls serviced: %llu\n",
                                (unsigned long long)r.syscalls);
                         printf("interrupts re-offered because they were still "

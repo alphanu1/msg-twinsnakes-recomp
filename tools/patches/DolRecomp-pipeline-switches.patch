@@ -1,5 +1,5 @@
 diff --git a/src/app/pipeline.c b/src/app/pipeline.c
-index 9526e45..899687a 100644
+index 9526e45..8f18f46 100644
 --- a/src/app/pipeline.c
 +++ b/src/app/pipeline.c
 @@ -293,6 +293,24 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
@@ -15,7 +15,7 @@ index 9526e45..899687a 100644
 +            "DOLRECOMP_EE_EXIT_WHEN_PENDING", "DOLRECOMP_FP_NATIVE",
 +            "DOLRECOMP_PURE_EXTERNAL", "DOLRECOMP_NATIVE_SERVICES",
 +            "DOLRECOMP_LLVM_OPT_LEVEL", "DOLRECOMP_NO_THINLTO",
-+            "DOLRECOMP_ENTER_TRAP_POINTS",
++            "DOLRECOMP_ENTER_TRAP_POINTS", "DOLRECOMP_ENTER_DATA_REFS",
 +        };
 +        size_t k;
 +        for (k = 0; k < sizeof switches / sizeof switches[0]; ++k) {
@@ -45,7 +45,106 @@ index 9526e45..899687a 100644
          dolllvm_enable_native_services(ranges, range_count);
      if (!dolllvm_propagate_function_abis(ranges, range_count, edges,
                                           edge_count))
-@@ -699,12 +726,27 @@ static int emit_llvm_chunk_job(const void* data, void* user) {
+@@ -551,11 +578,86 @@ fail:
+     return 0;
+ }
+ 
++/* CODE ADDRESSES HELD IN DATA (DOLRECOMP_ENTER_DATA_REFS=1).
++ *
++ * An indirect branch can reach any address the program can compute, and
++ * the addresses a program computes branch targets from are the ones stored
++ * in its data: switch jump tables, function pointers, vtables. Direct
++ * branch targets are entries already; these were not, so a `bctr` into a
++ * switch case left native code at an address with no entry and the
++ * runtime interpreted from there. A runtime without an interpreter cannot,
++ * and making every block an entry was the price of that - most of a
++ * native build's code size and compile time (Twin Snakes, HANDOFF F370).
++ *
++ * Every aligned word of every non-executable section whose value is a code
++ * address becomes an entry. A REL's sections are relocated before this
++ * runs, so its jump tables already hold final addresses. A word of data
++ * that only happens to look like a code address costs one extra entry,
++ * nothing more. The two frontends fill this before emitting and clear it
++ * after. */
++static const u32* data_ref_entries;
++static u32 data_ref_entry_count;
++
++static int enter_data_refs(void) {
++    const char* e = getenv("DOLRECOMP_ENTER_DATA_REFS");
++    return e && e[0] && e[0] != '0';
++}
++
++static int note_data_refs(const u8* data, u32 size, u32** list, u32* count,
++                          u32* capacity) {
++    for (u32 offset = 0; data && offset + 4u <= size; offset += 4u) {
++        if (*count == *capacity) {
++            u32 grown = *capacity ? *capacity * 2u : 4096u;
++            u32* bigger = (u32*)realloc(*list, grown * sizeof(**list));
++            if (!bigger)
++                return 0;
++            *list = bigger;
++            *capacity = grown;
++        }
++        u32 value = read_be32(data + offset);
++        if ((value & 3u) == 0u)
++            (*list)[(*count)++] = value;
++    }
++    return 1;
++}
++
++/* DOLRECOMP_EXTRA_ENTRIES=<file>: more entries, one address per line.
++ * For what another binary enters in this one - a REL entering its DOL's
++ * register save helpers part-way, which the DOL itself never does. A list
++ * the caller derives from the other binary's relocations; addresses that
++ * are not code in the binary being built are ignored like any other. */
++static int note_extra_entries(u32** list, u32* count, u32* capacity) {
++    const char* path = getenv("DOLRECOMP_EXTRA_ENTRIES");
++    if (!path || !path[0])
++        return 1;
++    FILE* file = fopen(path, "r");
++    if (!file) {
++        fprintf(stderr, "error: DOLRECOMP_EXTRA_ENTRIES: cannot open %s\n", path);
++        return 0;
++    }
++    char line[64];
++    while (fgets(line, sizeof line, file)) {
++        char* end = NULL;
++        unsigned long value = strtoul(line, &end, 0);
++        if (end == line)
++            continue;
++        u8 word[4] = {(u8)(value >> 24), (u8)(value >> 16), (u8)(value >> 8),
++                      (u8)value};
++        if (!note_data_refs(word, 4u, list, count, capacity)) {
++            fclose(file);
++            return 0;
++        }
++    }
++    fclose(file);
++    return 1;
++}
++
+ static u32* collect_llvm_entry_points(const LoadedCodeSection* sections,
+                                       u32 section_count, u32 program_entry,
+                                       const DolRecompSymbolMap* symbols,
+                                       u32* result_count) {
+-    size_t capacity = 1u + (symbols ? symbols->count : 0u);
++    size_t capacity = 1u + (symbols ? symbols->count : 0u) +
++                      data_ref_entry_count;
+     for (u32 i = 0; i < section_count; i++)
+         capacity += sections[i].size / 4u;
+     u32* points = (u32*)malloc(capacity * sizeof(*points));
+@@ -571,6 +673,10 @@ static u32* collect_llvm_entry_points(const LoadedCodeSection* sections,
+                 points[count++] = address;
+         }
+     }
++    for (u32 i = 0; i < data_ref_entry_count; i++) {
++        if (llvm_code_address(sections, section_count, data_ref_entries[i]))
++            points[count++] = data_ref_entries[i];
++    }
+     for (u32 section_index = 0; section_index < section_count;
+          section_index++) {
+         const LoadedCodeSection* section = &sections[section_index];
+@@ -699,12 +805,27 @@ static int emit_llvm_chunk_job(const void* data, void* user) {
      options.profile_use_path = job->profile_use_path;
      options.partition_seed = job->partition_seed;
      options.state_in_memory = job->state_in_memory;
@@ -75,3 +174,78 @@ index 9526e45..899687a 100644
      options.verify = 1;
      options.function_ranges = job->ranges;
      options.function_range_count = job->range_count;
+@@ -1680,9 +1801,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
+         section->embedded_data_mode = EMBEDDED_DATA_DOL;
+     }
+ 
+-    return emit_code_sections_split(sections, section_count, output_path, cpu,
+-                                    dol->header.entry_point, jobs,
+-                                    local_chunks_dir, symbols, options);
++    u32* refs = NULL;
++    u32 ref_count = 0, ref_capacity = 0;
++    if (enter_data_refs()) {
++        for (u32 i = 0; i < DOL_NUM_DATA; i++) {
++            u32 offset = dol->header.data_offsets[i];
++            u32 size = dol->header.data_sizes[i];
++            if (!size || offset > dol->file_size || size > dol->file_size - offset)
++                continue;
++            if (!note_data_refs(dol->file_data + offset, size, &refs,
++                                &ref_count, &ref_capacity)) {
++                free(refs);
++                fprintf(stderr, "error: out of memory\n");
++                return 0;
++            }
++        }
++    }
++    if (!note_extra_entries(&refs, &ref_count, &ref_capacity)) {
++        free(refs);
++        return 0;
++    }
++    data_ref_entries = refs;
++    data_ref_entry_count = ref_count;
++    int ok = emit_code_sections_split(sections, section_count, output_path, cpu,
++                                      dol->header.entry_point, jobs,
++                                      local_chunks_dir, symbols, options);
++    data_ref_entries = NULL;
++    data_ref_entry_count = 0;
++    free(refs);
++    return ok;
+ }
+ 
+ int emit_rpx_split(const RPXFile* rpx, const char* output_path,
+@@ -1736,9 +1883,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
+         section->embedded_data_mode = EMBEDDED_DATA_DOL;
+     }
+ 
++    u32* refs = NULL;
++    u32 ref_count = 0, ref_capacity = 0;
++    if (enter_data_refs()) {
++        for (u32 i = 0; i < rel->section_count; i++) {
++            const RELSection* data = &rel->sections[i];
++            if (data->executable || !data->data || !data->size)
++                continue;
++            if (!note_data_refs(data->data, data->size, &refs, &ref_count,
++                                &ref_capacity)) {
++                free(refs);
++                free(sections);
++                fprintf(stderr, "error: out of memory\n");
++                return 0;
++            }
++        }
++    }
++    if (!note_extra_entries(&refs, &ref_count, &ref_capacity)) {
++        free(refs);
++        free(sections);
++        return 0;
++    }
++    data_ref_entries = refs;
++    data_ref_entry_count = ref_count;
+     int ok = emit_code_sections_split(sections, section_count, output_path, cpu,
+                                       rel->entry_point, jobs, local_chunks_dir,
+                                       NULL, options);
++    data_ref_entries = NULL;
++    data_ref_entry_count = 0;
++    free(refs);
+     free(sections);
+     return ok;
+ }

@@ -254,7 +254,11 @@ LLVM (Apache-2.0 with the LLVM exception) are both redistributable with a
 GPL-3 port, and ship inside the launcher; the player never sees them. What
 the player sees: pick the disc image, the hash check, one progress bar while
 their native game is built - a few minutes is the target, not the half hour
-a full optimised regeneration takes today - and every later launch goes
+a full optimised regeneration took (F369, F370: now about 4-5 minutes on 24
+jobs, 56 CPU-minutes, once native code is entered only where code can be
+entered; the launcher's generation includes listing the engine's references
+into the DOL, `tools/rel-dol-entries.py`, before the DOL is built) - and
+every later launch goes
 straight into the game. The generated code is created on the player's
 machine from their own disc and never leaves it, which is what keeps the
 release free of game code (rule 8). The C backend stays a development tool.

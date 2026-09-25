@@ -1787,7 +1787,10 @@ native calls, behind the same `generated.h` dispatch API and the same
 shared runtime prototypes identical).
 
 ```sh
-export DOLRECOMP_ENTER_EVERY_BLOCK=1          # tools/patches/DolRecomp-enter-every-block.patch
+python3 tools/rel-dol-entries.py discs/GGSPA4/disc1/files/shared/mgso_pal.rel \
+    -o build/phase1/rel-dol-entries.txt        # 390 DOL addresses the engine refers to
+export DOLRECOMP_ENTER_DATA_REFS=1             # DolRecomp-pipeline-switches.patch (F370)
+export DOLRECOMP_EXTRA_ENTRIES=$PWD/build/phase1/rel-dol-entries.txt   # same patch
 export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
 export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
 export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
@@ -1850,6 +1853,37 @@ every-block entries the engine builds in 64 CPU-minutes, but native code
 then resumes where it has no entry; entries only at lazy-FPU trap points
 were measured NOT enough (an integer-only re-entry at 0x7F0F7E18 remains
 unexplained).
+
+**Without every-block entries (F370).** Every-block entries
+(`DOLRECOMP_ENTER_EVERY_BLOCK`, still in the enter-every-block patch, now
+off) are replaced by three exact rules, each for a way native code was
+being resumed mid-function:
+
+1. the SDK's lazy FPU switch is done in place instead of trapping
+   (`game/module/dispatch.c`, the module linked with
+   `--wrap=ppc_fp_available --wrap=ppc_fp_raise_unavailable`; no generator
+   change);
+2. `DOLRECOMP_ENTER_DATA_REFS=1`: every aligned word in a data section that
+   holds a code address is an entry - switch jump tables (0x7F0F7E18 was a
+   case of the engine's inflate state machine) and function pointers;
+3. `DOLRECOMP_EXTRA_ENTRIES`: what the engine enters in the DOL, from its
+   relocations against module 0 (`tools/rel-dol-entries.py`, 390
+   addresses) - the engine enters `_savegpr_27` at 0x8000D278, which the
+   DOL itself never does.
+
+Each rule was found by running with no every-block entries and the host's
+fallback fatal: 0x8000D804 (FPU trap), then 0x7F0F7E18 (jump table), then
+0x8000D278 (save helper), then a full Dock run with **0 instructions
+reaching the fallback**, 128,589 FPU switches done in place, menu 50,
+cutscene 25.0 throughout, gameplay 50.
+
+**Numbers:** engine 4 min 20 s at load 4-24, 55.8 CPU-minutes (193 with
+every-block entries); `main.dol` 13 s; engine text 442.5 -> 309.7 MB.
+**Measured**, alternating with the every-block build at load 4-6: the
+heavy cutscene at double speed (`MGS_SPEED=2`, target 50) 47.8 and 48.5 fps
+against 40.8 and 40.6; guest cycles in 100 s at double speed 45.7 and 45.0
+billion against 37.4 and 37.1. (Absolute cycle counts differ from F369's by
+run setup; only runs made side by side are compared.)
 
 ### "99.87% decoded" is not "99.87% decompiled"
 

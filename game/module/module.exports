@@ -19,6 +19,8 @@
     mgs_dispatch_set_patch_query;
     /* Whether native code must leave when interrupts are re-enabled. */
     dolrecomp_msr_ee_exit_wanted;
+    /* FP-unavailable traps handled in place (dispatch.c). */
+    mgs_dispatch_fpu_switches;
   local:
     *;
 };

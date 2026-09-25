@@ -93,6 +93,110 @@ u8* g_mgs_vmem;
 void mgs_dispatch_set_vmem(u8* base);
 void mgs_dispatch_set_vmem(u8* base) { g_mgs_vmem = base; }
 
+/* THE FPU SWITCH, DONE WHERE THE TRAP WAS (HANDOFF F370).
+ *
+ * The SDK switches floating point lazily. A thread switch leaves MSR[FP]
+ * clear, the thread's next float instruction raises FP-unavailable, and the
+ * handler - OSSwitchFPUContext - saves the previous owner's registers into
+ * its OSContext, loads the current thread's, marks it the owner, sets
+ * MSR[FP] and returns with rfi to the instruction that trapped.
+ *
+ * That return lands in the middle of a block. Upstream interprets forward
+ * from there; a native build cannot, so every instruction had to be an
+ * entry point, which keeps the generated code from holding anything in a
+ * host register across an instruction: PSMTXMultVec, 21 instructions,
+ * compiled to about 40 KB.
+ *
+ * So the trap is not taken. The generated code already expects this helper
+ * to be able to change state - it writes its registers back before the
+ * call and reloads them after - so the switch is done here, in place, and
+ * the code carries on. It is the handler's own work: the game's own
+ * recompiled __OSSaveFPUContext and __OSLoadFPUContext do the saving and
+ * loading, so the float semantics are exactly what ran before. What the
+ * handler restores before its rfi (r3-r5, CR, LR, CTR, XER) is restored
+ * here, and SRR0/SRR1 are left as its rfi leaves them.
+ *
+ * Not reproduced: the exception prologue's saves of r0-r5 and the special
+ * registers into the current OSContext, and the EXC state bit it sets and
+ * the handler clears. Nothing reads a running thread's saved registers
+ * before OSSaveContext overwrites them.
+ *
+ * MGS_FPU_TRAP=1 takes the real exception instead. */
+#define MGS_OS_CURRENT_CONTEXT 0x000000D4u   /* __OSCurrentContext */
+#define MGS_OS_FPU_CONTEXT     0x000000D8u   /* __OSFPUContext */
+#define MGS_OS_SAVE_FPU        0x8001D7C8u   /* __OSSaveFPUContext, dtk-sig */
+#define MGS_OS_LOAD_FPU        0x8001D6A4u   /* __OSLoadFPUContext, dtk-sig */
+
+bool __real_ppc_fp_available(CPUState* cpu, u32 cia);
+bool __wrap_ppc_fp_available(CPUState* cpu, u32 cia);
+bool __real_ppc_fp_raise_unavailable(CPUState* cpu, u32 cia);
+bool __wrap_ppc_fp_raise_unavailable(CPUState* cpu, u32 cia);
+extern bool g_ppc_lazy_fp_enabled;
+
+static int s_fpu_in_place = -1;
+unsigned long long mgs_dispatch_fpu_switches;
+
+static u32 low_be32(const CPUState* cpu, u32 off)
+{
+    const u8* p = cpu->ram + off;
+    return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
+}
+
+static void low_wbe32(CPUState* cpu, u32 off, u32 v)
+{
+    u8* p = cpu->ram + off;
+    p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v;
+}
+
+static bool fpu_switch_in_place(CPUState* cpu, u32 cia)
+{
+    u32 cur, owner, r3, r4, r5, cr, lr, ctr, xer, pc, msr;
+    if (s_fpu_in_place < 0) s_fpu_in_place = getenv("MGS_FPU_TRAP") == NULL;
+    if (!s_fpu_in_place || !cpu->ram) return false;
+    cur = low_be32(cpu, MGS_OS_CURRENT_CONTEXT);
+    owner = low_be32(cpu, MGS_OS_FPU_CONTEXT);
+    if (!cur) return false;          /* before OSInit: the real exception */
+    r3 = cpu->gpr[3]; r4 = cpu->gpr[4]; r5 = cpu->gpr[5];
+    cr = cpu->cr; lr = cpu->lr; ctr = cpu->ctr; xer = cpu->xer; pc = cpu->pc;
+    msr = cpu->msr;
+    cpu->msr |= PPC_MSR_FP;
+    low_wbe32(cpu, MGS_OS_FPU_CONTEXT, cur);
+    if (owner != cur) {
+        if (owner) {
+            cpu->gpr[5] = owner;
+            if (!mgs_dol_call(cpu, MGS_OS_SAVE_FPU)) goto lost;
+        }
+        cpu->gpr[4] = cur;
+        if (!mgs_dol_call(cpu, MGS_OS_LOAD_FPU)) goto lost;
+    }
+    cpu->gpr[3] = r3; cpu->gpr[4] = r4; cpu->gpr[5] = r5;
+    cpu->cr = cr; cpu->lr = lr; cpu->ctr = ctr; cpu->xer = xer; cpu->pc = pc;
+    cpu->srr0 = cia;
+    cpu->srr1 = (msr & PPC_MSR_RFI_MASK) | PPC_MSR_FP;
+    ++mgs_dispatch_fpu_switches;
+    return true;
+lost:
+    fprintf(stderr, "[fpu] the SDK's FPU save/load at 0x%08X/0x%08X is not "
+                    "in this module; cannot switch in place\n",
+            MGS_OS_SAVE_FPU, MGS_OS_LOAD_FPU);
+    abort();
+}
+
+/* The LLVM backend calls this one; the C backend's inline test calls the
+ * next. Both reach here through the link's --wrap. */
+bool __wrap_ppc_fp_available(CPUState* cpu, u32 cia)
+{
+    if (!g_ppc_lazy_fp_enabled || (cpu->msr & PPC_MSR_FP)) return true;
+    if (fpu_switch_in_place(cpu, cia)) return true;
+    return __real_ppc_fp_available(cpu, cia);
+}
+
+bool __wrap_ppc_fp_raise_unavailable(CPUState* cpu, u32 cia)
+{
+    if (fpu_switch_in_place(cpu, cia)) return true;
+    return __real_ppc_fp_raise_unavailable(cpu, cia);
+}
+
 /* THE NATIVE-REGION GUARD, for code from DolRecomp's LLVM backend.
  *
  * A native function calls the next one directly, so the dispatch path where

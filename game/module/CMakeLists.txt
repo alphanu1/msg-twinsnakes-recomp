@@ -199,4 +199,4 @@ target_link_libraries(mgs_module PRIVATE
   m)   # the generated float paths call fmod/sqrt; libm is not implicit here
 set_target_properties(mgs_module PROPERTIES
   OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
-  LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/module.exports")
+  LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/module.exports -Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")

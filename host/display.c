@@ -280,6 +280,56 @@ static inline void cpu_relax(void)
 #endif
 }
 
+/* RETRACE, ON THE RENDER THREAD'S TIMELINE.
+ *
+ * A flip is only presentable once every copy the game issued before it has
+ * been drawn - which on this side means once the render thread has parsed
+ * up to the point in the stream where the flip happened. The game's thread
+ * used to wait for that at every flip (mgs_display_gx_drain), and it waited
+ * for more than that: everything written SINCE the flip too, the next
+ * frame's first commands included. In gameplay under load that wait was
+ * the largest single thing on the game's thread (9% of its samples, F370).
+ * On the console nothing waits: VI scans out, the GPU draws, the CPU runs.
+ *
+ * So each retrace leaves a mark - where the stream was, and what VI was
+ * scanning - and the render thread acts on it when it gets there. Marks
+ * are out of band: a retrace can fall in the middle of a command, so it
+ * cannot be written into the stream itself. */
+typedef struct { uint64_t pos; uint32_t vi; } GxMark;
+#define GX_MARKS 64u
+static GxMark   s_marks[GX_MARKS];
+static uint64_t s_marks_head;            /* written by the game thread */
+static uint64_t s_marks_tail;            /* written by the render thread */
+static void   (*s_on_retrace)(uint32_t vi);
+static uint64_t s_marks_dropped;
+
+/* Render thread: every mark the stream has reached. */
+static void gx_marks_run(uint64_t tail)
+{
+    uint64_t t = s_marks_tail;
+    while (t != __atomic_load_n(&s_marks_head, __ATOMIC_ACQUIRE) &&
+           s_marks[t % GX_MARKS].pos <= tail) {
+        if (s_on_retrace) s_on_retrace(s_marks[t % GX_MARKS].vi);
+        __atomic_store_n(&s_marks_tail, ++t, __ATOMIC_RELEASE);
+    }
+}
+
+/* Render thread: how far it may parse before the next mark. */
+static uint64_t gx_marks_limit(uint64_t tail, uint64_t n)
+{
+    uint64_t t = s_marks_tail;
+    if (t != __atomic_load_n(&s_marks_head, __ATOMIC_ACQUIRE)) {
+        uint64_t pos = s_marks[t % GX_MARKS].pos;
+        if (pos > tail && pos - tail < n) n = pos - tail;
+    }
+    return n;
+}
+
+static int gx_marks_pending(void)
+{
+    return __atomic_load_n(&s_marks_head, __ATOMIC_ACQUIRE) != s_marks_tail;
+}
+
 static int SDLCALL gx_thread_main(void* unused)
 {
     void mgs_raise_thread_priority(const char* who, int critical);
@@ -287,15 +337,19 @@ static int SDLCALL gx_thread_main(void* unused)
     mgs_raise_thread_priority("render", 0);
     for (;;) {
         uint64_t tail = s_ring_tail;
-        uint64_t pub = __atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE);
+        uint64_t pub;
+        gx_marks_run(tail);
+        pub = __atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE);
         if (pub == tail) {
             unsigned spin;
             for (spin = 0; spin < 4000u; ++spin) {
-                if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail)
+                if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail
+                    || gx_marks_pending())
                     break;
                 cpu_relax();
             }
-            if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail)
+            if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail
+                || gx_marks_pending())
                 continue;
             if (__atomic_load_n(&s_ring_stop, __ATOMIC_ACQUIRE)) break;
             /* Sleep. The flag and the head are both sequentially consistent
@@ -304,6 +358,7 @@ static int SDLCALL gx_thread_main(void* unused)
             SDL_LockMutex(s_gx_mutex);
             __atomic_store_n(&s_ring_waiting, 1, __ATOMIC_SEQ_CST);
             if (__atomic_load_n(&s_ring_published, __ATOMIC_SEQ_CST) == tail &&
+                !gx_marks_pending() &&
                 !__atomic_load_n(&s_ring_stop, __ATOMIC_SEQ_CST))
                 SDL_WaitConditionTimeout(s_gx_cond, s_gx_mutex, 2);
             __atomic_store_n(&s_ring_waiting, 0, __ATOMIC_SEQ_CST);
@@ -315,6 +370,7 @@ static int SDLCALL gx_thread_main(void* unused)
             uint64_t n = pub - tail;
             if (n > (uint64_t)(GX_RING_SIZE - off)) n = GX_RING_SIZE - off;
             if (n > 65536u) n = 65536u;
+            n = gx_marks_limit(tail, n);
             mgs_gx_write_bytes(&s_gx, s_ring + off, (unsigned)n);
             __atomic_store_n(&s_ring_tail, tail + n, __ATOMIC_RELEASE);
         }
@@ -379,6 +435,35 @@ void mgs_display_gx_drain(void)
         cpu_relax();
 }
 
+/* Game thread, at retrace: publish, and leave a mark for the render thread
+ * to act on - `on_retrace(vi)` runs there once everything written before
+ * this point has been drawn. Returns 0 when there is no render thread and
+ * the caller must decide inline. */
+int mgs_display_gx_retrace(uint32_t vi, void (*on_retrace)(uint32_t vi));
+int mgs_display_gx_retrace(uint32_t vi, void (*on_retrace)(uint32_t vi))
+{
+    uint64_t h;
+    if (!s_gx_thread) return 0;
+    s_on_retrace = on_retrace;
+    gx_publish();
+    h = s_marks_head;
+    if (h - __atomic_load_n(&s_marks_tail, __ATOMIC_ACQUIRE) >= GX_MARKS) {
+        /* Over a second behind: the next retrace carries the newer
+         * picture anyway. */
+        ++s_marks_dropped;
+        return 1;
+    }
+    s_marks[h % GX_MARKS].pos = s_ring_head;
+    s_marks[h % GX_MARKS].vi = vi;
+    __atomic_store_n(&s_marks_head, h + 1u, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&s_ring_waiting, __ATOMIC_SEQ_CST)) {
+        SDL_LockMutex(s_gx_mutex);
+        SDL_SignalCondition(s_gx_cond);
+        SDL_UnlockMutex(s_gx_mutex);
+    }
+    return 1;
+}
+
 /* Drain and stop, before the exit report reads what the renderer counted
  * and before the GPU is torn down. */
 void mgs_display_gx_stop(void);
@@ -393,9 +478,10 @@ void mgs_display_gx_stop(void)
     SDL_WaitThread(s_gx_thread, NULL);
     s_gx_thread = NULL;
     fprintf(stderr, "[gx] render thread stopped: %llu MB through the ring, "
-                    "%llu waits for a full ring\n",
+                    "%llu waits for a full ring, %llu retraces dropped\n",
             (unsigned long long)(s_ring_head >> 20),
-            (unsigned long long)s_ring_full_waits);
+            (unsigned long long)s_ring_full_waits,
+            (unsigned long long)s_marks_dropped);
 }
 
 static void fifo_sink(void* user, uint32_t value, unsigned size)

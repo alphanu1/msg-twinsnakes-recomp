@@ -1496,9 +1496,16 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - The menu's 25 fps and the green flashing with the render thread
         (F365): its last commands waited for a retrace; fixed, the menu
         copies and presents every field again.
+      - **Every-block entries gone (F370): native code is entered only
+        where code can be entered.** FPU switch in place, entries from data
+        and from the engine's references into the DOL. Guest throughput
+        +18-22% (cutscene at double speed 48 fps against 41), engine code
+        442 -> 310 MB, first build ~4-5 minutes. Full Dock run: 0
+        fallbacks, cutscene 25.0, gameplay 50.
+      - The game thread no longer waits for the render thread at a flip
+        (F370): the render thread decides at a retrace mark.
       - First-run build: engine ~8 minutes on an idle machine (was 25-30)
-        at the same runtime speed (F369). Every-block entries are still
-        needed; why exactly is only partly understood.
+        at the same runtime speed (F369).
       - The game no longer presents its own frames (F368): a main-thread
         presenter, so the display's vsync cannot stall the game.
       - **Direct calls between guest functions (F367): guest code runs

@@ -26,6 +26,7 @@
 #include <string.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <time.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -67,15 +68,89 @@ static void prof_record(unsigned long pc)
     prof_lost += 1ul;
 }
 
+/* MGS_PROFILE_WALL=<seconds of wall time>: samples before it are dropped.
+ * MGS_PROFILE_AFTER counts PROCESS CPU time, which with a render thread,
+ * a mixer and disc workers runs at some unknown multiple of the wall clock,
+ * so "gameplay starts at 240 s" could not be turned into a setting.
+ * clock_gettime is async-signal-safe. */
+static long long prof_wall_from_ns;
+
+static long long prof_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000ll + ts.tv_nsec;
+}
+
+/* GUEST THREAD OCCUPANCY (MGS_PROFILE_OCC=1).
+ *
+ * The game's host thread is busy whether the guest is working or idling -
+ * its idle is a guest thread that polls and yields - so neither CPU time
+ * nor a host profile can say when the guest was short of time. The guest
+ * can: __OSCurrentThread (0x800000E4) names the thread that is running.
+ * Per second of wall time, samples are counted per current thread. */
+#define OCC_SECONDS 1024u
+#define OCC_SLOTS   12u
+static const unsigned char* prof_ram;
+static int                  prof_occ;
+static long long            prof_occ_t0;
+static unsigned             prof_occ_thr[OCC_SECONDS][OCC_SLOTS];
+static unsigned             prof_occ_n[OCC_SECONDS][OCC_SLOTS];
+
+void mgs_profile_set_guest_ram(const unsigned char* ram) { prof_ram = ram; }
+
+static unsigned             prof_only_guest;
+
+static void prof_occ_record(long long now)
+{
+    const unsigned char* p;
+    unsigned sec, thr, i;
+    if (!prof_ram) return;
+    sec = (unsigned)((now - prof_occ_t0) / 1000000000ll);
+    if (sec >= OCC_SECONDS) return;
+    p = prof_ram + 0xE4u;
+    thr = ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) |
+          ((unsigned)p[2] << 8) | p[3];
+    for (i = 0; i < OCC_SLOTS; ++i) {
+        if (prof_occ_n[sec][i] == 0u) prof_occ_thr[sec][i] = thr;
+        if (prof_occ_thr[sec][i] == thr) { ++prof_occ_n[sec][i]; return; }
+    }
+}
+
+static void prof_occ_report(void)
+{
+    unsigned s, i;
+    if (!prof_occ) return;
+    fprintf(stderr, "[occ] samples per guest thread (__OSCurrentThread), "
+                    "per second of wall time\n");
+    for (s = 0; s < OCC_SECONDS; ++s) {
+        if (!prof_occ_n[s][0]) continue;
+        fprintf(stderr, "[occ] %4u", s);
+        for (i = 0; i < OCC_SLOTS && prof_occ_n[s][i]; ++i)
+            fprintf(stderr, "  %08X:%u", prof_occ_thr[s][i], prof_occ_n[s][i]);
+        fputc('\n', stderr);
+    }
+}
+
 static void prof_tick(int sig, siginfo_t* si, void* uc)
 {
     ucontext_t* c = (ucontext_t*)uc;
     (void)sig; (void)si;
+    if (prof_wall_from_ns && prof_now_ns() < prof_wall_from_ns) return;
     if (!prof_all_threads && syscall(SYS_gettid) != prof_tid) {
         prof_other += 1ul;
         return;
     }
+    /* MGS_PROFILE_GUEST=<OSThread address>: only while that guest thread
+     * is current - the game's own work, without its idle. */
+    if (prof_only_guest && prof_ram) {
+        const unsigned char* p = prof_ram + 0xE4u;
+        unsigned thr = ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) |
+                       ((unsigned)p[2] << 8) | p[3];
+        if (thr != prof_only_guest) return;
+    }
     prof_total += 1ul;
+    if (prof_occ) prof_occ_record(prof_now_ns());
 #if defined(__x86_64__)
     prof_record((unsigned long)c->uc_mcontext.gregs[REG_RIP]);
 #elif defined(__aarch64__)
@@ -133,6 +208,17 @@ void mgs_profile_start(void)
         long sec = after ? strtol(after, NULL, 0) : 0;
         if (sec > 0) { it.it_value.tv_sec = sec; it.it_value.tv_usec = 0; }
     }
+    {
+        const char* wall = getenv("MGS_PROFILE_WALL");
+        long sec = wall ? strtol(wall, NULL, 0) : 0;
+        if (sec > 0) prof_wall_from_ns = prof_now_ns() + sec * 1000000000ll;
+    }
+    prof_occ = getenv("MGS_PROFILE_OCC") != NULL;
+    {
+        const char* g = getenv("MGS_PROFILE_GUEST");
+        prof_only_guest = g ? (unsigned)strtoul(g, NULL, 16) : 0u;
+    }
+    prof_occ_t0 = prof_now_ns();
     if (setitimer(ITIMER_PROF, &it, NULL) != 0) return;
 
     prof_on = 1;
@@ -159,6 +245,7 @@ void mgs_profile_report(void)
     memset(&off, 0, sizeof off);
     setitimer(ITIMER_PROF, &off, NULL);
     prof_on = 0;
+    prof_occ_report();
 
     for (i = 0; i < PROF_SLOTS; ++i) if (prof_hits[i]) order[n++] = i;
     qsort(order, n, sizeof order[0], prof_cmp);
