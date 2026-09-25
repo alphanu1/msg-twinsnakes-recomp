@@ -85,6 +85,12 @@ void mgs_video_shutdown(void)
 
 uint32_t* mgs_video_framebuffer(void) { return s_fb; }
 
+/* For the launcher, which draws in the same window before the game. */
+SDL_Window*   mgs_video_window(void);
+SDL_Renderer* mgs_video_renderer(void);
+SDL_Window*   mgs_video_window(void)   { return s_window; }
+SDL_Renderer* mgs_video_renderer(void) { return s_renderer; }
+
 void mgs_video_clear(uint32_t argb)
 {
     size_t i, n = MGS_XFB_WIDTH * MGS_XFB_HEIGHT;

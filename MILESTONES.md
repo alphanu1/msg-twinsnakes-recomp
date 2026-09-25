@@ -1384,7 +1384,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
 - [ ] **A first-run launcher** (design document, phase 6). Part of the
       game, drawn with Dear ImGui (Ben, 2026-09-25). Done so far (F378):
       the disc check on ISO/GCM/NKit/folder, settings file, running from an
-      image. Next: the screens, then the build step. Asks for the two
+      image; the screen itself - discs, settings, controller, Play (F379).
+      Next: the build step (the native game from the player's discs). Asks for the two
       images, hash-checks them, runs the recompile, and leaves the module in
       `module/` beside the executable — where the app already finds it. Not
       first-run generation inside the game process: recompiling emits 50-150

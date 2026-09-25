@@ -13,6 +13,8 @@
 #include "dvd/dol.h"
 #include "os/os_runtime.h"
 #include "platform/profile.h"
+#include "launcher.h"
+#include "launcher_core.h"
 #include "os/patch_table.h"
 #include "platform/jobs.h"
 #include "module.h"
@@ -1642,16 +1644,23 @@ static const char* find_module(const char* argv0, char* out, size_t out_size)
     if (dir_find_module(cand, out, out_size)) return out;
     if (dir_find_module(dir, out, out_size)) return out;
     if (dir_find_module("module", out, out_size)) return out;
+    /* THE NATIVE BUILD BEFORE THE C BUILD. Both live in the build tree;
+     * module-llvm is the native one (F367-F370) and is what should run.
+     * Searching module/ first started the C build whenever no --module was
+     * given - which the launcher showed as "Ready" (F379). */
+    if (dir_find_module("build/phase1/module-llvm", out, out_size)) return out;
     if (dir_find_module("build/phase1/module", out, out_size)) return out;
     {
         static const char* const ups[] = { "..", "../..", "../../.." };
-        unsigned k;
-        for (k = 0; k < 3u; ++k) {
-            snprintf(cand, sizeof cand, "%s/%s/phase1/module", dir, ups[k]);
-            if (dir_find_module(cand, out, out_size)) return out;
-            snprintf(cand, sizeof cand, "%s/%s/build/phase1/module", dir, ups[k]);
-            if (dir_find_module(cand, out, out_size)) return out;
-        }
+        static const char* const trees[] = {
+            "phase1/module-llvm", "build/phase1/module-llvm",
+            "phase1/module", "build/phase1/module" };
+        unsigned k, t;
+        for (t = 0; t < 4u; ++t)
+            for (k = 0; k < 3u; ++k) {
+                snprintf(cand, sizeof cand, "%s/%s/%s", dir, ups[k], trees[t]);
+                if (dir_find_module(cand, out, out_size)) return out;
+            }
     }
     return NULL;
 }
@@ -1664,6 +1673,7 @@ int main(int argc, char** argv)
     const char* module_path = NULL;
     char exe_dir_buf[1024];
     int headless = 0;
+    int launcher = 1;        /* 0 --play, 1 as settings say, 2 --launcher */
     char path1[1024], path2[1024];
     MgsDiscSource src1, src2;
     MgsDisc disc1, disc2;
@@ -1684,6 +1694,8 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--report") && i + 1 < argc) report_path = argv[++i];
         else if (!strcmp(argv[i], "--module") && i + 1 < argc) module_path = argv[++i];
         else if (!strcmp(argv[i], "--headless")) headless = 1;
+        else if (!strcmp(argv[i], "--play")) launcher = 0;
+        else if (!strcmp(argv[i], "--launcher")) launcher = 2;
         else { usage(argv[0]); return 2; }
     }
 
@@ -1744,6 +1756,48 @@ int main(int argc, char** argv)
      * anything but the checkout root. That is why a launcher script was still
      * required to start the port. */
     exe_directory(argv[0], exe_dir_buf, sizeof exe_dir_buf);
+
+#ifdef MGS_HAVE_LAUNCHER
+    /* THE LAUNCHER (design document; Ben, 2026-09-25): the discs, the hash
+     * check, the settings and Play, in this window, before anything of the
+     * game is loaded. Skipped headless, with --play or MGS_NO_LAUNCHER=1,
+     * and when the player asked to start straight away (--launcher brings it
+     * back). */
+    if (!headless && launcher && !getenv("MGS_NO_LAUNCHER")) {
+        MgsSettings st;
+        mgs_settings_load(&st);
+        if (launcher == 2 || !st.skip_launcher) {
+            static MgsLaunchChoice choice;
+            static char found_module[1024];
+            struct SDL_Window*   mgs_video_window(void);
+            struct SDL_Renderer* mgs_video_renderer(void);
+            if (!module_path &&
+                find_module(argv[0], found_module, sizeof found_module))
+                module_path = found_module;
+            memset(&choice, 0, sizeof choice);
+            if (mgs_disc_locate(1u, disc1_arg, exe_dir_buf, "GGSPA4",
+                                choice.found_disc1, sizeof choice.found_disc1)
+                == MGS_DISC_SOURCE_NONE)
+                choice.found_disc1[0] = '\0';
+            if (mgs_disc_locate(2u, disc2_arg, exe_dir_buf, "GGSPA4",
+                                choice.found_disc2, sizeof choice.found_disc2)
+                == MGS_DISC_SOURCE_NONE)
+                choice.found_disc2[0] = '\0';
+            if (!mgs_launcher_run(mgs_video_window(), mgs_video_renderer(),
+                                  module_path, &choice)) {
+                mgs_video_shutdown();
+                guest_memory_free(&rt.mem);
+                return 0;
+            }
+            disc1_arg = choice.disc1;
+            disc2_arg = choice.disc2[0] ? choice.disc2 : NULL;
+            if (choice.fullscreen)
+                SDL_SetWindowFullscreen(mgs_video_window(), true);
+        } else {
+            mgs_settings_apply(&st);
+        }
+    }
+#endif
 
     src1 = mgs_disc_locate(1u, disc1_arg, exe_dir_buf, "GGSPA4", path1, sizeof path1);
     if (src1 == MGS_DISC_SOURCE_NONE) {

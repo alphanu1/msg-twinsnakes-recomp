@@ -16075,3 +16075,31 @@ This commit is the part that is not drawing:
 `tests/test_gamepad.c` finds its virtual pad by name: Ben has plugged in a
 Razer Wolverine V2 Pro, which takes port 1. 22/22 tests.
 
+### F379 — the launcher's screen, and the module search that picked the C build
+
+`host/launcher.cpp` (Dear ImGui, SDL3 + SDL_Renderer3 backends, drawn in the
+game's own window before anything of the game loads): the two discs, each
+chosen with the system file dialog (`SDL_ShowOpenFileDialog`, the same on
+Windows) and checked by hash on the spot; whether the native game exists;
+volume (0-200%, 100% the console's level), fullscreen, "start straight away
+next time"; the controller detected; Play and Quit. Mouse, keyboard or
+controller (ImGui gamepad navigation). Settings are saved on leaving and
+applied as the variables the game reads. `--play` or `MGS_NO_LAUNCHER=1`
+skip it, `--launcher` brings it back after "start straight away",
+`MGS_LAUNCHER_AUTOPLAY=1` presses Play for scripted runs. Built only when
+extern/imgui is fetched; without it the game starts as before.
+
+**Checked** on the virtual display: both discs verified, the Razer pad
+named, and with autoplay the game starts in the same window from the chosen
+discs - logos at 50, 0 unhandled, "A Hideo Kojima Game" on screen. The
+settings file was written with the choices.
+
+**Found on the way - the module search ran the C build.** With no
+`--module`, `find_module` looked in `build/phase1/module` (the C backend)
+before anything else in the tree, so the game started without `run.sh` ran
+the slow build; the launcher showed it as "Ready". The native
+`module-llvm` is now searched first.
+
+Seen, not yet looked at: a one-pixel green line along the bottom edge of
+the picture in the window (the frame's last row unwritten - YUV zero).
+
