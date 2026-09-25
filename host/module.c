@@ -267,6 +267,13 @@ void mgs_module_set_vmem(uint8_t* vmem) { s_vmem = vmem; }
  * game/module/mgs_cpu.h). MGS_VMEM_SLOW=1 withholds it, so every window
  * access goes through the host again - which is what the write-watch and
  * the window's access counters need to see. */
+/* Any other symbol the module chooses to export (module.exports), for
+ * optional hooks the loader need not know about by name. */
+void* mgs_module_symbol(const MgsModule* mod, const char* name)
+{
+    return (mod && mod->handle) ? dlsym(mod->handle, name) : NULL;
+}
+
 void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem);
 void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem)
 {

@@ -113,6 +113,7 @@ void mgs_dump_tasks(void* cpu, uint32_t rel_bss);
 #define MGS_OVERLAY_BSS_ADDR 0x8054A180u
 
 void mgs_clear_overlay_bss(void* cpu, uint32_t module);
+void* mgs_module_symbol(const MgsModule* mod, const char* name);
 
 /* Hand OSLink the .bss the RECOMPILED code uses, instead of the one the game
  * allocated. See the long comment in host/module.c. MGS_LINK_BSS=0 restores

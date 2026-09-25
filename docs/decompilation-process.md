@@ -1776,6 +1776,44 @@ Output: **295 MB of C, 11.5 million lines, 303 chunk files** (25 for the DOL,
 278 for the REL). The design document budgeted 50–150 MB for a 3 MB DOL; this
 is 4.9 MB of code, so the figure is in the right range.
 
+### The native route: DolRecomp's LLVM backend · **DONE (runs; not yet the default)**
+
+The C backend's output is native machine code, but it keeps an emulator's
+habits: registers held in a memory struct, a position stored per instruction,
+float status maintained in software. DolRecomp's LLVM backend promotes guest
+registers to host registers, reads RAM directly and calls guest functions as
+native calls, behind the same `generated.h` dispatch API and the same
+`CPUState` (checked field by field: identical 3,536-byte layouts, and all 31
+shared runtime prototypes identical).
+
+```sh
+export DOLRECOMP_ENTER_EVERY_BLOCK=1          # tools/patches/DolRecomp-enter-every-block.patch
+export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
+    discs/GGSPA4/disc1/sys/main.dol build/phase1/dol-llvm
+extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm -j24 \
+    --rel-base 0x7F008000 --rel-bss 0x8054A180 \
+    discs/GGSPA4/disc1/files/shared/mgso_pal.rel build/phase1/rel-llvm
+```
+
+**Numbers.** `main.dol`: 2,287 native objects in 36 s. `mgso_pal.rel`:
+21,594 objects, 1.9 GB, 9 min (about 15 with every block enterable), on 24
+jobs. Fallbacks: 1,649 in `main.dol`, **every one embedded data**, and **0**
+in the engine. The module (`game/module`, object mode, 733 MB) links in a
+minute.
+
+**Checked:** on the step clock the first frame is byte-identical to the C
+build's, and the logos that differ are the same pictures at a slightly
+different moment (fade level, logo rotation) - a native step runs far more
+code than a C step, so step-clock timelines do not line up. The Dock script
+runs to gameplay end to end with **0 instructions interpreted** and **0 reads
+through the host's second-window path**. DolRecomp's own suite: 33/33 with
+both local patches.
+
+**Not yet faster, measured:** at twice guest speed (`MGS_SPEED=2`) gameplay
+reaches 80.5 fps native against 83.5 for the C build. See HANDOFF F362 for
+where the time goes instead.
+
 ### "99.87% decoded" is not "99.87% decompiled"
 
 Worth stating plainly, because the two are easy to conflate and mean very

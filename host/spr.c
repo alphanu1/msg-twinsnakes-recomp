@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 /* Gekko SPR numbers. */
 #define SPR_LR     8
@@ -204,6 +205,23 @@ static void host_instruction_fallback(void* cpu, uint32_t insn, uint32_t cia)
 }
 
 #define CPU_INSTRUCTION_FALLBACK 3432u
+/* GXRuntime's ppc_mfspr / ppc_mtspr hand every register they do not model
+ * themselves to these hooks. Native code from DolRecomp's LLVM backend calls
+ * those functions for mfspr/mtspr, where the C backend left the instruction
+ * untranslated and it came to host_instruction_fallback instead - so the
+ * same model has to answer both routes, or HID0 reads fault on the first
+ * SDK instruction that touches it (HANDOFF F362). */
+#define CPU_SPR_READ             3512u
+/* host_call must be NON-NULL for native code from the LLVM backend to consult
+ * its entry guard at all (DolRecomp exits.cpp: a null host_call means "no
+ * interception, run native"). Left null, every native call into one of our
+ * patched SDK functions ran the original instead - the first to show it was
+ * __OSInitAudioSystem, whose DSP reset left an interrupt asserted for ever.
+ * The chassis also offers every dispatched address to host_call; nothing is
+ * served that way here (patches go through dispatch_replacement), so it
+ * always declines. */
+#define CPU_HOST_CALL            3440u
+#define CPU_SPR_WRITE            3520u
 /* DolRecomp routes any access outside RAM through these. Without them every
  * hardware register reads as zero, and the SDK's boot is full of loops
  * waiting for a bit to change - some exit on zero by luck, the rest spin. */
@@ -361,6 +379,27 @@ static void host_external_write(void* cpu, uint32_t addr, uint64_t value, uint8_
     mgs_mmio_write(&s_mmio, addr, (uint32_t)value, size);
 }
 
+static uint32_t host_spr_read(void* cpu, uint16_t spr, uint32_t cia)
+{
+    (void)cia;
+    ++s_handled;
+    return spr_is_mirrored(spr) ? spr_read_mirror(cpu, spr) : s_spr[spr & 1023u];
+}
+
+static void host_spr_write(void* cpu, uint16_t spr, uint32_t value, uint32_t cia)
+{
+    (void)cia;
+    ++s_handled;
+    s_spr[spr & 1023u] = value;
+    spr_mirror(cpu, spr, value);
+}
+
+static bool host_call_decline(void* cpu, uint32_t address)
+{
+    (void)cpu; (void)address;
+    return false;
+}
+
 void mgs_host_install_spr_handler(void* cpu)
 {
     void (*fn)(void*, uint32_t, uint32_t) = host_instruction_fallback;
@@ -370,6 +409,16 @@ void mgs_host_install_spr_handler(void* cpu)
     memcpy((uint8_t*)cpu + CPU_INSTRUCTION_FALLBACK, &fn, sizeof fn);
     memcpy((uint8_t*)cpu + CPU_EXTERNAL_READ, &rd, sizeof rd);
     memcpy((uint8_t*)cpu + CPU_EXTERNAL_WRITE, &wr, sizeof wr);
+    {
+        uint32_t (*sr)(void*, uint16_t, uint32_t) = host_spr_read;
+        void (*sw)(void*, uint16_t, uint32_t, uint32_t) = host_spr_write;
+        memcpy((uint8_t*)cpu + CPU_SPR_READ, &sr, sizeof sr);
+        memcpy((uint8_t*)cpu + CPU_SPR_WRITE, &sw, sizeof sw);
+    }
+    {
+        bool (*hc)(void*, uint32_t) = host_call_decline;
+        memcpy((uint8_t*)cpu + CPU_HOST_CALL, &hc, sizeof hc);
+    }
     mgs_mmio_init(&s_mmio);
 
     /* HID0 and HID2 come out of reset with the cache and paired singles

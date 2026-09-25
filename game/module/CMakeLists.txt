@@ -40,26 +40,62 @@ endforeach()
 
 file(GLOB DOL_CHUNKS "${DOL_GENERATED}/chunks/*.c")
 file(GLOB REL_CHUNKS "${REL_GENERATED}/chunks/*.c")
+# NATIVE OBJECTS: DolRecomp's LLVM backend (--backend llvm) emits compiled
+# objects rather than C - guest registers promoted to host registers, RAM
+# accessed directly, guest calls as native calls - behind the same
+# generated.h dispatch API. A generated directory holding objects instead of
+# C is linked as it is (HANDOFF F362).
+if(NOT DOL_CHUNKS)
+  file(GLOB DOL_CHUNKS "${DOL_GENERATED}/chunks/*.o")
+  set(DOL_NATIVE ON)
+endif()
+if(NOT REL_CHUNKS)
+  file(GLOB REL_CHUNKS "${REL_GENERATED}/chunks/*.o")
+  set(REL_NATIVE ON)
+endif()
 list(LENGTH DOL_CHUNKS N_DOL)
 list(LENGTH REL_CHUNKS N_REL)
-message(STATUS "DOL chunks: ${N_DOL}   REL chunks: ${N_REL}")
+message(STATUS "DOL chunks: ${N_DOL}${DOL_NATIVE}   REL chunks: ${N_REL}${REL_NATIVE}")
 
 # Each module's chunks compile against ITS OWN generated.h. The include
 # directories differ per source file, so they cannot share one target without
 # the wrong generated.h winning - hence a static library per module.
-add_library(mgs_dol_code STATIC ${DOL_CHUNKS} dol_bridge.c)
+# The native-code index for each LLVM-backend module (module_glue.h).
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+foreach(M DOL REL)
+  if(${M}_NATIVE)
+    string(TOLOWER ${M} m)
+    set(${M}_INDEX "${CMAKE_CURRENT_BINARY_DIR}/${m}_native_index.inc")
+    add_custom_command(
+      OUTPUT "${${M}_INDEX}"
+      COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/gen_native_index.py"
+              "${${M}_GENERATED}" MGS_IDX "${${M}_INDEX}"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gen_native_index.py"
+              "${${M}_GENERATED}/generated.h"
+      COMMENT "Indexing ${M} native functions")
+  endif()
+endforeach()
+
+add_library(mgs_dol_code STATIC ${DOL_CHUNKS} dol_bridge.c ${DOL_INDEX})
 target_include_directories(mgs_dol_code PRIVATE
   "${DOL_GENERATED}/.." "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_dol_code PRIVATE DOLRECOMP_ENABLE_REPLACEMENTS=1
   MGS_GENERATED_HEADER="${DOL_GENERATED}/generated.h"
   DOLRECOMP_CPU_HEADER="mgs_cpu.h")
 
-add_library(mgs_rel_code STATIC ${REL_CHUNKS} rel_bridge.c)
+add_library(mgs_rel_code STATIC ${REL_CHUNKS} rel_bridge.c ${REL_INDEX})
 target_include_directories(mgs_rel_code PRIVATE
   "${REL_GENERATED}/.." "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_rel_code PRIVATE DOLRECOMP_ENABLE_REPLACEMENTS=1
   MGS_GENERATED_HEADER="${REL_GENERATED}/generated.h"
   DOLRECOMP_CPU_HEADER="mgs_cpu.h")
+
+foreach(M DOL REL)
+  if(${M}_NATIVE)
+    string(TOLOWER ${M} m)
+    target_compile_definitions(mgs_${m}_code PRIVATE MGS_NATIVE_INDEX="${${M}_INDEX}")
+  endif()
+endforeach()
 
 # DOLRECOMP_CPU_HEADER is DolRecomp's own hook for the header the chunks
 # include. mgs_cpu.h is GXRuntime's cpu.h plus an inlined path for the second

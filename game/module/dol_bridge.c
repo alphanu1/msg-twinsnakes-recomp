@@ -13,5 +13,5 @@
 
 int mgs_dol_call(CPUState* ctx, u32 address)
 {
-    return dolrecomp_call_original(ctx, address);
+    return mgs_call_original(ctx, address);
 }

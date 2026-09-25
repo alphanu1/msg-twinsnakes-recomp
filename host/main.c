@@ -727,6 +727,19 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
 
 static unsigned long mgs_host_patched_calls(void) { return s_patched_calls; }
 
+/* The same decision as mgs_host_patch_dispatch, without making the call:
+ * whether this address is served natively. Native code from the LLVM
+ * backend asks it on entry to every function (game/module/dispatch.c). */
+static int mgs_host_patch_query(uint32_t address)
+{
+    if (address - MGS_PATCH_LO > MGS_PATCH_SPAN) return 0;
+    if (mem_shim_disabled() &&
+        (address == 0x800050B4u || address == 0x800050E4u ||
+         address == 0x8000519Cu))
+        return 0;
+    return mgs_patch_lookup(address) != NULL;
+}
+
 /* A SECOND signal exits outright.
  *
  * Setting a flag is the right FIRST response: the run loop notices it at the
@@ -1747,6 +1760,24 @@ int main(int argc, char** argv)
                         void mgs_module_install_vmem(const MgsModule*, uint8_t*);
                         mgs_module_install_vmem(&mod, rt.mem.vmem);
                     }
+                    /* NATIVE (LLVM-backend) MODULES read the second window
+                     * inline through the CPU's exram/exram_size pair, with
+                     * the generator told where it starts
+                     * (DOLRECOMP_MEM2_BASE=0x3E000000, the window's base
+                     * with bit 30 cleared). Only for them: the C backend's
+                     * runtime reads exram as the Wii's 0x90000000 MEM2,
+                     * which this game never touches but which there is no
+                     * reason to map. */
+                    if (mgs_module_symbol(&mod, "mgs_dispatch_set_patch_query") &&
+                        !getenv("MGS_VMEM_SLOW")) {
+                        uint8_t* base = rt.mem.vmem;
+                        uint32_t size = 32u * 1024u * 1024u;
+                        memcpy((uint8_t*)cpu + 3496u, &base, sizeof base);   /* exram */
+                        memcpy((uint8_t*)cpu + 3504u, &size, sizeof size);   /* exram_size */
+                        fprintf(stderr, "[vmem] second window mapped for native "
+                                        "code as exram (MGS_VMEM_SLOW=1 for the "
+                                        "host path)\n");
+                    }
 
                     /* Finished DVD reads have to be reported on the guest
                      * thread. Nothing else does it, and until this was here
@@ -1869,6 +1900,13 @@ int main(int argc, char** argv)
                     }
                     if (mod.set_patch_hook) {
                         mod.set_patch_hook(mgs_host_patch_dispatch);
+                        {   /* Native (LLVM-backend) modules only; the C
+                             * backend asks through dispatch instead. */
+                            void (*q)(int (*)(uint32_t)) =
+                                (void (*)(int (*)(uint32_t)))
+                                mgs_module_symbol(&mod, "mgs_dispatch_set_patch_query");
+                            if (q) q(mgs_host_patch_query);
+                        }
                         printf("  patch table  : installed\n");
                     } else {
                         printf("  patch table  : module has no hook; the\n"

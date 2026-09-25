@@ -15400,3 +15400,62 @@ either way; the gate engaged only on the step clock (65 frames). The stall
 report now prints every register and 0x80 bytes behind each pointer, so the
 next one shows the block list itself. If Ben sees a freeze in a cutscene,
 that report is the first thing to read.
+
+### F362 — the native (LLVM-backend) build runs the game end to end; it is not yet faster, and why
+
+Ben: *"native recompilation, so no interpret, no emulation."* The C backend's
+output is native code with an emulator's habits - registers in a memory
+struct, a position stored per instruction, float status kept in software -
+and that is where a 5 GHz core's advantage over a 486 MHz one went (about
+7x overhead per guest instruction, from F359's numbers). DolRecomp's LLVM
+backend is the native route: registers in host registers, RAM read
+directly, guest calls as native calls, same `generated.h` API, same
+`CPUState` (identical layouts). The route and its numbers are in
+docs/decompilation-process.md.
+
+**What had to be made to work, each found by running it:**
+1. `mfspr`/`mtspr` are runtime calls in LLVM code, not host fallbacks; the
+   host now answers GXRuntime's `spr_read`/`spr_write` hooks from the same
+   special-register model (HID0 faulted on boot without it).
+2. DolRecomp's design resumes a region at a non-entry address by
+   *interpreting* to the next entry. There is no interpreter here and there
+   will not be one: `DOLRECOMP_ENTER_EVERY_BLOCK=1` (local patch) makes every
+   block a native entry instead.
+3. The entry guard that keeps native calls out of our patched SDK functions
+   runs only when `ctx->host_call` is non-null. It was null, so every native
+   call to a patched function ran the original - `__OSInitAudioSystem`'s DSP
+   reset left an interrupt asserted for ever (1.1 million re-offers, no disc
+   reads). The host now installs a `host_call` that declines, and the module
+   answers the guard from the patch table (`mgs_dispatch_set_patch_query`).
+4. `dolrecomp_find_original` is a chain of range tests - fine for 278 C
+   chunks, ~13,000 tests for 21,594 native regions: 62% of the intro movie,
+   at 0.5 fps. `game/module/gen_native_index.py` copies the same mapping into
+   sorted data; the bridges binary-search it behind a small cache.
+5. The engine's second window reads inline through `exram`
+   (`DOLRECOMP_MEM2_BASE=0x3E000000`, local patch): 0 host reads.
+
+**Result:** the Dock script runs through the menus, the cutscene, the Codec
+and gameplay, 0 instructions interpreted. **But not faster:** at
+`MGS_SPEED=2` gameplay reaches 80.5 fps native against 83.5 C (both far
+above the 50 needed).
+
+**Why, measured:** at that rate the game's thread is not in its own code.
+The hottest guest functions are thread switching - `SelectThread`,
+`OSSaveContext`, `OSLoadContext`, `OSYieldThread` - and `gp_poll_thread`,
+the game's own polling thread, spinning on `GXGetFifoPtrs` (the CP FIFO
+pointers and PI 0x14 read ~70 million times each in 200 s). And ~28% of the
+thread is round trips between native code and our run loop: the loop itself
+8.9%, clock 6%, patch lookup and dispatch ~9%, the guard 1.4%.
+`OSDisableInterrupts`/`OSRestoreInterrupts` are called 142.8 million times
+each; withdrawing their patches (`MGS_UNPATCH`) changed nothing (79.9 fps),
+because re-enabling interrupts side-exits native code anyway.
+
+**Where the next gain is, in order:** the run loop's per-dispatch cost and
+the clock (a native module wants far fewer, longer dispatches), the
+interrupt-enable side exit (our loop delivers interrupts at every step, so
+native code need not leave for it), and what `gp_poll_thread` waits for -
+our CP read pointer never moves, so the game may be waiting on a GPU
+progress signal the port never gives.
+
+The C build stays the default. `build/phase1/module-llvm/` is the native
+one: `./build/runtime/host/twin-snakes --module build/phase1/module-llvm/gGGSPA4_recomp.so`.

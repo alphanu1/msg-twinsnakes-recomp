@@ -93,6 +93,28 @@ u8* g_mgs_vmem;
 void mgs_dispatch_set_vmem(u8* base);
 void mgs_dispatch_set_vmem(u8* base) { g_mgs_vmem = base; }
 
+/* THE NATIVE-REGION GUARD, for code from DolRecomp's LLVM backend.
+ *
+ * A native function calls the next one directly, so the dispatch path where
+ * the patch table used to be consulted is never taken between them. Instead
+ * each native function asks, on entry, whether it may run: a function whose
+ * entry is one of our native SDK implementations must not, and exits with
+ * its state written back so the host's dispatch reaches the patch exactly
+ * as before. Everything else runs on. The patch hook answers the question
+ * with ppc_host_call's query convention unset, so this asks it directly:
+ * the host installs a query-only lookup alongside the hook. */
+static int (*s_patch_query)(u32 address);
+
+void mgs_dispatch_set_patch_query(int (*query)(u32));
+void mgs_dispatch_set_patch_query(int (*query)(u32)) { s_patch_query = query; }
+
+bool ppc_native_region_available(CPUState* cpu, u32 start, u32 end);
+bool ppc_native_region_available(CPUState* cpu, u32 start, u32 end)
+{
+    (void)cpu; (void)end;
+    return !(s_patch_query && s_patch_query(start));
+}
+
 /* --- tracing ------------------------------------------------------------ */
 /* An open-addressed histogram, fixed size and never resized: this runs inside
  * the dispatch path, so an allocation here would change the timing of the

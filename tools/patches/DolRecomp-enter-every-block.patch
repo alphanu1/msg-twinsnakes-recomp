@@ -1,0 +1,31 @@
+diff --git a/src/backend/llvm/register_state.cpp b/src/backend/llvm/register_state.cpp
+index fe860e7..3e44a68 100644
+--- a/src/backend/llvm/register_state.cpp
++++ b/src/backend/llvm/register_state.cpp
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "backend/llvm/emitter.h"
+ #include "backend/llvm/native_abi.h"
+ #include "cpu/cpu.h"
+@@ -197,6 +198,21 @@ void FunctionEmitter::scanRegionLeaders() {
+         region_leaders_[term.targets[edge]] = true;
+     }
+   }
++  // EVERY BLOCK ENTERABLE (DOLRECOMP_ENTER_EVERY_BLOCK=1).
++  //
++  // A runtime with no interpreter cannot resume at a block that is not a
++  // region leader: the entry dispatch has no case for it and the cold entry
++  // interprets forward to the next leader through ppc_fallback_instruction.
++  // Twin Snakes' host is built on there being no interpreter, so for it every
++  // block start is a native entry - the C backend's "every address is
++  // labelled" guarantee, at block granularity. The cost is the fragmentation
++  // measured above (5-16% on the titles that did not need it); the gain is
++  // that nothing is ever interpreted.
++  if (const char *every = getenv("DOLRECOMP_ENTER_EVERY_BLOCK")) {
++    if (every[0] && every[0] != '0')
++      for (u32 i = 0; i < source_.block_count; i++)
++        region_leaders_[i] = true;
++  }
+   for (u32 i = 0; i < entry_point_count_; i++) {
+     u32 address = entry_points_[i];
+     if (address < source_.guest_start || address >= source_.guest_end ||
