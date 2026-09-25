@@ -81,9 +81,22 @@ set_target_properties(mgs_dol_code mgs_rel_code PROPERTIES
 # instructions, so no contraction was possible and the arithmetic was
 # IEEE-exact either way - but "harmless by luck on this host" is not the
 # standard, and -O3 on multi-MB generated files costs build time for nothing.
+#
+# -fno-semantic-interposition: this is a shared object built -fPIC, and with
+# default visibility GCC must assume any global function could be replaced
+# at load time - so it will not inline one into another even inside the same
+# file. GXRuntime's float helpers are written as small layers (ppc_fmuls ->
+# ni_mul, force_25bit_c, force_single, fp_write_single -> classify_f32,
+# set_fprf), and every guest float instruction paid every layer as a call:
+# together about 12% of the game's thread in gameplay. The module's exports
+# are fixed by module.exports, so nothing can interpose them anyway; the flag
+# only tells the compiler what the version script already guarantees. It
+# changes no arithmetic.
 if(NOT MSVC)
-  target_compile_options(mgs_dol_code PRIVATE -O2 -fno-fast-math -ffp-contract=off)
-  target_compile_options(mgs_rel_code PRIVATE -O2 -fno-fast-math -ffp-contract=off)
+  target_compile_options(mgs_dol_code PRIVATE -O2 -fno-fast-math -ffp-contract=off
+                                              -fno-semantic-interposition)
+  target_compile_options(mgs_rel_code PRIVATE -O2 -fno-fast-math -ffp-contract=off
+                                              -fno-semantic-interposition)
 endif()
 
 add_library(mgs_dispatch OBJECT dispatch.c)
@@ -135,6 +148,11 @@ target_include_directories(mgs_module PRIVATE
   "${GXRUNTIME_DIR}/include" "${CHASSIS_ABI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_module PRIVATE
   DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="GGSPA4")
+# The float helpers live here; see -fno-semantic-interposition above.
+if(NOT MSVC)
+  target_compile_options(mgs_module PRIVATE -fno-fast-math -ffp-contract=off
+                                            -fno-semantic-interposition)
+endif()
 
 # --whole-archive: the chunk functions are only ever reached through the
 # dispatch tables, never by a direct reference, so a normal static link would

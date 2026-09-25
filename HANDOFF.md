@@ -15314,3 +15314,31 @@ paid about seven calls. `-fno-semantic-interposition` lets them inline (the
 version script already fixes the exports), and the float-available check and
 paired-single load/store get always-inline versions in `mgs_cpu.h`, since
 GCC was emitting its `static inline` ones out of line in the largest chunks.
+
+### F361 — the float helpers inline: 33.3 -> 35.3 fps in gameplay, identical frames
+
+GXRuntime's float helpers are layered, and the module is a `-fPIC` shared
+object with default visibility, so GCC would not inline one global function
+into another even inside the same file - any of them could be interposed at
+load time. Every guest float instruction paid the layers as calls:
+`objdump` counts **6 calls inside `ppc_fmuls` and 16 inside `ppc_fma`**.
+The module's exports are fixed by `module.exports`, so nothing can interpose
+them; `-fno-semantic-interposition` says so to the compiler, and the counts
+fall to **1 and 3**. No arithmetic changes (`-ffp-contract=off` stays, the
+host is SSE2).
+
+Also in `game/module/mgs_cpu.h`: always-inline versions of the float-available
+check that precedes every float instruction and of the paired-single
+load/store. GXRuntime marks them `static inline`, and GCC still emitted them
+out of line in the largest chunks, whose size exhausts its inlining budget -
+the profile listed `ppc_fp_available_inline` and `ppc_psq_load_inline` as
+functions of their own. The psq versions also route engine constants in the
+second window through the inline path (F356's remaining 175M reads).
+
+**Checked:** on the step clock, render thread off, the first 900 copies -
+the logos, the 3D Silicon Knights logo included - are byte-identical to the
+previous module; from ~copy 900 on, two runs of the same module already
+disagree on disc timing. **Measured** on a quiet machine (load 4), the Dock
+script: gameplay **35.3 fps against 33.3**, cutscene 22.6. Installed as
+`build/phase1/module/gGGSPA4_recomp.so`; the previous one is kept beside it
+as `.bss-noinline-20260925`.
