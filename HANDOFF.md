@@ -15977,3 +15977,53 @@ itself.
 
 Default listener volume stays 40%, which is where Ben set it by ear.
 
+### F376 — a real controller: any SDL3 gamepad, sticks and triggers included
+
+The SI model answered the controller's poll with centred sticks and
+released triggers; only buttons came through, from the keyboard, and
+`runtime/platform/sdl_input.c` (SDL3 gamepads, tested mapping in
+`pad/pad.c`) was compiled but never called. Now: gamepads open at start and
+on hot-plug (SDL events), the first one is port 1 beside the keyboard, and
+each retrace hands the SI model buttons plus RAW analog bytes - sticks
+centred on 0x80, about +-100 at full tilt, triggers 0-255 - because the SI
+carries the hardware's values and the SDK clamps them itself (`PADClamp`);
+`mgs_pad_map`'s +-72 is the post-clamp range. The ORIGIN and RECALIBRATE
+replies stay neutral: the SDK subtracts the origin from every later poll.
+SDL3 only, so it builds for Windows as for Linux (Ben: "remember it needs to
+cross compile"). Checked: 20/20 tests, and a scripted run drives the menus
+as before. **Not yet checked with a controller in hand** - Ben's test.
+
+### F377 — the echo: our SRAM told the game the console was set to MONO
+
+Ben, repeatedly: an echo, "as if the left and right mix that goes out both
+speakers, one is very slightly delayed", on both sides. Established:
+
+- Dolphin's output (F375 recording) is stereo from the movie onward - the
+  side signal 0.2-0.7 of the mid, 0% of samples equal - and ours was 100%
+  mono.
+- The game's parameter blocks said both speakers at full for every voice
+  (`MGS_TRACE_PBMIX=1` prints a running voice's mixer, update, ITD and
+  address words, the aux callbacks and the AX mode): so the routing was
+  read correctly and the game itself chose mono.
+- The console's sound setting is SRAM byte 0x13 bit 2, read by
+  `OSGetSoundMode` (dolsdk2004 `OSRtc.c`); our IPL model defaulted the
+  flags byte to 0 - MONO. A game told the console is mono sums the movie's
+  left and right channels into both speakers, and any drift between the two
+  voices is an echo.
+- **Fix:** flags 0x2C, Dolphin's default (`Sram.cpp`: bit 5, `kOobeDone`,
+  `kStereo`). The game then pans: left channel 0x7FFF/0x0B68, right
+  0x0B68/0x7FFF, centred 0x5A9D/0x5A9D (-3 dB). Output side/mid 0.7-0.8
+  from the movie on, logos mono as in Dolphin.
+- **And the level:** median difference against Dolphin 0.0 dB (was +2.6
+  after the compressor, +3 before it); the mix peaks at 118% instead of
+  175%; 2 samples of 4 million at the clamp. The unexplained steady offset
+  in F375 WAS the mono mode: centred sounds at full level instead of -3 dB.
+  Listener volume default 55%, Ben's 40% expressed against the corrected
+  mix.
+
+Recorded wrong turns this session, so they are not re-derived: the echo is
+not F-era play-on (no constant-lag repeat at 20-300 ms in either build), not
+`mixerCtrl` (F374), not the aux-B bus (no aux-B callback is registered; only
+aux-A, at 0x80035340, whose sends are all zero), and not DPL2 (the AX
+command-list mode reads 0).
+

@@ -123,6 +123,64 @@ void mgs_input_read(unsigned port, MgsPadState* out)
                 src);
 }
 
+/* THE CONTROLLER AS THE SERIAL INTERFACE CARRIES IT (F376): buttons, and
+ * the analog axes as raw bytes - sticks centred on 0x80, triggers from 0.
+ * The SDK takes the rest position from the controller's ORIGIN reply and
+ * clamps the sticks itself (PADClamp), so what goes on the wire is the
+ * hardware's range, not the clamped one mgs_pad_map produces: a full tilt
+ * of a real stick reads about 100 either side of centre.
+ *
+ * Packed: buttons in bits 0-15, then main stick x, y, c-stick x, y,
+ * trigger l, r a byte each. No controller: neutral, no buttons. */
+static uint8_t raw_axis(float v, int invert)
+{
+    /* A small radial allowance for a stick that does not quite centre;
+     * the SDK's own dead zone is larger and applies after. */
+    int r;
+    if (v > -0.04f && v < 0.04f) v = 0.0f;
+    if (invert) v = -v;
+    r = 128 + (int)(v * 100.0f + (v < 0.0f ? -0.5f : 0.5f));
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    return (uint8_t)r;
+}
+
+static uint8_t raw_trigger(float v)
+{
+    int r = (int)(v * 255.0f + 0.5f);
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    return (uint8_t)r;
+}
+
+uint64_t mgs_input_gc_raw(unsigned port);
+uint64_t mgs_input_gc_raw(unsigned port)
+{
+    MgsPadState st;
+    SDL_Gamepad* pad;
+    uint64_t v;
+    if (port >= PAD_MAX_CONTROLLERS || !(pad = s_input.pads[port]))
+        return (uint64_t)0x80u << 16 | (uint64_t)0x80u << 24 |
+               (uint64_t)0x80u << 32 | (uint64_t)0x80u << 40;
+    mgs_input_read(port, &st);          /* buttons, trigger clicks */
+    v  = st.button;
+    v |= (uint64_t)raw_axis(axis_norm(pad, SDL_GAMEPAD_AXIS_LEFTX), 0) << 16;
+    v |= (uint64_t)raw_axis(axis_norm(pad, SDL_GAMEPAD_AXIS_LEFTY), 1) << 24;
+    v |= (uint64_t)raw_axis(axis_norm(pad, SDL_GAMEPAD_AXIS_RIGHTX), 0) << 32;
+    v |= (uint64_t)raw_axis(axis_norm(pad, SDL_GAMEPAD_AXIS_RIGHTY), 1) << 40;
+    v |= (uint64_t)raw_trigger(trigger_norm(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER)) << 48;
+    v |= (uint64_t)raw_trigger(trigger_norm(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) << 56;
+    return v;
+}
+
+/* The first controller's name, for the start-up line. */
+const char* mgs_input_name(unsigned port);
+const char* mgs_input_name(unsigned port)
+{
+    return (port < PAD_MAX_CONTROLLERS && s_input.pads[port])
+         ? SDL_GetGamepadName(s_input.pads[port]) : NULL;
+}
+
 unsigned mgs_input_connected_count(void)
 {
     unsigned i, n = 0;

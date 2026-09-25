@@ -156,6 +156,11 @@ typedef struct MgsMmio {
     uint64_t si_transfers;   /* serial transfers completed */
     uint64_t si_polls;       /* vblank polls delivered */
     uint16_t pad_buttons;    /* what port 1 is holding down now */
+    /* The analog half of the controller's reply, as the SI carries it:
+     * raw bytes, sticks centred on 0x80, triggers from 0. The SDK clamps
+     * them itself (PADClamp), so these are what the hardware sends. */
+    uint8_t  pad_stick_x, pad_stick_y, pad_sub_x, pad_sub_y;
+    uint8_t  pad_trig_l, pad_trig_r;
     uint16_t pad_forced;     /* MGS_PAD_BUTTONS: a floor under it */
     /* Video fields since the run began. A PAL field is exactly 810,000
      * ticks of a 40.5 MHz clock - 20 ms, 50.000 a second - so this is
@@ -177,6 +182,10 @@ void     mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size
  * real time rather than with how fast the guest spins. */
 void     mgs_mmio_tick_frame(MgsMmio* m);
 void     mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons);
+/* Sticks and triggers, raw SI bytes (0x80 = centre). */
+void     mgs_mmio_set_pad_analog(MgsMmio* m, uint8_t sx, uint8_t sy,
+                                 uint8_t cx, uint8_t cy,
+                                 uint8_t l, uint8_t r);
 
 /* A device's interrupt line, not a latch the host owns.
  *

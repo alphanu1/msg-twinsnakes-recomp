@@ -190,6 +190,20 @@ int mgs_video_pump(void)
 
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_EVENT_QUIT) return 0;
+        /* A controller plugged in or pulled out: rescan the ports, and
+         * say so, so a pad that is not seen is visible rather than silent. */
+        if (ev.type == SDL_EVENT_GAMEPAD_ADDED ||
+            ev.type == SDL_EVENT_GAMEPAD_REMOVED) {
+            void mgs_input_poll(void);
+            const char* mgs_input_name(unsigned port);
+            const char* name;
+            mgs_input_poll();
+            name = mgs_input_name(0u);
+            fprintf(stderr, "[pad] controller %s: port 1 is %s\n",
+                    ev.type == SDL_EVENT_GAMEPAD_ADDED ? "connected"
+                                                       : "removed",
+                    name ? name : "the keyboard");
+        }
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) return 0;
     }
     return 1;

@@ -40,14 +40,21 @@ void mgs_exi_ipl_init(MgsExiIpl* p)
     memset(p, 0, sizeof *p);
 
     /* Defaults, chosen to be the least surprising thing a machine could hold:
-     * no clock bias, no display offset, English, and no flags set. The video
+     * no clock bias, no display offset, English, stereo. The video
      * mode the game uses comes from the disc, not from here. */
     p->sram[0x0Cu] = 0u; p->sram[0x0Du] = 0u;   /* counter bias   */
     p->sram[0x0Eu] = 0u; p->sram[0x0Fu] = 0u;
     p->sram[0x10u] = 0u;                        /* display offset */
     p->sram[0x11u] = 0u;                        /* NTD            */
     p->sram[0x12u] = 0u;                        /* language       */
-    p->sram[0x13u] = 0u;                        /* flags          */
+    /* FLAGS: STEREO (F376). Bit 2 is the console's sound setting, which
+     * OSGetSoundMode reads - clear means MONO, and a game told the console
+     * is mono mixes every voice into both speakers. This one did: the
+     * movie's left and right channels summed in both, where Dolphin (the
+     * reference) plays them apart, and any drift between the two was heard
+     * as an echo (Ben). 0x2C is Dolphin's default: bit 5 always set, the
+     * first-time setup done (bit 3), stereo (bit 2). */
+    p->sram[0x13u] = 0x2Cu;                     /* flags          */
     sram_checksum(p);
 
     /* THE FLASH ID'S CHECKSUM, WHICH THE CARD MOUNT VERIFIES.

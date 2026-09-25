@@ -346,6 +346,8 @@ void mgs_mmio_init(MgsMmio* m)
          * WAITING for input from one that is stalled. 0x1000 is Start. */
         m->pad_forced  = b ? (uint16_t)strtoul(b, NULL, 0) : 0u;
         m->pad_buttons = m->pad_forced;
+        m->pad_stick_x = m->pad_stick_y = 0x80u;   /* centred, not hard left */
+        m->pad_sub_x = m->pad_sub_y = 0x80u;
 
         /* MGS_PAD_SCRIPT="frame:hex,frame:hex,..." holds each button word
          * from that frame onward, so a run can drive itself through a menu
@@ -665,14 +667,23 @@ static int si_reply(MgsMmio* m, unsigned chan, uint8_t cmd, unsigned inlen)
         case 0x40u:                    /* poll: buttons and sticks */
         case 0x41u:                    /* origin */
         case 0x42u:                    /* recalibrate */
-            /* Neutral: no buttons, sticks centred, triggers released. Real
-             * input is not wired to this yet - what this commit establishes
-             * is that a controller EXISTS, which is what PAD stopped on. */
+            /* Buttons, then the analog bytes as a controller sends them.
+             * The ORIGIN and RECALIBRATE replies are the controller's rest
+             * position - centred sticks, released triggers - whatever is
+             * held at the moment they are asked for: the SDK subtracts the
+             * origin from every later poll, so an origin taken with the
+             * stick pushed would leave it pushed for good. */
             buf[0] = (uint8_t)(m->pad_buttons >> 8);
             buf[1] = (uint8_t)(m->pad_buttons);
-            buf[2] = 0x80u; buf[3] = 0x80u;      /* main stick x, y */
-            buf[4] = 0x80u; buf[5] = 0x80u;      /* c stick x, y */
-            buf[6] = 0x00u; buf[7] = 0x00u;      /* analog l, r */
+            if (cmd == 0x40u) {
+                buf[2] = m->pad_stick_x; buf[3] = m->pad_stick_y;
+                buf[4] = m->pad_sub_x;   buf[5] = m->pad_sub_y;
+                buf[6] = m->pad_trig_l;  buf[7] = m->pad_trig_r;
+            } else {
+                buf[2] = 0x80u; buf[3] = 0x80u;  /* main stick x, y */
+                buf[4] = 0x80u; buf[5] = 0x80u;  /* c stick x, y */
+                buf[6] = 0x00u; buf[7] = 0x00u;  /* analog l, r */
+            }
             buf[8] = 0x00u; buf[9] = 0x00u;      /* analog a, b */
             n = (cmd == 0x40u) ? 8u : 10u;
             break;
@@ -1190,6 +1201,15 @@ void mgs_mmio_set_pad(MgsMmio* m, uint16_t buttons)
         m->pad_reported = m->pad_buttons;
         fprintf(stderr, "[pad] buttons now 0x%04X\n", m->pad_buttons);
     }
+}
+
+void mgs_mmio_set_pad_analog(MgsMmio* m, uint8_t sx, uint8_t sy,
+                             uint8_t cx, uint8_t cy, uint8_t l, uint8_t r)
+{
+    if (!m) return;
+    m->pad_stick_x = sx; m->pad_stick_y = sy;
+    m->pad_sub_x = cx;   m->pad_sub_y = cy;
+    m->pad_trig_l = l;   m->pad_trig_r = r;
 }
 
 uint64_t mgs_mmio_field_count(const MgsMmio* m);

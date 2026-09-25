@@ -660,6 +660,37 @@ void mgs_ax_dsp_frame(void* cpu)
          * wrote (0x7FFF here), so they cannot be used to tell.
          * MGS_AX_MIX_ALL=1 restores mixing every voice into both. */
         if (rd16(cpu, pb + PB_LPF_ON)) ++s_lpf_on; else ++s_lpf_off;
+        {   /* MGS_TRACE_PBMIX=1: a playing voice's mixer block and update
+             * list, every 2,000 frames - where the pan levels live (F376). */
+            static int on = -1;
+            if (on < 0) on = getenv("MGS_TRACE_PBMIX") != NULL;
+            if (on && (s_frames % 2000u) == 7u) {
+                unsigned q;
+                fprintf(stderr, "[pbmix] f%llu v%02u pb 0x%08X mctrl %04X "
+                        "mix", (unsigned long long)s_frames, i, pb,
+                        rd16(cpu, pb + PB_MIXER_CTRL));
+                for (q = 0x12u; q < 0x36u; q += 2u)
+                    fprintf(stderr, " %04X", rd16(cpu, pb + q));
+                fprintf(stderr, " | upd");
+                for (q = 0x44u; q < 0x52u; q += 2u)
+                    fprintf(stderr, " %04X", rd16(cpu, pb + q));
+                fprintf(stderr, " | auxcb A %08X B %08X",
+                        (rd16(cpu, 0x8027DE98u) << 16) | rd16(cpu, 0x8027DE9Au),
+                        (rd16(cpu, 0x8027DE9Cu) << 16) | rd16(cpu, 0x8027DE9Eu));
+                fprintf(stderr, " | clmode %08X",
+                        (rd16(cpu, 0x8027DEE0u) << 16) | rd16(cpu, 0x8027DEE2u));
+                fprintf(stderr, " | hdr");
+                for (q = 0x08u; q < 0x12u; q += 2u)
+                    fprintf(stderr, " %04X", rd16(cpu, pb + q));
+                fprintf(stderr, " | itd");
+                for (q = 0x36u; q < 0x44u; q += 2u)
+                    fprintf(stderr, " %04X", rd16(cpu, pb + q));
+                fprintf(stderr, " | addr");
+                for (q = 0x6Eu; q < 0x7Eu; q += 2u)
+                    fprintf(stderr, " %04X", rd16(cpu, pb + q));
+                fprintf(stderr, "\n");
+            }
+        }
         {
             static int mix_all = -1;
             uint32_t mctrl = rd16(cpu, pb + PB_MIXER_CTRL);
@@ -1121,8 +1152,10 @@ void mgs_ax_dsp_frame(void* cpu)
          * still clipping". Since F375 the console's own compressor runs
          * first (ax_compress) and this is only the listener's volume,
          * applied after the output clamp. MGS_VOLUME=<percent> (0-200), default
-         * 40 - Ben's ear, a little under the first 50; the launcher's
-         * settings screen is to offer the rest of the range. */
+         * 55: Ben chose 40 against the old mono mix, which ran about 3 dB
+         * hotter than the console; 55 is the same loudness now that the
+         * mix matches Dolphin's (F377). 100 is the console's own level.
+         * The launcher's settings screen is to offer the range. */
         static int32_t master = -1;
         /* MGS_AUDIO_MIX=<path>: the mix as the voices sum, before the
          * master volume and the limiter - 32-bit stereo - for comparing
@@ -1145,7 +1178,7 @@ void mgs_ax_dsp_frame(void* cpu)
         }
         if (master < 0) {
             const char* e = getenv("MGS_VOLUME");
-            long pc = e && *e ? strtol(e, NULL, 10) : 40;
+            long pc = e && *e ? strtol(e, NULL, 10) : 55;
             if (pc < 0) pc = 0;
             if (pc > 200) pc = 200;
             master = (int32_t)((pc << 16) / 100);

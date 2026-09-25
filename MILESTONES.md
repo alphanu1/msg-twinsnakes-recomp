@@ -1506,6 +1506,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
         +18-22% (cutscene at double speed 48 fps against 41), engine code
         442 -> 310 MB, first build ~4-5 minutes. Full Dock run: 0
         fallbacks, cutscene 25.0, gameplay 50.
+      - A controller works: any SDL3 gamepad, sticks and triggers (F376).
+      - Stereo, at the console's level (F377): our SRAM said MONO, so the
+        game summed left and right into both speakers - Ben's echo. Now
+        panned as on the console; level within 0.0 dB of Dolphin; AX's
+        compressor from the game's table (F375).
       - Every frame the game makes is shown (F372): the presenter's
         same-picture skip and frame cap dropped the logos to ~38 on Ben's
         screen; both removed, 50 handed over and 50 shown each second.

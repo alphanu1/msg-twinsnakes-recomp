@@ -1905,7 +1905,17 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
              * 675,000, and the guest can change which. */
             if (!forced_retrace)
                 due_vi = gt + (uint64_t)mgs_mmio_vi_field_ticks(mmio_p);
-            mgs_mmio_set_pad(mmio_p, mgs_video_pad());
+            {   /* Keyboard and controller together; the controller
+                 * also supplies the sticks and triggers (F376). */
+                uint64_t mgs_input_gc_raw(unsigned port);
+                uint64_t gp = mgs_input_gc_raw(0u);
+                mgs_mmio_set_pad(mmio_p,
+                                 (uint16_t)(mgs_video_pad() | (uint16_t)gp));
+                mgs_mmio_set_pad_analog(mmio_p,
+                    (uint8_t)(gp >> 16), (uint8_t)(gp >> 24),
+                    (uint8_t)(gp >> 32), (uint8_t)(gp >> 40),
+                    (uint8_t)(gp >> 48), (uint8_t)(gp >> 56));
+            }
             mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);
             frame_snapshot(cpu);

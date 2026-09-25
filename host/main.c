@@ -1717,6 +1717,22 @@ int main(int argc, char** argv)
         fprintf(stderr, "no window (%s); continuing headless\n", "SDL video unavailable");
         headless = 1;
     }
+    /* CONTROLLERS (F376): any SDL3 gamepad - Xbox, PlayStation, Switch,
+     * Steam Deck - on every platform SDL supports, into port 1 beside the
+     * keyboard. Plugging one in later is picked up by the event pump. */
+    if (!headless) {
+        int mgs_input_init(void);
+        const char* mgs_input_name(unsigned port);
+        if (mgs_input_init()) {
+            const char* name = mgs_input_name(0u);
+            fprintf(stderr, "[pad] port 1: %s%s\n",
+                    name ? name : "keyboard only",
+                    name ? "" : " (plug in a controller at any time)");
+        } else {
+            fprintf(stderr, "[pad] no controller support (%s); keyboard "
+                            "only\n", SDL_GetError());
+        }
+    }
     overlay_line("MEM1 %u MB   ARAM %u MB",
                  GUEST_RAM_SIZE/(1024u*1024u), GUEST_ARAM_SIZE/(1024u*1024u));
 
