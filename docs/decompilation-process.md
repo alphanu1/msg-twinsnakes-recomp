@@ -1792,6 +1792,7 @@ export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-ba
 export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
 export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
 export DOLRECOMP_PURE_EXTERNAL=1               # tools/patches/DolRecomp-pure-external.patch
+export DOLRECOMP_LLVM_OPT_LEVEL=2 DOLRECOMP_NO_THINLTO=1   # DolRecomp-pipeline-switches.patch
 extern/DolRecomp/build/dolrecomp --gamecube --cpu gekko --backend llvm \
     --native-abi off -j24 \
     discs/GGSPA4/disc1/sys/main.dol build/phase1/dol-llvm
@@ -1838,6 +1839,17 @@ by a count the machine's load cannot distort - guest cycles executed in
 billion; native with calls through the run loop 33.1 and 37.6; **native
 with direct calls 44.7 and 48.3** - about 1.66x the C build - with run-loop
 dispatches halved (0.77-0.85 billion against 1.42-1.63).
+
+**First-build time (F369)**, cold (the object cache now keys on every
+switch; before, a changed switch could reuse stale objects): with `-O2` and
+no ThinLTO summaries, `main.dol` 34 s and the engine 11 min 22 s at load
+22-34 - 193 CPU-minutes, about 8 minutes on an idle machine - against 25-30
+minutes at `-O3`. Guest cycles in 100 s, alternating with the `-O3` build:
+50.6 and 49.6 billion against 51.6 and 46.1 - no runtime cost. Without
+every-block entries the engine builds in 64 CPU-minutes, but native code
+then resumes where it has no entry; entries only at lazy-FPU trap points
+were measured NOT enough (an integer-only re-entry at 0x7F0F7E18 remains
+unexplained).
 
 ### "99.87% decoded" is not "99.87% decompiled"
 

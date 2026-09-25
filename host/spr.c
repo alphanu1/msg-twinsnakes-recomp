@@ -199,6 +199,20 @@ static void host_instruction_fallback(void* cpu, uint32_t insn, uint32_t cia)
      */
     ++s_unknown;
     complete(cpu, cia);   /* step over it, so one gap does not become a hang */
+    if (s_unknown == 1ul) {
+        void mgs_module_print_recent(const char* why);
+        mgs_module_print_recent("first instruction to reach the host fallback");
+        /* STOP, DO NOT STEP OVER. Stepping over kept one gap from becoming
+         * a hang, but a correct build reaches this 0 times, and when native
+         * code resumes somewhere that is not an entry the instructions
+         * arriving here are ordinary game code: skipping them corrupts the
+         * run silently - a build that did so played its cutscene at twice
+         * speed and ran on (HANDOFF F369). Now the run ends here, loudly. */
+        fprintf(stderr, "[host] an instruction reached the fallback at 0x%08X: "
+                        "native code resumed where it has no entry. Stopping.\n",
+                cia);
+        mgs_module_interrupted = 1;
+    }
     if (s_unknown <= 8ul)
         fprintf(stderr, "  unhandled instruction 0x%08X at 0x%08X "
                         "(opcode %u, xo %u)\n", insn, cia, opcode, xo);

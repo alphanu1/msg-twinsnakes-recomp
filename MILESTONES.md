@@ -1496,6 +1496,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - The menu's 25 fps and the green flashing with the render thread
         (F365): its last commands waited for a retrace; fixed, the menu
         copies and presents every field again.
+      - First-run build: engine ~8 minutes on an idle machine (was 25-30)
+        at the same runtime speed (F369). Every-block entries are still
+        needed; why exactly is only partly understood.
       - The game no longer presents its own frames (F368): a main-thread
         presenter, so the display's vsync cannot stall the game.
       - **Direct calls between guest functions (F367): guest code runs

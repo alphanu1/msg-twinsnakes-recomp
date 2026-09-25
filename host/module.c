@@ -1529,6 +1529,24 @@ void mgs_module_profile_dump(FILE* out, unsigned top)
             s_prof_used >= PROF_SLOTS - (PROF_SLOTS / 8u) ? " (table full)" : "");
 }
 
+/* The run loop's ring of recently dispatched addresses, for a report made
+ * from outside the loop (host/spr.c, when an instruction reaches the host's
+ * fallback: which dispatch put execution there). */
+static const uint32_t* s_recent_ring;
+static const unsigned* s_recent_count;
+void mgs_module_print_recent(const char* why);
+void mgs_module_print_recent(const char* why)
+{
+    unsigned k, n;
+    if (!s_recent_ring || !s_recent_count) return;
+    n = (unsigned)(*s_recent_count < 16u ? *s_recent_count : 16u);
+    fprintf(stderr, "  %s - last dispatches:", why);
+    for (k = 0; k < n; ++k)
+        fprintf(stderr, " 0x%08X",
+                s_recent_ring[(*s_recent_count - n + k) % 16u]);
+    fprintf(stderr, "\n");
+}
+
 MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
 {
     MgsRunResult r;
@@ -1647,6 +1665,8 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
     #define RECENT 16
     static uint32_t recent[RECENT];
     unsigned recent_n = 0u;
+    s_recent_ring = recent;
+    s_recent_count = &recent_n;
 
     memset(&r, 0, sizeof r);
     {   /* MGS_RETRACE_STEPS still forces a STEP period, as it did. */

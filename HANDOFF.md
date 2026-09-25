@@ -15657,3 +15657,50 @@ arrangement. **Checked** under a virtual display: 1,838 frames presented,
 the same presentation cadence as before, events and quit on the main thread.
 **Not yet confirmed on Ben's screen** - the dips were never reproducible
 headless, so his window is the measurement.
+
+### F369 — DolRecomp's object cache ignored every setting; one finding above was a cache hit
+
+DolRecomp caches each compiled object in `~/.cache/dolrecomp/llvm`, keyed on
+its own options and a hash of the code generator's sources - but on none of
+the environment switches our patches add. With the same binary, flipping a
+switch quietly reused the previous run's objects. Found when a "cold" build
+of `main.dol` in a fresh directory took 3 seconds.
+
+**What that invalidates:** F366's "124 MB with or without every-block
+entries" - the second build was the first one's objects. The installed
+native build is unaffected: all its objects were generated under one set of
+switches, and every change of switches between its builds either rebuilt
+DolRecomp (which changes the source hash) or changed a keyed option.
+
+**Fixed** (local patch): every switch is part of the key. The 28 GB cache,
+all of it from this session's experiments, was cleared.
+
+**And the first-run build, measured cold** now that the cache cannot lie:
+`DOLRECOMP_LLVM_OPT_LEVEL=2` (it was hard-wired to 3; the project's rule for
+generated code is -O2) and `DOLRECOMP_NO_THINLTO=1` (bitcode summaries beside
+every object, which nothing here reads), with every-block entries off -
+`main.dol` in **14 s** (36 s before) and 19.0 MB of code (26.8 MB).
+
+**F369, continued - the first-run build, and what every-block entries are for.**
+
+- `main.dol` cold without every-block entries: native code resumed mid-block
+  at 0x8000D804. The dispatch path shows why: **0x800, the FP-unavailable
+  exception.** The SDK switches the FPU lazily - after a thread switch
+  floating point is off, the thread's next float instruction traps, and the
+  handler rfi's back to that instruction, mid-block. Upstream interprets
+  forward from there; we cannot.
+- `DOLRECOMP_ENTER_TRAP_POINTS=1` makes only those instructions entries
+  (float-availability checks, psq side exits) - about 4% of instructions.
+  `main.dol` then ran clean, but the engine resumed at 0x7F0F7E18, plain
+  integer code after a store, not a branch target, cause not found - and
+  because the host's fallback STEPPED OVER instructions it could not run, the
+  build played its cutscene at twice speed and carried on. **The fallback
+  now stops the run** with the dispatch path that led there; a correct build
+  reaches it 0 times.
+- So every-block entries stay, and the build is made cheaper instead: `-O2`
+  (the rule for generated code; it was hard-wired to 3) and no ThinLTO
+  summaries. Engine cold: **11 min 22 s** at load 22-34, 193 CPU-minutes,
+  ~8 minutes idle - against 25-30 before. Same runtime speed (guest cycles
+  in 100 s: 50.6/49.6 billion against 51.6/46.1 at `-O3`). Installed as the
+  native module; the `-O3` one is kept as `.O3-20260925`. A full Dock run on
+  it: 0 unhandled, menu 50.0, cutscene 24.5, gameplay 49.1.

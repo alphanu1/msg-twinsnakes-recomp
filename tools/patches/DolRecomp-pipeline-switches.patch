@@ -1,0 +1,77 @@
+diff --git a/src/app/pipeline.c b/src/app/pipeline.c
+index 9526e45..899687a 100644
+--- a/src/app/pipeline.c
++++ b/src/app/pipeline.c
+@@ -293,6 +293,24 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
+     if (!write_journal)
+         write_journal = "0";
+     hash = hash_bytes(hash, write_journal, strlen(write_journal));
++    /* Every environment switch that changes the generated code is part of
++     * the key. Without this, a second run with the same binary and a switch
++     * flipped quietly reused the first run's objects (HANDOFF F369). */
++    {
++        static const char* const switches[] = {
++            "DOLRECOMP_ENTER_EVERY_BLOCK", "DOLRECOMP_MEM2_BASE",
++            "DOLRECOMP_EE_EXIT_WHEN_PENDING", "DOLRECOMP_FP_NATIVE",
++            "DOLRECOMP_PURE_EXTERNAL", "DOLRECOMP_NATIVE_SERVICES",
++            "DOLRECOMP_LLVM_OPT_LEVEL", "DOLRECOMP_NO_THINLTO",
++            "DOLRECOMP_ENTER_TRAP_POINTS",
++        };
++        size_t k;
++        for (k = 0; k < sizeof switches / sizeof switches[0]; ++k) {
++            const char* v = getenv(switches[k]);
++            hash = hash_bytes(hash, switches[k], strlen(switches[k]));
++            hash = hash_bytes(hash, v ? v : "", v ? strlen(v) : 0u);
++        }
++    }
+     // Host triples must distinguish caches when no target was requested.
+     char triple[256];
+     DolLLVMOptions target_options = {0};
+@@ -539,7 +557,16 @@ static int prepare_llvm_function_abis(const LoadedCodeSection* sections,
+             }
+             dolir_module_free(&module);
+         }
+-    if (runtime == DOLLLVM_RUNTIME_MODERNGEKKO)
++    /* DOLRECOMP_NATIVE_SERVICES=1 lifts the exception and memory-service
++     * blockers for the default runtime too, so functions with generic memory
++     * accesses can still be called natively. Valid when the runtime's
++     * external_read/external_write never raise a guest exception and never
++     * need the guest's registers - true of Twin Snakes' host, whose calls
++     * between native functions otherwise all went back through its run
++     * loop (HANDOFF F366). */
++    const char* native_services = getenv("DOLRECOMP_NATIVE_SERVICES");
++    if (runtime == DOLLLVM_RUNTIME_MODERNGEKKO ||
++        (native_services && native_services[0] && native_services[0] != '0'))
+         dolllvm_enable_native_services(ranges, range_count);
+     if (!dolllvm_propagate_function_abis(ranges, range_count, edges,
+                                          edge_count))
+@@ -699,12 +726,27 @@ static int emit_llvm_chunk_job(const void* data, void* user) {
+     options.profile_use_path = job->profile_use_path;
+     options.partition_seed = job->partition_seed;
+     options.state_in_memory = job->state_in_memory;
+-    options.emit_thinlto = 1;
++    /* DOLRECOMP_NO_THINLTO=1 skips the ThinLTO summaries written beside
++     * every object: a runtime that links the objects as they are never
++     * reads them, and a player's first build pays for writing them. */
++    {
++        const char* no_thinlto = getenv("DOLRECOMP_NO_THINLTO");
++        options.emit_thinlto =
++            (no_thinlto && no_thinlto[0] && no_thinlto[0] != '0') ? 0 : 1;
++    }
+     options.thinlto_path = job->thinlto_path;
+     options.fixed_memory_layout = 1;
+     options.ram_size = job->ram_size;
+     options.mem2_size = job->mem2_size;
+-    options.optimization_level = 3;
++    /* DOLRECOMP_LLVM_OPT_LEVEL=0..3 (default 3). Twin Snakes' rule is -O2
++     * for generated code, and a player's first build is paid in the
++     * optimiser's time (HANDOFF F369). */
++    {
++        const char* level = getenv("DOLRECOMP_LLVM_OPT_LEVEL");
++        options.optimization_level =
++            (level && level[0] >= '0' && level[0] <= '3' && !level[1])
++                ? level[0] - '0' : 3;
++    }
+     options.verify = 1;
+     options.function_ranges = job->ranges;
+     options.function_range_count = job->range_count;

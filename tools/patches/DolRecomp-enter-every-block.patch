@@ -1,5 +1,5 @@
 diff --git a/src/backend/llvm/register_state.cpp b/src/backend/llvm/register_state.cpp
-index fe860e7..3e44a68 100644
+index fe860e7..3e7c5e3 100644
 --- a/src/backend/llvm/register_state.cpp
 +++ b/src/backend/llvm/register_state.cpp
 @@ -1,3 +1,4 @@
@@ -7,7 +7,7 @@ index fe860e7..3e44a68 100644
  #include "backend/llvm/emitter.h"
  #include "backend/llvm/native_abi.h"
  #include "cpu/cpu.h"
-@@ -197,6 +198,21 @@ void FunctionEmitter::scanRegionLeaders() {
+@@ -197,6 +198,48 @@ void FunctionEmitter::scanRegionLeaders() {
          region_leaders_[term.targets[edge]] = true;
      }
    }
@@ -21,6 +21,33 @@ index fe860e7..3e44a68 100644
 +  // labelled" guarantee, at block granularity. The cost is the fragmentation
 +  // measured above (5-16% on the titles that did not need it); the gain is
 +  // that nothing is ever interpreted.
++  // ENTRIES WHERE A TRAP RETURNS (DOLRECOMP_ENTER_TRAP_POINTS=1).
++  //
++  // The narrower rule, and the one Twin Snakes needs: an instruction that
++  // can trap and be RETURNED TO must be enterable. The SDK switches the FPU
++  // lazily - after a thread switch floating point is off, the thread's next
++  // float instruction takes the FP-unavailable exception, the handler
++  // restores the FPU and rfi's back to that same instruction, mid-block.
++  // Every float instruction's block begins with its availability check, so
++  // those blocks are entries; so are blocks with a paired-single quantised
++  // load or store, whose slow form side-exits at its own address. About 4%
++  // of the engine's instructions, where every-block was all of them.
++  if (const char *traps = getenv("DOLRECOMP_ENTER_TRAP_POINTS")) {
++    if (traps[0] && traps[0] != '0')
++      for (u32 i = 0; i < source_.block_count; i++) {
++        const DolIRBlock &body = source_.blocks[i];
++        for (u32 n = 0; n < body.instruction_count; n++) {
++          const DolIRInstruction &in = body.instructions[n];
++          if (in.op == DOLIR_OP_HELPER_CALL &&
++              (in.aux == DOLIR_HELPER_FP_AVAILABLE ||
++               in.aux == DOLIR_HELPER_PSQ_LOAD ||
++               in.aux == DOLIR_HELPER_PSQ_STORE)) {
++            region_leaders_[i] = true;
++            break;
++          }
++        }
++      }
++  }
 +  if (const char *every = getenv("DOLRECOMP_ENTER_EVERY_BLOCK")) {
 +    if (every[0] && every[0] != '0')
 +      for (u32 i = 0; i < source_.block_count; i++)
