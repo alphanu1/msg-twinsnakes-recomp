@@ -98,11 +98,24 @@ int mgs_display_may_present(void)
 {
     struct timespec now;
     long long t;
+    long long iv;
     if (!s_fps_cap) return 1;
     clock_gettime(CLOCK_MONOTONIC, &now);
     t = (long long)now.tv_sec * 1000000000ll + now.tv_nsec;
-    if (t < s_present_due) return 0;
-    s_present_due = t + 1000000000ll / (long long)s_fps_cap;
+    iv = 1000000000ll / (long long)s_fps_cap;
+    /* HALF A FRAME OF TOLERANCE, AND A SCHEDULE THAT DOES NOT DRIFT.
+     *
+     * The cap is the field rate and a present is offered once per field, so
+     * the two run at the same 20 ms. The old test refused any present that
+     * came even a hair under 20 ms after the last one - and with ordinary
+     * timing jitter about half of them do - so a game drawing a steady 50
+     * was shown at 25: Ben's menu, "stays at 25 after the intro movie".
+     * A present is refused now only when it is more than half a frame
+     * early, and the next due time advances from the last due time rather
+     * than from now, resynchronising only after falling a frame behind. */
+    if (t + iv / 2 < s_present_due) return 0;
+    if (s_present_due < t - iv) s_present_due = t;
+    s_present_due += iv;
     return 1;
 }
 
@@ -962,8 +975,15 @@ no_readback:
         }
 
         if ((cmd & COPY_TO_XFB) && getenv("MGS_TRACE_XFBPAIR")) {
+            /* MGS_TRACE_XFBPAIR=<first copy>: 24 copies from there, with the
+             * field each landed in - so a scene's copy pattern (one per
+             * picture, or one per field) can be read, not only the boot's. */
             static unsigned n;
-            if (n++ < 24u) {
+            static long from = -1;
+            if (from < 0) from = strtol(getenv("MGS_TRACE_XFBPAIR"), NULL, 0);
+            if (n++ >= (unsigned long)from && n - 1u < (unsigned long)from + 24u) {
+                fprintf(stderr, "[xfb] copy #%u in field %llu\n", n - 1u,
+                        (unsigned long long)mgs_mmio_field_count(mgs_host_mmio()));
                 uint32_t tl0 = mgs_bp_get(&s_gx.bp, BP_EFB_BOX_TL);
                 fprintf(stderr, "[xfb] source box top-left (%u,%u) %ux%u\n",
                         tl0 & 0x3FFu, (tl0 >> 10) & 0x3FFu, copy_w, copy_h);
@@ -1338,7 +1358,19 @@ int mgs_display_peek_draw_done(void)
 }
 
 int mgs_display_take_draw_done(void);
-int mgs_display_take_draw_done(void) { return mgs_gx_take_draw_done(&s_gx); }
+int mgs_display_take_draw_done(void)
+{
+    /* PUBLISH HERE TOO. This is the poll the finish interrupt actually
+     * uses, every 512 guest ticks. A frame ends with the copy to the
+     * framebuffer and the draw-done request, and then the game waits - so
+     * no more bytes come to fill a batch, and those last commands sat in
+     * the ring until the next retrace published them. The frame then
+     * finished after the retrace, the game missed its flip, and rendered
+     * the same buffer again: every buffer copied twice, the menu at 25 fps
+     * (Ben, 2026-09-25). Publishing is a compare when nothing is new. */
+    gx_publish();
+    return mgs_gx_take_draw_done(&s_gx);
+}
 
 void mgs_display_put_draw_done(void);
 void mgs_display_put_draw_done(void)

@@ -498,6 +498,23 @@ static void frame_pump(void)
     {
         uint64_t mgs_display_frame_in(uint32_t xfb_addr);
         uint32_t vi = mgs_mmio_xfb_address(mgs_host_mmio());
+        /* THE FRAME HAS TO BE IN THE BUFFER BEFORE IT IS SHOWN.
+         *
+         * With drawing on the render thread, the copy that fills a
+         * framebuffer runs when that thread reaches it - which can be after
+         * the game has already pointed VI at the buffer. Presenting then
+         * showed a buffer half written or never written: the top of the
+         * screen flashing green, which is YUV zero (Ben, 2026-09-25). On
+         * the console the copy is done long before the flip. So when VI
+         * moves to another buffer, everything the game wrote before the flip
+         * is drawn first - once per displayed frame, and a wait only when
+         * the render thread is actually behind. */
+        static uint32_t last_vi;
+        if (vi != last_vi) {
+            void mgs_display_gx_drain(void);
+            mgs_display_gx_drain();
+            last_vi = vi;
+        }
         copies = ((uint64_t)(vi & ~0xFFFu) << 32) ^ mgs_display_frame_in(vi);
     }
     if (copies == shown) return;

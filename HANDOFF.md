@@ -15523,3 +15523,33 @@ window there is now no ceiling (the game runs until the window is closed);
 headless runs keep their short default, and `MGS_STEPS` still sets one.
 `build/run.sh` (local, git-ignored) no longer passes one either, and takes
 `MGS_MODULE_PATH` to choose a module.
+
+### F365 — the menu at 25 fps and the green flashing: the render thread's last commands waited for a retrace
+
+Ben, on the native build: gameplay 44-50 fps, "but the top half keeps
+flashing green", and "the menu should be at 50fps but stays at 25 after the
+intro movie".
+
+**Cause, traced** (`MGS_TRACE_XFBPAIR=<first copy>` now traces from any copy
+with the field it landed in). Drawing inline, the menu copies once per
+field into alternating framebuffers: 50 fps. With the render thread, every
+buffer was copied TWICE before a flip. A frame ends with the copy to the
+framebuffer and the draw-done request, and then the game waits - so no more
+bytes arrive to fill a 2 KB batch, and those last commands sat unpublished
+until the next retrace flushed the ring. The frame finished after the
+retrace, the game missed its flip and rendered the same buffer again. The
+buffer VI was pointed at could also still be waiting for its copy: green is
+YUV zero. **Fixed** three ways, each for its own reason:
+
+1. The draw-done poll the finish interrupt uses (every 512 guest ticks)
+   publishes the ring. Before, only a different poll did.
+2. When VI moves to another buffer, everything written before the flip is
+   drawn before the buffer is read for presentation.
+3. The frame cap (the field rate) refused any present arriving a hair under
+   20 ms after the last, so ordinary jitter halved a steady 50 to 25 in a
+   window. It now allows half a frame early and schedules from the last due
+   time, not from now.
+
+**Measured**, menu stretch headless: copies alternate buffers every field
+again, and presentation matches the copies - 2,784 one-field presents
+against 2,835 one-field copies (before the fix: 211 against 2,848).
