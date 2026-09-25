@@ -199,4 +199,25 @@ target_link_libraries(mgs_module PRIVATE
   m)   # the generated float paths call fmod/sqrt; libm is not implicit here
 set_target_properties(mgs_module PROPERTIES
   OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
-  LINK_FLAGS "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/module.exports -Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")
+  LINK_FLAGS "-Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")
+
+# WHAT THE MODULE EXPORTS, from one list for every platform: module.exports
+# is a GNU version script (ELF); a Windows DLL takes a .def file, generated
+# here from the same names so the two cannot drift apart.
+if(WIN32)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/module.exports" MGS_EXPORTS_TEXT)
+  string(REGEX REPLACE "/\\*([^*]|\\*[^/])*\\*/" "" MGS_EXPORTS_TEXT "${MGS_EXPORTS_TEXT}")
+  string(REGEX MATCH "global:[^}]*local:" MGS_EXPORTS_GLOBAL "${MGS_EXPORTS_TEXT}")
+  string(REGEX MATCHALL "[A-Za-z_][A-Za-z0-9_]*;" MGS_EXPORT_NAMES "${MGS_EXPORTS_GLOBAL}")
+  set(MGS_DEF "EXPORTS\n")
+  foreach(n ${MGS_EXPORT_NAMES})
+    string(REPLACE ";" "" n "${n}")
+    string(APPEND MGS_DEF "    ${n}\n")
+  endforeach()
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/module.def" "${MGS_DEF}")
+  target_sources(mgs_module PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/module.def")
+  target_link_options(mgs_module PRIVATE -static-libgcc)
+else()
+  set_property(TARGET mgs_module APPEND_STRING PROPERTY LINK_FLAGS
+    " -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/module.exports")
+endif()

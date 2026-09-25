@@ -3,7 +3,11 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #define MGS_JOB_QUEUE_CAP 1024u
 
@@ -25,7 +29,11 @@ struct MgsJobPool {
 
 unsigned mgs_jobs_hardware_threads(void)
 {
+#ifdef _WIN32
+    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#else
     long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
     return n > 0 ? (unsigned)n : 1u;
 }
 

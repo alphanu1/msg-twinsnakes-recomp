@@ -13,6 +13,21 @@
  *
  * MGS_PROFILE=1 to enable.
  */
+#ifdef _WIN32
+/* The sampling profiler is built on POSIX signals (SIGPROF, ucontext): a
+ * development tool, not part of the game. On Windows it says so. */
+#include "profile.h"
+#include <stdio.h>
+#include <stdlib.h>
+void mgs_profile_start(void)
+{
+    if (getenv("MGS_PROFILE"))
+        fprintf(stderr, "[profile] not available on Windows\n");
+}
+void mgs_profile_report(void) {}
+void mgs_profile_this_thread(void) {}
+void mgs_profile_set_guest_ram(const unsigned char* ram) { (void)ram; }
+#else
 /* REG_RIP lives behind _GNU_SOURCE, and ucontext_t must come before use. */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -433,3 +448,4 @@ void mgs_profile_report(void)
                 prof_hits[s], prof_pc[s] - prof_base);
     }
 }
+#endif /* !_WIN32 */

@@ -21,4 +21,10 @@ set_target_properties(twin-snakes PROPERTIES C_STANDARD 11)
 # -rdynamic puts the host's own symbol names in the dynamic table, so the
 # backtrace printed when a run has to be killed names functions rather than
 # bare addresses. Diagnostics only; it does not change what is generated.
-target_link_options(twin-snakes PRIVATE -rdynamic)
+if(WIN32)
+  # Windows: the C, C++ and thread runtimes linked in, so the game needs
+  # nothing beside it but SDL3.dll. (-rdynamic is an ELF feature.)
+  target_link_options(twin-snakes PRIVATE -static)
+else()
+  target_link_options(twin-snakes PRIVATE -rdynamic)
+endif()

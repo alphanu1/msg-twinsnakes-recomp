@@ -16,7 +16,7 @@
 #include "os/os_runtime.h"
 
 #include <time.h>
-#include <dlfcn.h>
+#include "dynlib.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -69,17 +69,17 @@ int mgs_module_load(MgsModule* mod, const char* path)
     const ModDesc* (*get)(void);
 
     memset(mod, 0, sizeof *mod);
-    mod->handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    mod->handle = mgs_dlopen(path);
     if (!mod->handle) {
-        snprintf(mod->error, sizeof mod->error, "%s", dlerror());
+        snprintf(mod->error, sizeof mod->error, "%s", mgs_dlerror());
         return 0;
     }
 
-    get = (const ModDesc* (*)(void))dlsym(mod->handle, "staticrecomp_get_module");
+    get = (const ModDesc* (*)(void))mgs_dlsym(mod->handle, "staticrecomp_get_module");
     if (!get) {
         snprintf(mod->error, sizeof mod->error,
-                 "no staticrecomp_get_module: %s", dlerror());
-        dlclose(mod->handle); mod->handle = NULL;
+                 "no staticrecomp_get_module: %s", mgs_dlerror());
+        mgs_dlclose(mod->handle); mod->handle = NULL;
         return 0;
     }
 
@@ -100,7 +100,7 @@ int mgs_module_load(MgsModule* mod, const char* path)
      * instead of ours, which is exactly what phase 1 did.
      */
     mod->set_patch_hook = (void (*)(int (*)(void*, uint32_t)))
-                          dlsym(mod->handle, "mgs_dispatch_set_patch_hook");
+                          mgs_dlsym(mod->handle, "mgs_dispatch_set_patch_hook");
     return 1;
 }
 
@@ -271,7 +271,7 @@ void mgs_module_set_vmem(uint8_t* vmem) { s_vmem = vmem; }
  * optional hooks the loader need not know about by name. */
 void* mgs_module_symbol(const MgsModule* mod, const char* name)
 {
-    return (mod && mod->handle) ? dlsym(mod->handle, name) : NULL;
+    return (mod && mod->handle) ? mgs_dlsym(mod->handle, name) : NULL;
 }
 
 void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem);
@@ -279,7 +279,7 @@ void mgs_module_install_vmem(const MgsModule* mod, uint8_t* vmem)
 {
     void (*set)(uint8_t*);
     if (!mod || !mod->handle || getenv("MGS_VMEM_SLOW")) return;
-    set = (void (*)(uint8_t*))dlsym(mod->handle, "mgs_dispatch_set_vmem");
+    set = (void (*)(uint8_t*))mgs_dlsym(mod->handle, "mgs_dispatch_set_vmem");
     if (set) {
         set(vmem);
         fprintf(stderr, "[vmem] second window inlined in the module "
@@ -2479,6 +2479,6 @@ int mgs_module_call_guest(const MgsModule* mod, void* cpu, uint32_t address,
 
 void mgs_module_unload(MgsModule* mod)
 {
-    if (mod->handle) dlclose(mod->handle);
+    if (mod->handle) mgs_dlclose(mod->handle);
     memset(mod, 0, sizeof *mod);
 }

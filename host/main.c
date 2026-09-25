@@ -29,6 +29,9 @@
 #include <unistd.h>
 
 #include <SDL3/SDL.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void mgs_dvd_service(const MgsModule* mod, void* cpu, MgsDvd* dvd);
 uint64_t mgs_dvd_completed(void);
@@ -737,7 +740,9 @@ static MgsRunResult run_with_presenter(const MgsModule* mod, void* cpu,
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef _WIN32
 #include <execinfo.h>
+#endif
 #include <stdarg.h>
 
 static void overlay_line(const char* fmt, ...);
@@ -1011,12 +1016,14 @@ static void on_interrupt(int sig)
          * changed nothing. backtrace() is not formally async-signal-safe,
          * but this path is about to _exit anyway, and a stack that is
          * occasionally garbled beats three rounds of inference. */
+#ifndef _WIN32
         {
             void* frames[24];
             int n = backtrace(frames, 24);
             (void)!write(2, "[wedged] host stack:\n", 21);
             backtrace_symbols_fd(frames, n, 2);
         }
+#endif
         _exit(130);
     }
     mgs_module_interrupted = 1;
@@ -1600,7 +1607,17 @@ static int dir_find_module(const char* dir, char* out, size_t out_size)
     if (!d) return 0;
     while (!found && (e = readdir(d)) != NULL) {
         size_t n = strlen(e->d_name);
-        if (n > 10u && !strcmp(e->d_name + n - 10u, "_recomp.so")) {
+        /* The platform's own library suffix: a Linux module is a .so, a
+         * Windows one a .dll, a Mac one a .dylib. */
+#if defined(_WIN32)
+        static const char suffix[] = "_recomp.dll";
+#elif defined(__APPLE__)
+        static const char suffix[] = "_recomp.dylib";
+#else
+        static const char suffix[] = "_recomp.so";
+#endif
+        const size_t sl = sizeof suffix - 1u;
+        if (n > sl && !strcmp(e->d_name + n - sl, suffix)) {
             snprintf(out, out_size, "%s/%s", dir, e->d_name);
             found = 1;
         }
@@ -1614,11 +1631,19 @@ static int dir_find_module(const char* dir, char* out, size_t out_size)
 static void exe_directory(const char* argv0, char* out, size_t out_size)
 {
     char buf[1024];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1u);
     char* slash;
+#ifdef _WIN32
+    DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)sizeof buf);
+    char* bs;
+    if (n > 0 && n < sizeof buf) buf[n] = '\0';
+    else snprintf(buf, sizeof buf, "%s", argv0 ? argv0 : ".");
+    for (bs = buf; *bs; ++bs) if (*bs == '\\') *bs = '/';
+#else
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof buf - 1u);
 
     if (n > 0) buf[n] = '\0';
     else       snprintf(buf, sizeof buf, "%s", argv0 ? argv0 : ".");
+#endif
 
     slash = strrchr(buf, '/');
     if (slash) *slash = '\0';

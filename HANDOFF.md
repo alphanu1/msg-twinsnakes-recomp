@@ -16264,3 +16264,38 @@ console did on other hardware already has its own threads (drawing,
 mixing, disc). The route to a higher frame rate on the Deck is a cheaper
 game thread.
 
+### F385 — a Windows build, cross-compiled on Linux
+
+Ben: "can we do a cross compile for windows now as well" and "the make
+files need to ensure we can always cross compile".
+
+`tools/windows-release/build.sh [dol-gen rel-gen]` builds in a Debian 12
+container with MinGW-w64 (POSIX-threads variant, so the pthreads code is
+unchanged) and SDL3's official MinGW release 3.4.14
+(`tools/windows-release/Dockerfile`, `mingw64.cmake`). Output
+`build/windows-release/twin-snakes/`: `twin-snakes.exe` (7.6 MB; imports
+only KERNEL32, msvcrt, SHELL32, USER32 and SDL3), `SDL3.dll`,
+`module/gGGSPA4_recomp.dll`, README.txt.
+
+Portability changes, each behind the platform test, nothing changed on
+Linux: module loading through `host/dynlib.h` (LoadLibrary/GetProcAddress
+on Windows); the program's folder from `GetModuleFileNameA`; the hang
+watchdog's `backtrace()` Linux-only; core count from
+`GetActiveProcessorCount`; the SIGPROF profiler a stub on Windows ("not
+available"); the module search matches `_recomp.dll` / `.dylib` / `.so` by
+platform; `-rdynamic` only on ELF, `-static` for the runtimes on Windows;
+the module's exports from `module.exports` either as a GNU version script
+or as a generated `.def` - one list for both.
+
+**The native module for Windows** is DolRecomp's normal output with
+`DOLRECOMP_LLVM_TARGET=x86_64-w64-windows-gnu` (COFF objects, same
+switches, x86-64-v3; DOL 23 s, engine 6 min 31 s at load 21-73), linked as
+a DLL by MinGW: 271 MB, imports KERNEL32 and msvcrt only, exports exactly
+the eight names in module.exports. `CPUState` is laid out identically on
+Win64: only fixed-size fields, no `long`.
+
+Checked: it builds; the `.exe` and DLL are well-formed PE32+ with the
+imports and exports above; Ben reports it running under Wine. **Not yet
+run on real Windows** - Ben's test. On a player's machine the launcher's
+first-run build will produce the platform's own objects in the same way.
+

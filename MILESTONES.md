@@ -1641,7 +1641,10 @@ Cost here depends entirely on the phase-0 answer about custom microcode.
 - [ ] Packaging: portable zip on Windows; AppImage or Flatpak on Linux, with
       Steam Deck as a first-class target. **Linux release build done**
       (F382): Steam Runtime sniper, glibc 2.29 at most, SDL3 bundled; runs
-      from its own folder. Still to come: Windows, and the packaged form.
+      from its own folder. **Windows build cross-compiled** (F385): MinGW
+      in a container, the module as a DLL; runs under Wine, real Windows
+      being tested. Still to come: one command for all targets, and the
+      packaged forms.
 
 ---
 
