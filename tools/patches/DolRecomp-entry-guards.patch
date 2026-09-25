@@ -1,0 +1,91 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -121,6 +121,7 @@
+         src/backend/llvm/state_write.cpp
+         src/backend/llvm/state_controls.cpp
+         src/backend/llvm/exits.cpp
++        src/backend/llvm/entry_guard.cpp
+         src/backend/llvm/timing.cpp
+         src/backend/llvm/native_exits.cpp
+         src/backend/llvm/instructions.cpp
+--- a/src/backend/llvm/exits.cpp	2026-09-26 00:33:18.523673524 +0100
++++ b/src/backend/llvm/exits.cpp	2026-09-26 00:12:35.684749899 +0100
+@@ -5,7 +5,7 @@
+ #include <llvm/IR/Constants.h>
+ #include <llvm/IR/Intrinsics.h>
+ #include <llvm/IR/Module.h>
+-
++#include "backend/llvm/entry_guard.h"
+ namespace dolllvm {
+ 
+ using namespace llvm;
+@@ -75,7 +75,7 @@
+     Value *hostCall = loadOffset(pointer, offsetof(CPUState, host_call));
+     Value *noInterception = builder_.CreateCall(
+         expect, {builder_.CreateIsNull(hostCall), builder_.getTrue()});
+-    builder_.CreateCondBr(noInterception, nativeEntry, query);
++    builder_.CreateCondBr(entryGuardWanted(source_.guest_start) ? noInterception : builder_.getTrue(), nativeEntry, query);
+   }
+   builder_.SetInsertPoint(query);
+   FunctionCallee available;
+diff --git a/src/backend/llvm/entry_guard.cpp b/src/backend/llvm/entry_guard.cpp
+new file mode 100644
+index 0000000..af2eb95
+--- /dev/null
++++ b/src/backend/llvm/entry_guard.cpp
+@@ -0,0 +1,35 @@
++#include "backend/llvm/entry_guard.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <mutex>
++#include <unordered_set>
++
++namespace dolllvm {
++
++// Read once, shared by every emitting thread.
++bool entryGuardWanted(u32 guest_start) {
++  static std::once_flag once;
++  static bool all = true;
++  static std::unordered_set<u32> listed;
++  std::call_once(once, [] {
++    const char *path = std::getenv("DOLRECOMP_GUARDED_ENTRIES");
++    if (!path || !path[0])
++      return;
++    FILE *file = std::fopen(path, "r");
++    if (!file)
++      return; // unreadable: keep every guard rather than drop them all
++    char line[64];
++    while (std::fgets(line, sizeof line, file)) {
++      char *end = nullptr;
++      unsigned long value = std::strtoul(line, &end, 0);
++      if (end != line)
++        listed.insert(static_cast<u32>(value));
++    }
++    std::fclose(file);
++    all = false;
++  });
++  return all || listed.count(guest_start) != 0;
++}
++
++} // namespace dolllvm
+diff --git a/src/backend/llvm/entry_guard.h b/src/backend/llvm/entry_guard.h
+new file mode 100644
+index 0000000..bda6c55
+--- /dev/null
++++ b/src/backend/llvm/entry_guard.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include "common/types.h"
++
++namespace dolllvm {
++
++// Whether a function's native entry carries the interception query
++// (ppc_native_region_available). Every function does, unless
++// DOLRECOMP_GUARDED_ENTRIES names a file of addresses - then only those do.
++// A host that intercepts a fixed set of functions (its own native SDK
++// implementations) lists them, and every other call is one branch lighter.
++bool entryGuardWanted(u32 guest_start);
++
++} // namespace dolllvm

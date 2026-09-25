@@ -16230,3 +16230,37 @@ Support/twin-snakes` (was `~/.config`); the Linux release README says where
 settings, discs and the memory card live on each platform, and flags a
 package containing the module as a personal build (rule 8).
 
+### F384 — the per-call guard only where it can fire: +11%
+
+Every native function entry called `ppc_native_region_available` to ask
+whether the host had replaced the function with a native SDK version; only
+the 39 functions in `runtime/os/patch_table.c` ever are, and none of them
+is in the engine. New local DolRecomp switch `DOLRECOMP_GUARDED_ENTRIES`
+(`tools/patches/DolRecomp-entry-guards.patch`) emits the query only for
+listed functions. Text 312.6 -> 303.2 MB.
+
+**Measured at TRIPLE speed** - the double-speed cutscene benchmark had come
+within 4% of its 50 fps target after F370/F383 and read both builds as
+48: a benchmark at its ceiling cannot show a gain. At triple speed
+(target 75), alternating: 55.5 and 52.9 fps against 50.0 and 47.3. Use
+`SPD=3` from now on. 0 unhandled. Installed as the native module.
+
+The eight local DolRecomp patches were re-checked to apply to pristine
+upstream `71ce7f97`, in the order bootstrap applies them (name order), and
+to reproduce the working tree exactly.
+
+**Rule 14 lapse, recorded rather than rewritten:** an audit before the push
+found 7 of the 33 commits since the last push missing HANDOFF.md or
+MILESTONES.md (the THIRD_PARTY-row follow-up, the gamepad test, the
+settings-screen plan, the volume/compressor/mixerCtrl commits, F383). Their
+findings are all in HANDOFF; the history was not rewritten. Otherwise clean:
+every commit by Ben, no attribution trailers, no assistant named, no game
+code, assets, generated code, extern/ or build output.
+
+Ben asked about multi-threading: the game's own logic cannot be spread over
+cores - the GameCube had one CPU, the game's threads run one at a time and
+it relies on that (project rule: one guest thread at a time). What the
+console did on other hardware already has its own threads (drawing,
+mixing, disc). The route to a higher frame rate on the Deck is a cheaper
+game thread.
+

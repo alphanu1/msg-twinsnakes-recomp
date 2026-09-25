@@ -1791,6 +1791,9 @@ python3 tools/rel-dol-entries.py discs/GGSPA4/disc1/files/shared/mgso_pal.rel \
     -o build/phase1/rel-dol-entries.txt        # 390 DOL addresses the engine refers to
 export DOLRECOMP_ENTER_DATA_REFS=1             # DolRecomp-pipeline-switches.patch (F370)
 export DOLRECOMP_EXTRA_ENTRIES=$PWD/build/phase1/rel-dol-entries.txt   # same patch
+grep -o "{0x[0-9A-Fa-f]*u" runtime/os/patch_table.c | tr -d '{u' \
+    > build/phase1/guarded-entries.txt         # the 39 functions the host may intercept
+export DOLRECOMP_GUARDED_ENTRIES=$PWD/build/phase1/guarded-entries.txt # DolRecomp-entry-guards.patch
 export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
 export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
 export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
@@ -1853,6 +1856,15 @@ every-block entries the engine builds in 64 CPU-minutes, but native code
 then resumes where it has no entry; entries only at lazy-FPU trap points
 were measured NOT enough (an integer-only re-entry at 0x7F0F7E18 remains
 unexplained).
+
+**Entry guards only where they can fire (F384):** every native function
+entry asked the host whether it had been replaced by a native SDK function
+- a call at each of millions of guest calls a second - though only the 39
+functions in the patch table ever are. With `DOLRECOMP_GUARDED_ENTRIES`
+only those carry the query. Engine generation 4 min 43 s; text 312.6 ->
+303.2 MB. **Measured** at triple speed (the double-speed cutscene had come
+within 4% of its 50 fps target and could not show a gain), alternating:
+55.5 and 52.9 fps against 50.0 and 47.3 - about +11%. 0 unhandled.
 
 **For x86-64-v3 (F383):** `--targets x86-64-v3` (AVX2, FMA, BMI2 - every
 x86 CPU since about 2013, the Steam Deck's Zen 2 included). The default

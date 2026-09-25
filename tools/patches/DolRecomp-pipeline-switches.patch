@@ -1,8 +1,8 @@
 diff --git a/src/app/pipeline.c b/src/app/pipeline.c
-index 9526e45..8f18f46 100644
+index 9526e45..98ab750 100644
 --- a/src/app/pipeline.c
 +++ b/src/app/pipeline.c
-@@ -293,6 +293,24 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
+@@ -293,6 +293,25 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
      if (!write_journal)
          write_journal = "0";
      hash = hash_bytes(hash, write_journal, strlen(write_journal));
@@ -16,6 +16,7 @@ index 9526e45..8f18f46 100644
 +            "DOLRECOMP_PURE_EXTERNAL", "DOLRECOMP_NATIVE_SERVICES",
 +            "DOLRECOMP_LLVM_OPT_LEVEL", "DOLRECOMP_NO_THINLTO",
 +            "DOLRECOMP_ENTER_TRAP_POINTS", "DOLRECOMP_ENTER_DATA_REFS",
++            "DOLRECOMP_GUARDED_ENTRIES",
 +        };
 +        size_t k;
 +        for (k = 0; k < sizeof switches / sizeof switches[0]; ++k) {
@@ -27,7 +28,7 @@ index 9526e45..8f18f46 100644
      // Host triples must distinguish caches when no target was requested.
      char triple[256];
      DolLLVMOptions target_options = {0};
-@@ -539,7 +557,16 @@ static int prepare_llvm_function_abis(const LoadedCodeSection* sections,
+@@ -539,7 +558,16 @@ static int prepare_llvm_function_abis(const LoadedCodeSection* sections,
              }
              dolir_module_free(&module);
          }
@@ -45,7 +46,7 @@ index 9526e45..8f18f46 100644
          dolllvm_enable_native_services(ranges, range_count);
      if (!dolllvm_propagate_function_abis(ranges, range_count, edges,
                                           edge_count))
-@@ -551,11 +578,86 @@ fail:
+@@ -551,11 +579,86 @@ fail:
      return 0;
  }
  
@@ -133,7 +134,7 @@ index 9526e45..8f18f46 100644
      for (u32 i = 0; i < section_count; i++)
          capacity += sections[i].size / 4u;
      u32* points = (u32*)malloc(capacity * sizeof(*points));
-@@ -571,6 +673,10 @@ static u32* collect_llvm_entry_points(const LoadedCodeSection* sections,
+@@ -571,6 +674,10 @@ static u32* collect_llvm_entry_points(const LoadedCodeSection* sections,
                  points[count++] = address;
          }
      }
@@ -144,7 +145,7 @@ index 9526e45..8f18f46 100644
      for (u32 section_index = 0; section_index < section_count;
           section_index++) {
          const LoadedCodeSection* section = &sections[section_index];
-@@ -699,12 +805,27 @@ static int emit_llvm_chunk_job(const void* data, void* user) {
+@@ -699,12 +806,27 @@ static int emit_llvm_chunk_job(const void* data, void* user) {
      options.profile_use_path = job->profile_use_path;
      options.partition_seed = job->partition_seed;
      options.state_in_memory = job->state_in_memory;
@@ -174,7 +175,7 @@ index 9526e45..8f18f46 100644
      options.verify = 1;
      options.function_ranges = job->ranges;
      options.function_range_count = job->range_count;
-@@ -1680,9 +1801,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
+@@ -1680,9 +1802,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
@@ -213,7 +214,7 @@ index 9526e45..8f18f46 100644
  }
  
  int emit_rpx_split(const RPXFile* rpx, const char* output_path,
-@@ -1736,9 +1883,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
+@@ -1736,9 +1884,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
