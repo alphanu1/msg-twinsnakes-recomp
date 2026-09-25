@@ -1496,6 +1496,8 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - The menu's 25 fps and the green flashing with the render thread
         (F365): its last commands waited for a retrace; fixed, the menu
         copies and presents every field again.
+      - The game no longer presents its own frames (F368): a main-thread
+        presenter, so the display's vsync cannot stall the game.
       - **Direct calls between guest functions (F367): guest code runs
         1.66x the C build's rate**, run-loop trips halved; installed as the
         native module. Menu 49.9, cutscene 25.0, gameplay 49.2.

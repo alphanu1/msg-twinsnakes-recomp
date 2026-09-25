@@ -96,6 +96,13 @@ static void prof_find_base(void)
     fclose(f);
 }
 
+/* The game's thread may not be the one that started the profiler (with a
+ * window it runs on its own thread); it names itself here. */
+void mgs_profile_this_thread(void)
+{
+    prof_tid = syscall(SYS_gettid);
+}
+
 void mgs_profile_start(void)
 {
     struct sigaction sa;

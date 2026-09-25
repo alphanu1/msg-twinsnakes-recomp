@@ -385,6 +385,20 @@ static uint64_t progress_counter(unsigned which)
  * the post-run viewer is skipped so one close means closed. */
 static int s_quit_requested;
 
+/* PRESENTATION ON THE MAIN THREAD, THE GAME ON ITS OWN (2026-09-25).
+ *
+ * The game's thread used to present each frame itself: YUV to RGB, the
+ * texture upload and SDL's present, and SDL's present waits for the display
+ * whenever the driver or the compositor enforces vsync. A game at 50 fps on
+ * a 60 or 144 Hz monitor then loses a slice of every frame to waiting on the
+ * monitor - Ben's windowed dips, which no headless run reproduces. On the
+ * console the video interface scans memory out on its own while the CPU
+ * runs; now the main thread does that - window, events, conversion,
+ * present - and the game's thread only says "a new frame is up".
+ * MGS_PRESENT_INLINE=1 puts presentation back on the game's thread. */
+static int s_present_threaded;
+static int s_present_pending;
+
 /* PRESENTATION CADENCE: fields between one new picture and the next, as the
  * screen gets them. The copy cadence says how fast the game draws; this says
  * how fast the viewer sees it, and the two disagreeing is a presentation
@@ -423,7 +437,7 @@ static void frame_pump(void)
      * forever. The window could not be closed by any normal means. Stopping
      * the guest is what the interrupt flag already means, so reuse it rather
      * than invent a second way to stop. */
-    if (s_display_windowed && !mgs_video_pump()) {
+    if (s_display_windowed && !s_present_threaded && !mgs_video_pump()) {
         s_quit_requested = 1;
         mgs_module_interrupted = 1;
         return;
@@ -529,6 +543,13 @@ static void frame_pump(void)
         note_present_cadence();
         return;
     }
+    if (s_present_threaded) {
+        /* Hand it over and carry on: the main thread presents. */
+        shown = copies;
+        note_present_cadence();
+        __atomic_store_n(&s_present_pending, 1, __ATOMIC_RELEASE);
+        return;
+    }
     /* The frame cap lives here now, as a question rather than a sleep: a
      * present we skip costs nothing, where a sleep on this thread stops the
      * game producing sound. See host/display.c. */
@@ -557,6 +578,80 @@ static void frame_pump(void)
     }
 }
 
+
+void mgs_raise_thread_priority(const char* who, int critical);
+
+/* The game's thread, when presentation is on the main thread. */
+typedef struct {
+    const MgsModule* mod;
+    void* cpu;
+    uint64_t limit;
+    MgsRunResult result;
+    int done;
+} GuestRun;
+
+static int SDLCALL guest_thread_main(void* user)
+{
+    GuestRun* g = (GuestRun*)user;
+    mgs_profile_this_thread();
+    mgs_raise_thread_priority("guest", 0);
+    g->result = mgs_module_run(g->mod, g->cpu, g->limit);
+    __atomic_store_n(&g->done, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+/* The main thread's side: events, and each new frame the game hands over. */
+static MgsRunResult run_with_presenter(const MgsModule* mod, void* cpu,
+                                       uint64_t limit)
+{
+    GuestRun g;
+    SDL_Thread* t;
+    SDL_PropertiesID props = SDL_CreateProperties();
+    memset(&g, 0, sizeof g);
+    g.mod = mod; g.cpu = cpu; g.limit = limit;
+    /* Deep: translated code turns guest calls into host calls. */
+    SDL_SetPointerProperty(props, SDL_PROP_THREAD_CREATE_ENTRY_FUNCTION_POINTER,
+                           (void*)guest_thread_main);
+    SDL_SetPointerProperty(props, SDL_PROP_THREAD_CREATE_USERDATA_POINTER, &g);
+    SDL_SetStringProperty(props, SDL_PROP_THREAD_CREATE_NAME_STRING, "twin-sn:guest");
+    SDL_SetNumberProperty(props, SDL_PROP_THREAD_CREATE_STACKSIZE_NUMBER,
+                          64ll * 1024 * 1024);
+    t = SDL_CreateThreadWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (!t) {
+        fprintf(stderr, "[video] no game thread (%s); presenting inline\n",
+                SDL_GetError());
+        s_present_threaded = 0;
+        mgs_raise_thread_priority("guest", 0);
+        return mgs_module_run(mod, cpu, limit);
+    }
+    fprintf(stderr, "[video] the game runs on its own thread; this one "
+                    "presents (MGS_PRESENT_INLINE=1 to present inline)\n");
+    while (!__atomic_load_n(&g.done, __ATOMIC_ACQUIRE)) {
+        if (!mgs_video_pump()) {
+            s_quit_requested = 1;
+            mgs_module_interrupted = 1;
+        }
+        if (__atomic_exchange_n(&s_present_pending, 0, __ATOMIC_ACQ_REL)) {
+            int mgs_display_may_present(void);
+            void mgs_display_add_present_ns(long long ns);
+            if (mgs_display_may_present()) {
+                struct timespec a, b;
+                clock_gettime(CLOCK_MONOTONIC, &a);
+                if (mgs_display_present(mgs_host_mmio(), s_display_mem))
+                    mgs_video_present();
+                clock_gettime(CLOCK_MONOTONIC, &b);
+                mgs_display_add_present_ns(
+                    ((long long)b.tv_sec - a.tv_sec) * 1000000000ll
+                    + (b.tv_nsec - a.tv_nsec));
+            }
+        } else {
+            SDL_DelayNS(500000);    /* 0.5 ms: well inside a 20 ms field */
+        }
+    }
+    SDL_WaitThread(t, NULL);
+    return g.result;
+}
 
 #include <signal.h>
 #include <stdio.h>
@@ -1991,8 +2086,13 @@ int main(int argc, char** argv)
                             void mgs_ax_thread_start(void*);
                             mgs_ax_thread_start(cpu);
                         }
-                        mgs_raise_thread_priority("guest", 0);
-                        r = mgs_module_run(&mod, cpu, limit);
+                        if (!headless && !getenv("MGS_PRESENT_INLINE")) {
+                            s_present_threaded = 1;
+                            r = run_with_presenter(&mod, cpu, limit);
+                        } else {
+                            mgs_raise_thread_priority("guest", 0);
+                            r = mgs_module_run(&mod, cpu, limit);
+                        }
                         { void mgs_ax_thread_stop(void); mgs_ax_thread_stop(); }
                         /* Everything the game wrote is drawn, and the
                          * renderer's counters final, before anything below

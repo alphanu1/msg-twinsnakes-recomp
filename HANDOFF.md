@@ -15634,3 +15634,26 @@ beside it as `.calls-via-loop-20260925`).
 **Also decided** (design document, build section): the release uses the LLVM
 backend with DolRecomp and a linker bundled, so a player needs no compiler;
 the half-hour regeneration has to come down to minutes for a first run.
+
+### F368 — the game no longer waits for the monitor: presentation moved to the main thread
+
+Ben: *"still getting fps slowdown"* on the direct-call build. A headless run
+of the same script shows none - gameplay a steady 49-50 with the profiler on
+- and in gameplay about 85% of the remaining run-loop dispatches are now the
+game's own idle loop (`gp_poll_thread` -> `OSYieldThread` -> `SelectThread`),
+which is time spent waiting, not working. So the dips are something only a
+window does: **presenting**. The game's thread converted each frame from
+YUV, uploaded it and called SDL's present itself, and SDL's present waits
+for the display whenever the driver or compositor enforces vsync - a 50 fps
+game on a 60 or 144 Hz monitor then loses part of a frame to the monitor.
+
+The console's video interface scans memory out on its own while the CPU
+runs. Now the game runs on its own thread (64 MB stack: translated calls
+nest on the host stack) and the main thread keeps the window - events,
+conversion, present - taking each new frame the game thread flags
+(`run_with_presenter`, host/main.c). The profiler follows the game to its
+thread (`mgs_profile_this_thread`). `MGS_PRESENT_INLINE=1` restores the old
+arrangement. **Checked** under a virtual display: 1,838 frames presented,
+the same presentation cadence as before, events and quit on the main thread.
+**Not yet confirmed on Ben's screen** - the dips were never reproducible
+headless, so his window is the measurement.
