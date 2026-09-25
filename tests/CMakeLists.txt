@@ -35,6 +35,13 @@ add_executable(test_pad test_pad.c)
 target_link_libraries(test_pad PRIVATE mgs_runtime m)
 add_test(NAME pad COMMAND test_pad)
 
+# The controller path end to end on SDL3's virtual gamepad: no hardware.
+if(SDL3_FOUND)
+  add_executable(test_gamepad test_gamepad.c)
+  target_link_libraries(test_gamepad PRIVATE mgs_runtime m)
+  add_test(NAME gamepad COMMAND test_gamepad)
+endif()
+
 # Not a test: needs hardware. Built so it is always compilable, run by hand.
 if(SDL3_FOUND)
   add_executable(pad_probe ${CMAKE_SOURCE_DIR}/tools/probes/pad_probe.c)

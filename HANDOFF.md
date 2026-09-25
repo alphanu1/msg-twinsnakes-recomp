@@ -16032,3 +16032,14 @@ command-list mode reads 0).
 register model under the SDK becomes native SDK functions, each checked
 against Dolphin as it moves.
 
+**Controller path tested without hardware:** `tests/test_gamepad.c` attaches
+an SDL3 virtual gamepad and checks the bytes the SI gets - rest centred,
+full up reads high (SDL's Y is inverted), c-stick, analog triggers with the
+digital click only at full travel, A/Start/D-pad bits, neutral again when
+unplugged. 21/21 tests pass. (A virtual trigger axis spans -32768..32767
+for 0..full; 0 is half pressed.)
+
+**A separate play copy for Ben** (`../MGS-play`, outside the repository):
+the binary, the module, its own memory card and a start script, so builds
+and test runs here cannot disturb a playthrough or touch its save.
+
