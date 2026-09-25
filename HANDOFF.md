@@ -16018,8 +16018,8 @@ speakers, one is very slightly delayed", on both sides. Established:
   after the compressor, +3 before it); the mix peaks at 118% instead of
   175%; 2 samples of 4 million at the clamp. The unexplained steady offset
   in F375 WAS the mono mode: centred sounds at full level instead of -3 dB.
-  Listener volume default 55%, Ben's 40% expressed against the corrected
-  mix.
+  Listener volume default 60% (Ben, on hearing the corrected mix; 55% had
+  been his 40% re-expressed).
 
 Recorded wrong turns this session, so they are not re-derived: the echo is
 not F-era play-on (no constant-lag repeat at 20-300 ms in either build), not

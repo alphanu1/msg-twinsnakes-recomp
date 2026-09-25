@@ -1389,7 +1389,7 @@ This is the project. ~200 functions and the widest error bars in the plan.
       does not belong behind a game window.
       **Its settings screen** (Ben, 2026-09-25) carries what is an
       environment variable today, so a player never needs one: master
-      volume (`MGS_VOLUME`, 40% default, up to 200%, F373), window size and scaling, frame cap,
+      volume (`MGS_VOLUME`, 60% default, up to 200%, F373/F377), window size and scaling, frame cap,
       controller mapping. Saved beside the executable and read at start.
       **These three are native binaries, not Python**, because they ship to
       people with a game and a computer rather than a development

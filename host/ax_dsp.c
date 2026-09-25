@@ -1152,9 +1152,9 @@ void mgs_ax_dsp_frame(void* cpu)
          * still clipping". Since F375 the console's own compressor runs
          * first (ax_compress) and this is only the listener's volume,
          * applied after the output clamp. MGS_VOLUME=<percent> (0-200), default
-         * 55: Ben chose 40 against the old mono mix, which ran about 3 dB
-         * hotter than the console; 55 is the same loudness now that the
-         * mix matches Dolphin's (F377). 100 is the console's own level.
+         * 60 - Ben's choice once the mix matched Dolphin's (F377); he had
+         * chosen 40 against the old mono mix, which ran about 3 dB hotter
+         * than the console. 100 is the console's own level.
          * The launcher's settings screen is to offer the range. */
         static int32_t master = -1;
         /* MGS_AUDIO_MIX=<path>: the mix as the voices sum, before the
@@ -1178,7 +1178,7 @@ void mgs_ax_dsp_frame(void* cpu)
         }
         if (master < 0) {
             const char* e = getenv("MGS_VOLUME");
-            long pc = e && *e ? strtol(e, NULL, 10) : 55;
+            long pc = e && *e ? strtol(e, NULL, 10) : 60;
             if (pc < 0) pc = 0;
             if (pc > 200) pc = 200;
             master = (int32_t)((pc << 16) / 100);
