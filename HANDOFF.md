@@ -15903,7 +15903,9 @@ averages -13 to -15 dBFS with peaks at full scale. A limiter keeps our own
 samples off the rails (0 clipped), but a signal sitting at full scale is
 clipped again downstream by resampling to the device rate. Ben asked for it
 simply to be turned down: `MGS_VOLUME=<percent>` scales the mix before the
-limiter, default 50 (-6 dB), so 175% peaks land near 88%.
+limiter, default 50 (-6 dB), so 175% peaks land near 88%. Then 40 by
+Ben's ear ("a little lower"), with the range up to 200 kept for the
+launcher's settings screen.
 
 Not a model of the console: AX runs a compressor whose table the game
 supplies by DSP command (Dolphin `AXUCode::RunCompressor`), which we do not

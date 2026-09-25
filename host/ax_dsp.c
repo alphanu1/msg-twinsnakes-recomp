@@ -1023,11 +1023,13 @@ void mgs_ax_dsp_frame(void* cpu)
          * desktop mixer clip it outside our control - Ben: "too loud, it's
          * still clipping". The console runs AX's compressor with a table
          * the game supplies, which we do not parse; until that is modelled
-         * the level is set here. MGS_VOLUME=<percent>, default 50. */
+         * the level is set here. MGS_VOLUME=<percent> (0-200), default
+         * 40 - Ben's ear, a little under the first 50; the launcher's
+         * settings screen is to offer the rest of the range. */
         static int32_t master = -1;
         if (master < 0) {
             const char* e = getenv("MGS_VOLUME");
-            long pc = e && *e ? strtol(e, NULL, 10) : 50;
+            long pc = e && *e ? strtol(e, NULL, 10) : 40;
             if (pc < 0) pc = 0;
             if (pc > 200) pc = 200;
             master = (int32_t)((pc << 16) / 100);
