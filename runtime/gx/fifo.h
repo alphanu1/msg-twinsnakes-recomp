@@ -312,6 +312,9 @@ void mgs_gx_init(MgsGx* gx, GuestMemory* mem);
 /* Feed bytes from the write-gather pipe, in order, in whatever sizes they
  * arrive. */
 void mgs_gx_write(MgsGx* gx, uint32_t value, unsigned size);
+/* The same stream as a run of bytes already in order - what the render
+ * thread feeds from its ring (host/display.c). */
+void mgs_gx_write_bytes(MgsGx* gx, const uint8_t* data, unsigned n);
 
 /* Resolve the current vertex descriptor and attribute table into one format.
  * Exposed for testing: it is where a misread register shows up first. */

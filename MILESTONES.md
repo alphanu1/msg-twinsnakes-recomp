@@ -1493,6 +1493,11 @@ This is the project. ~200 functions and the widest error bars in the plan.
       - **Gameplay measured (F359): a steady 33 fps at the Dock**, ~30 ms
         a frame, of which ~28 ms is guest code, parsing and our triangle
         path. `MGS_PROFILE_AFTER` profiles gameplay alone, game thread only.
+      - **50.0 fps in gameplay at the Dock, measured** (F360): drawing on
+        its own thread, as the console's graphics processor does, on top of
+        F361. The Dock cutscene holds its correct 25. Not yet ticked: one
+        scene, a still Snake, and a stall seen twice under heavy load that
+        has not been reproduced since (F360).
       - The float helpers inline (F361): gameplay 33.3 -> 35.3 fps,
         frames byte-identical.
       - Presentation shows a frame once, when VI flips to the buffer

@@ -15342,3 +15342,61 @@ disagree on disc timing. **Measured** on a quiet machine (load 4), the Dock
 script: gameplay **35.3 fps against 33.3**, cutscene 22.6. Installed as
 `build/phase1/module/gGGSPA4_recomp.so`; the previous one is kept beside it
 as `.bss-noinline-20260925`.
+
+### F360 — drawing on its own thread: gameplay at 50 fps, and a stall that has not come back
+
+Ben: *"ingame is still too slow"*, with MangoHud showing 34 fps, CPU 9%, GPU
+13% - one busy thread. F359 put a quarter of that thread in our own drawing.
+
+**The render thread.** The gather pipe now feeds a 16 MB ring
+(`host/display.c`), and a render thread parses it - vertex decode,
+transform, clipping, GPU submission, EFB copies and their readback - as the
+console's graphics processor consumes its FIFO. What crosses back is what
+crosses back on hardware: the draw-done token (the parser counts it
+atomically; the game's own thread delivers the interrupt, as before) and
+copy results in main memory, read by the game after that token. Bytes are
+published every 2 KB and always at retrace and at the draw-done poll. The
+design document's threading rule is updated in the same change: this thread
+reads and writes guest memory directly, as the graphics processor does over
+DMA. `MGS_GX_SYNC=1` restores inline parsing.
+
+**Checked:** on the step clock the frames match the inline build to within a
+fade step (frames 2 and 4 differ by at most 8 counts, frame 6 is the
+rotating logo at a slightly different angle) - the draw-done now arrives when
+the render thread reaches it, so game time shifts by a few steps; nothing is
+drawn differently.
+
+**Measured**, the Dock script on a quiet machine (load 4-5), render thread +
+F361's module: **gameplay 50.0 fps, steady, 107 samples** (35.3 without the
+thread); the Dock cutscene **24.9 fps against a correct 25** (it had dipped
+to 17). 853 MB went through the ring, 0 waits for a full ring.
+
+**The stall, recorded honestly.** Twice with the render thread on - once on
+the step clock, once on the wall clock in the Dock cutscene (copy ~3,635),
+both while the machine was heavily loaded by a 26-job compile and Quartus -
+the game was stopped by the spin detector at **0x80054A10 in
+`sd_stream_pump`**, interrupts disabled. That loop walks the stream's ring
+of blocks (next at +0x34) for one whose end (+0x4C) lies past the voice's
+play position (r26, read from the parameter block); if the position has
+run past every block it never exits. The wall-clock one also ignored its
+330 s limit and ran 6.5 hours before the detector ended it, which is not
+yet explained.
+
+The mechanism found: the mixer thread (added 2026-09-24) mixes on
+the sound card's clock alone, and its play-on (which keeps a streaming
+voice going past `end` when the next block is present, always for ADPCM)
+lets a voice run on through blocks the game has not refilled if the game
+thread falls behind. On a console the DSP mixes a frame only after the CPU
+sets it up, so positions stand still when the game is late. **Now bounded:**
+each mix is paid for by an audio-DMA interrupt the game has taken (they are
+one to one: 83,405 against 84,025 frames over 420 s), and the mixer may run
+at most 8 frames ahead; past that it gives the card silence and moves
+nothing. `MGS_MIX_UNGATED=1` withdraws it.
+
+**What is NOT established:** that this was the cause. Eight runs since -
+four wall-clock, two under a 26-thread background load (gated and ungated),
+two on the step clock (gated and ungated) - have not reproduced the stall
+either way; the gate engaged only on the step clock (65 frames). The stall
+report now prints every register and 0x80 bytes behind each pointer, so the
+next one shows the block list itself. If Ben sees a freeze in a cutscene,
+that report is the first thing to read.

@@ -406,6 +406,9 @@ static void note_present_cadence(void)
 
 static void frame_pump(void)
 {
+    /* Retrace: whatever the game has written this field goes to the
+     * render thread now rather than when the batch fills. */
+    { void mgs_display_gx_flush(void); mgs_display_gx_flush(); }
     static uint64_t shown = ~0ull;
     uint64_t copies;
 
@@ -1907,6 +1910,10 @@ int main(int argc, char** argv)
                         mgs_raise_thread_priority("guest", 0);
                         r = mgs_module_run(&mod, cpu, limit);
                         { void mgs_ax_thread_stop(void); mgs_ax_thread_stop(); }
+                        /* Everything the game wrote is drawn, and the
+                         * renderer's counters final, before anything below
+                         * reads them. */
+                        { void mgs_display_gx_stop(void); mgs_display_gx_stop(); }
                         static const char* why[] = {
                             "no code for that address",
                             "guest is spinning",
@@ -1931,13 +1938,37 @@ int main(int argc, char** argv)
                              * to an address with no code: the register that
                              * held the bad target is usually one of these,
                              * and the four above are a guess at which. */
-                            if (r.stop == MGS_STOP_UNCOVERED) {
+                            if (r.stop == MGS_STOP_UNCOVERED ||
+                                r.stop == MGS_STOP_SPINNING) {
                                 unsigned k;
                                 for (k = 0; k < 32u; k += 4u)
                                     printf("  r%-2u 0x%08X  r%-2u 0x%08X  r%-2u "
                                            "0x%08X  r%-2u 0x%08X\n",
                                            k, g[k], k + 1u, g[k + 1u],
                                            k + 2u, g[k + 2u], k + 3u, g[k + 3u]);
+                            }
+                            /* A SPIN IS USUALLY A LOOP OVER A STRUCTURE, and
+                             * the registers name the structure but not what
+                             * is in it. The first 0x80 bytes behind every
+                             * register that points into MEM1, so a list that
+                             * has become circular or a position that has run
+                             * past every block can be read off the report
+                             * rather than reproduced again. */
+                            if (r.stop == MGS_STOP_SPINNING) {
+                                unsigned k, w;
+                                for (k = 0; k < 32u; ++k) {
+                                    uint32_t a = g[k] & ~3u;
+                                    if (a < 0x80000000u || a >= 0x81800000u - 0x80u)
+                                        continue;
+                                    printf("  [r%u 0x%08X]", k, a);
+                                    for (w = 0; w < 0x80u; w += 4u) {
+                                        if (w && (w & 0x1Fu) == 0u)
+                                            printf("\n                 ");
+                                        printf(" %08X",
+                                               mgs_module_guest_read32(cpu, a + w));
+                                    }
+                                    printf("\n");
+                                }
                             }
                         }
                         if (r.stop == MGS_STOP_SPINNING)

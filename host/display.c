@@ -33,6 +33,8 @@ void mgs_module_snapshot_copy(void);
 #include <stdlib.h>
 #include <string.h>
 
+#include <SDL3/SDL.h>
+
 /* BP register 0x52, the copy command. */
 #define COPY_CLEAR      (1u << 11)
 #define COPY_TO_XFB     (1u << 14)
@@ -217,6 +219,172 @@ uint64_t mgs_display_recorded(void) { return s_recorded; }
 
 static void copy_exec_cb(void* user, uint32_t cmd);
 
+/* ---- THE RENDER THREAD ----------------------------------------------------
+ *
+ * The game's thread was doing all of the drawing: every byte it wrote to the
+ * gather pipe was parsed, decoded, transformed, batched and submitted to the
+ * GPU before its next instruction ran, and every copy was read back and
+ * encoded there too. In gameplay that is a quarter of the thread the whole
+ * game runs on (HANDOFF F359, F360) - work the console did on separate
+ * silicon, concurrently, reading main memory by DMA while the CPU went on.
+ *
+ * So the bytes go into a ring and a render thread parses them, as the
+ * graphics processor consumes its FIFO. What crosses back to the game is
+ * what crosses back on the console: the draw-done token (counted by the
+ * parser, delivered as an interrupt by the game's own thread, as before),
+ * and the copies' results in main memory, which the game reads only after
+ * that token. The render thread reads main memory - display lists, vertex
+ * arrays, textures - exactly as the graphics processor does, and the game
+ * keeps those stable until the token for the same reason it must on a
+ * console: the GPU reads them later than they were issued.
+ *
+ * Bytes are published in batches, and always at the points where the game
+ * could be waiting on the result: the draw-done poll and retrace. The
+ * render thread spins briefly when the ring is empty and then sleeps.
+ *
+ * MGS_GX_SYNC=1 parses inline on the game's thread, as before. */
+#define GX_RING_BITS    24u
+#define GX_RING_SIZE    (1u << GX_RING_BITS)          /* 16 MB */
+#define GX_RING_MASK    (GX_RING_SIZE - 1u)
+#define GX_PUBLISH_EVERY 2048u
+
+static uint8_t*       s_ring;
+static uint64_t       s_ring_head;       /* game thread only */
+static uint64_t       s_ring_published;  /* written by the game thread */
+static uint64_t       s_ring_tail;       /* written by the render thread */
+static int            s_ring_waiting;
+static int            s_ring_stop;
+static int            s_gx_async = -1;
+static SDL_Thread*    s_gx_thread;
+static SDL_Mutex*     s_gx_mutex;
+static SDL_Condition* s_gx_cond;
+static uint64_t       s_ring_full_waits;
+
+static inline void cpu_relax(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#endif
+}
+
+static int SDLCALL gx_thread_main(void* unused)
+{
+    void mgs_raise_thread_priority(const char* who, int critical);
+    (void)unused;
+    mgs_raise_thread_priority("render", 0);
+    for (;;) {
+        uint64_t tail = s_ring_tail;
+        uint64_t pub = __atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE);
+        if (pub == tail) {
+            unsigned spin;
+            for (spin = 0; spin < 4000u; ++spin) {
+                if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail)
+                    break;
+                cpu_relax();
+            }
+            if (__atomic_load_n(&s_ring_published, __ATOMIC_ACQUIRE) != tail)
+                continue;
+            if (__atomic_load_n(&s_ring_stop, __ATOMIC_ACQUIRE)) break;
+            /* Sleep. The flag and the head are both sequentially consistent
+             * so a publish either sees the flag or is seen here; the timeout
+             * is a backstop, not the mechanism. */
+            SDL_LockMutex(s_gx_mutex);
+            __atomic_store_n(&s_ring_waiting, 1, __ATOMIC_SEQ_CST);
+            if (__atomic_load_n(&s_ring_published, __ATOMIC_SEQ_CST) == tail &&
+                !__atomic_load_n(&s_ring_stop, __ATOMIC_SEQ_CST))
+                SDL_WaitConditionTimeout(s_gx_cond, s_gx_mutex, 2);
+            __atomic_store_n(&s_ring_waiting, 0, __ATOMIC_SEQ_CST);
+            SDL_UnlockMutex(s_gx_mutex);
+            continue;
+        }
+        {
+            uint32_t off = (uint32_t)(tail & GX_RING_MASK);
+            uint64_t n = pub - tail;
+            if (n > (uint64_t)(GX_RING_SIZE - off)) n = GX_RING_SIZE - off;
+            if (n > 65536u) n = 65536u;
+            mgs_gx_write_bytes(&s_gx, s_ring + off, (unsigned)n);
+            __atomic_store_n(&s_ring_tail, tail + n, __ATOMIC_RELEASE);
+        }
+    }
+    return 0;
+}
+
+/* Make everything written so far visible to the render thread, and wake it
+ * if it is asleep. Game thread only. */
+static void gx_publish(void)
+{
+    if (!s_gx_thread || s_ring_head == s_ring_published) return;
+    __atomic_store_n(&s_ring_published, s_ring_head, __ATOMIC_SEQ_CST);
+    if (__atomic_load_n(&s_ring_waiting, __ATOMIC_SEQ_CST)) {
+        SDL_LockMutex(s_gx_mutex);
+        SDL_SignalCondition(s_gx_cond);
+        SDL_UnlockMutex(s_gx_mutex);
+    }
+}
+
+static int gx_async_start(void)
+{
+    s_ring = (uint8_t*)malloc(GX_RING_SIZE);
+    s_gx_mutex = SDL_CreateMutex();
+    s_gx_cond = SDL_CreateCondition();
+    if (!s_ring || !s_gx_mutex || !s_gx_cond) return 0;
+    s_gx_thread = SDL_CreateThread(gx_thread_main, "twin-sn:render", NULL);
+    if (!s_gx_thread) return 0;
+    fprintf(stderr, "[gx] parsing and drawing on a render thread "
+                    "(MGS_GX_SYNC=1 for the game's own thread)\n");
+    return 1;
+}
+
+static void gx_push(uint32_t value, unsigned size)
+{
+    unsigned i;
+    while (s_ring_head + size -
+           __atomic_load_n(&s_ring_tail, __ATOMIC_ACQUIRE) > GX_RING_SIZE) {
+        gx_publish();
+        ++s_ring_full_waits;
+        cpu_relax();
+    }
+    for (i = 0; i < size; ++i)
+        s_ring[(s_ring_head + i) & GX_RING_MASK] =
+            (uint8_t)(value >> (8u * (size - 1u - i)));
+    s_ring_head += size;
+    if (s_ring_head - s_ring_published >= GX_PUBLISH_EVERY) gx_publish();
+}
+
+/* Publish, without waiting. At the points the game may be about to wait on
+ * the render thread's results. */
+void mgs_display_gx_flush(void);
+void mgs_display_gx_flush(void) { gx_publish(); }
+
+/* Wait until the render thread has parsed everything written so far. */
+void mgs_display_gx_drain(void);
+void mgs_display_gx_drain(void)
+{
+    if (!s_gx_thread) return;
+    gx_publish();
+    while (__atomic_load_n(&s_ring_tail, __ATOMIC_ACQUIRE) != s_ring_head)
+        cpu_relax();
+}
+
+/* Drain and stop, before the exit report reads what the renderer counted
+ * and before the GPU is torn down. */
+void mgs_display_gx_stop(void);
+void mgs_display_gx_stop(void)
+{
+    if (!s_gx_thread) return;
+    mgs_display_gx_drain();
+    __atomic_store_n(&s_ring_stop, 1, __ATOMIC_SEQ_CST);
+    SDL_LockMutex(s_gx_mutex);
+    SDL_SignalCondition(s_gx_cond);
+    SDL_UnlockMutex(s_gx_mutex);
+    SDL_WaitThread(s_gx_thread, NULL);
+    s_gx_thread = NULL;
+    fprintf(stderr, "[gx] render thread stopped: %llu MB through the ring, "
+                    "%llu waits for a full ring\n",
+            (unsigned long long)(s_ring_head >> 20),
+            (unsigned long long)s_ring_full_waits);
+}
+
 static void fifo_sink(void* user, uint32_t value, unsigned size)
 {
     MgsMmio* mmio = mgs_host_mmio();
@@ -275,6 +443,21 @@ static void fifo_sink(void* user, uint32_t value, unsigned size)
      * absence of a consumer is the truth rather than an artefact - nothing
      * drains a display-list buffer, and `GXEndDisplayList` needs the pointer
      * to have moved to know how much was recorded. */
+    /* ON BY DEFAULT: it is what takes gameplay to 50 fps (HANDOFF F360).
+     * Twice, with it on and the machine heavily loaded, the game was caught
+     * spinning in sd_stream_pump (0x80054A10) with interrupts disabled; the
+     * one mechanism found for that - the mixer outrunning the game - is now
+     * bounded in host/ax_dsp.c, and eight runs since have not reproduced
+     * it. MGS_GX_SYNC=1 parses on the game's thread, as before. */
+    if (s_gx_async < 0) s_gx_async = getenv("MGS_GX_SYNC") == NULL;
+    if (s_gx_async && !s_gx_thread && !s_ring_stop) {
+        if (!gx_async_start()) {
+            fprintf(stderr, "[gx] no render thread (%s); parsing inline\n",
+                    SDL_GetError());
+            s_gx_async = 0;
+        }
+    }
+    if (s_gx_thread) { gx_push(value, size); return; }
     mgs_gx_write(&s_gx, value, size);
 }
 
@@ -1148,13 +1331,20 @@ int mgs_display_save_ppm(const char* path, const GuestMemory* mem)
  * back for a little guest time after the token appears, so the caller needs
  * to know one is pending before it decides to wait. */
 int mgs_display_peek_draw_done(void);
-int mgs_display_peek_draw_done(void) { return s_gx.draw_done_tokens != 0u; }
+int mgs_display_peek_draw_done(void)
+{
+    gx_publish();     /* the game is polling for it: let the renderer see all */
+    return __atomic_load_n(&s_gx.draw_done_tokens, __ATOMIC_ACQUIRE) != 0u;
+}
 
 int mgs_display_take_draw_done(void);
 int mgs_display_take_draw_done(void) { return mgs_gx_take_draw_done(&s_gx); }
 
 void mgs_display_put_draw_done(void);
-void mgs_display_put_draw_done(void) { ++s_gx.draw_done_tokens; }
+void mgs_display_put_draw_done(void)
+{
+    __atomic_add_fetch(&s_gx.draw_done_tokens, 1u, __ATOMIC_ACQ_REL);
+}
 
 /* Present whatever the video interface is scanning. Returns 0 if there is
  * nothing to present, so the caller can leave the boot overlay up rather than

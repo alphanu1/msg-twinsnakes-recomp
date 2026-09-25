@@ -456,7 +456,10 @@ static void bp_side_effect(MgsGx* gx, uint8_t reg, uint32_t val)
     if (reg == 0x45u) {
         /* The draw-done token. Bit 1 asks for the finish interrupt; the
          * SETDRAWSYNC form uses register 0x47 and a different wakeup. */
-        if (val & 0x2u) ++gx->draw_done_tokens;
+        /* Atomic: with a render thread this is written there and taken
+         * by the game's thread (host/display.c). */
+        if (val & 0x2u)
+            __atomic_add_fetch(&gx->draw_done_tokens, 1u, __ATOMIC_ACQ_REL);
         return;
     }
     if (reg == BP_COPY_EXECUTE) {
@@ -1003,6 +1006,14 @@ void mgs_gx_write(MgsGx* gx, uint32_t value, unsigned size)
     mgs_gx_phase = "idle";
 }
 
+void mgs_gx_write_bytes(MgsGx* gx, const uint8_t* data, unsigned n)
+{
+    gx->stream_pos += n;
+    mgs_gx_phase = "gx-parse";
+    feed(gx, data, n);
+    mgs_gx_phase = "idle";
+}
+
 /* ---- primitives -------------------------------------------------------- */
 
 unsigned mgs_gx_decode_vertex(const MgsGx* gx, const MgsGxVertexFormat* f,
@@ -1147,7 +1158,15 @@ int mgs_gx_take_copy(MgsGx* gx, uint32_t* cmd)
 
 int mgs_gx_take_draw_done(MgsGx* gx)
 {
-    if (!gx || !gx->draw_done_tokens) return 0;
-    --gx->draw_done_tokens;
-    return 1;
+    uint64_t n;
+    if (!gx) return 0;
+    /* A compare-and-swap, because the render thread may be adding one at
+     * the same moment (host/display.c). */
+    n = __atomic_load_n(&gx->draw_done_tokens, __ATOMIC_ACQUIRE);
+    while (n) {
+        if (__atomic_compare_exchange_n(&gx->draw_done_tokens, &n, n - 1u, 0,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            return 1;
+    }
+    return 0;
 }

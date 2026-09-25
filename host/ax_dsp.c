@@ -367,6 +367,30 @@ static int no_playon(void)
  */
 #include <pthread.h>
 
+/* NEVER MORE THAN A FEW FRAMES AHEAD OF THE GAME.
+ *
+ * On the console the DSP mixes a frame when the CPU has set it up: the audio
+ * DMA's interrupt runs __AXOutAiCallback, which hands the DSP the next
+ * frame's command list. A game that falls behind therefore holds its voices
+ * still - the positions it reads never outrun the data it has queued.
+ *
+ * This thread ran on the sound card's clock alone, so when the game thread
+ * fell behind in a heavy scene every streaming voice kept moving, past the
+ * end of its block and on through blocks the game had not filled yet.
+ * `sd_stream_pump` then walks its block list for one that ends after the
+ * play position, finds none, and loops for ever with interrupts disabled:
+ * the game freezes with the sound (HANDOFF F360). The run that reproduced it
+ * had one voice starved for 4,633 frames - 23 seconds - before that.
+ *
+ * So each mix is paid for by an audio-DMA interrupt the game has taken. They
+ * are one to one - 83,405 interrupts against 84,025 frames over 420 s - and
+ * the mixer may run at most MIX_LEAD frames ahead of them. Past that it gives
+ * the card silence and moves nothing: a gap you can hear in a slowdown,
+ * where before there was a freeze. MGS_MIX_UNGATED=1 withdraws it, for the
+ * A/B. */
+#define MIX_LEAD 8u
+static uint64_t s_mix_gated;
+
 static pthread_t  s_ax_thread;
 static int        s_ax_thread_on;
 static volatile int s_ax_stop;
@@ -424,7 +448,30 @@ static void* ax_thread_main(void* arg)
             behind = produced < due + target;
         }
         if (behind) {
-            mgs_ax_dsp_frame(s_ax_cpu);
+            uint64_t mgs_interrupt_aid_raised(void);
+            static uint64_t mixed, base;
+            static int base_set;
+            uint64_t aid = mgs_interrupt_aid_raised();
+            int gate = 0;
+            static int ungated = -1;
+            if (ungated < 0) ungated = getenv("MGS_MIX_UNGATED") != NULL;
+            if (aid && !ungated) {
+                /* Measured from the first interrupt: the thread mixes
+                 * silence from start-up, long before the game's audio
+                 * is running, and that is not a debt. */
+                if (!base_set) { base = mixed - aid; base_set = 1; }
+                /* Signed: the game may also be AHEAD of the mixer (a slow
+                 * sound card), and that must never read as a huge lead. */
+                gate = (int64_t)(mixed - base) - (int64_t)aid > (int64_t)MIX_LEAD;
+            }
+            if (gate) {
+                static const int16_t silence[AX_FRAME_SAMPLES * 2];
+                mgs_audio_push(silence, AX_FRAME_SAMPLES);
+                ++s_mix_gated;
+            } else {
+                mgs_ax_dsp_frame(s_ax_cpu);
+                ++mixed;
+            }
             produced += AX_FRAME_SAMPLES;
         } else {
             struct timespec ts;
@@ -1099,6 +1146,11 @@ void mgs_ax_dsp_report(void)
     uint64_t pushed = 0, dropped = 0, under = 0;
     if (!s_frames) return;
     mgs_audio_stats(&pushed, &dropped, &under);
+    if (s_mix_gated)
+        printf("AX mixer: %llu frames held back as silence because the game "
+               "had not yet taken them (%.1fs)\n",
+               (unsigned long long)s_mix_gated,
+               (double)s_mix_gated * AX_FRAME_SAMPLES / (double)AX_MIX_RATE);
     printf("AX mixer: %llu frames (%.1fs of sound), %llu voice-mixes, "
            "%llu loops, %llu ended\n",
            (unsigned long long)s_frames,
