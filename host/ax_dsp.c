@@ -53,6 +53,7 @@
 #define PB_ADDR_END_HI     0x76u
 #define PB_ADDR_CURR_HI    0x7Au
 #define PB_MIXER_CTRL      0x0Cu      /* AXPB.mixerCtrl                  */
+#define PB_LPF_ON          0xBAu      /* AXPB.lpf {on, yn1, a0, b0}      */
 #define PB_MIX_VL          0x12u      /* AXPBMIX.vL                      */
 #define PB_MIX_VR          0x16u      /* AXPBMIX.vR                      */
 #define PB_VE_VOLUME       0x64u      /* AXPBVE.currentVolume            */
@@ -208,6 +209,70 @@ static uint32_t rd16(void* cpu, uint32_t at)
     return (at & 2u) ? (w & 0xFFFFu) : (w >> 16);
 }
 
+/* AX'S COMPRESSOR, AS THE CONSOLE RUNS IT (F375).
+ *
+ * The AX library appends one command to every frame's command list while
+ * its compressor is on - which __AXClInit makes the default:
+ * `0x12, 0x8000, 0x000A, __AXCompressorTable` (dolsdk2004 AXCL.c). The DSP
+ * then checks whether any main left or right sample of the frame exceeds
+ * the threshold; if so it multiplies the frame by an attack ramp chosen by
+ * where the last release had got to, and for the ten frames after by
+ * release ramps (Dolphin `AXUCode::RunCompressor`, the reference). The
+ * ramps are the game's own table - 11 attack and 10 release ramps of 160
+ * samples, in main.dol's data at 0x801E19C0 - read from guest memory, so
+ * nothing of the game's is in this file.
+ *
+ * Without it our mix ran 3 dB over Dolphin's on average and 6-10 dB over
+ * in the loud passages - exactly where a compressor acts - measured on the
+ * same no-input boot (F375). */
+#define AX_COMP_TABLE      0x801E19C0u
+#define AX_COMP_THRESHOLD  0x8000
+#define AX_COMP_RELEASE    10u
+#define AX_COMP_ATTACKS    11u
+
+static int ax_compressor_ready(void* cpu)
+{
+    static int ready = -1;
+    if (ready < 0) {
+        /* The table's first six words, checked rather than assumed: a
+         * different build of the game would not have it here. */
+        static const uint16_t head[6] = { 0x7FA1, 0x7F43, 0x7EE6,
+                                          0x7E88, 0x7E2B, 0x7DCE };
+        unsigned k;
+        ready = getenv("MGS_AX_LIMITER") == NULL;
+        for (k = 0; ready && k < 6u; ++k)
+            if (rd16(cpu, AX_COMP_TABLE + 2u * k) != head[k]) ready = 0;
+        fprintf(stderr, "[ax] %s\n", ready
+                ? "AX compressor: the game's table at 0x801E19C0"
+                : "AX compressor unavailable; using the limiter");
+    }
+    return ready;
+}
+
+static void ax_compress(void* cpu, int32_t* l, int32_t* r, unsigned n)
+{
+    static unsigned pos;
+    unsigned i, entry;
+    int hit = 0;
+    for (i = 0; i < n && !hit; ++i)
+        if (abs(l[i]) > AX_COMP_THRESHOLD || abs(r[i]) > AX_COMP_THRESHOLD)
+            hit = 1;
+    if (hit) {
+        entry = pos;                  /* one attack frame, from the release */
+        pos = AX_COMP_RELEASE;
+    } else if (pos) {
+        --pos;
+        entry = AX_COMP_ATTACKS + pos;
+    } else {
+        return;
+    }
+    for (i = 0; i < n; ++i) {
+        int32_t c = (int32_t)rd16(cpu, AX_COMP_TABLE + 2u * (entry * n + i));
+        l[i] = (int32_t)(((int64_t)l[i] * c) >> 15);
+        r[i] = (int32_t)(((int64_t)r[i] * c) >> 15);
+    }
+}
+
 static void wr16(void* cpu, uint32_t at, uint32_t v)
 {
     uint32_t aligned = at & ~3u;
@@ -258,6 +323,7 @@ static uint64_t s_head_n, s_head_sum;
 static uint32_t s_head_min = 0xFFFFFFFFu, s_head_first;
 static uint64_t s_mixed_voices, s_adpcm_skipped, s_silent_reads;
 static uint64_t s_starved, s_nonzero_frames, s_adpcm_samples;
+static uint64_t s_lpf_on, s_lpf_off;
 static uint32_t s_mctrl_key[8];
 static uint64_t s_mctrl_hits[8];
 static unsigned s_mctrl_n;
@@ -593,6 +659,7 @@ void mgs_ax_dsp_frame(void* cpu)
          * levels of a disabled bus are left at whatever the game last
          * wrote (0x7FFF here), so they cannot be used to tell.
          * MGS_AX_MIX_ALL=1 restores mixing every voice into both. */
+        if (rd16(cpu, pb + PB_LPF_ON)) ++s_lpf_on; else ++s_lpf_off;
         {
             static int mix_all = -1;
             uint32_t mctrl = rd16(cpu, pb + PB_MIXER_CTRL);
@@ -1051,18 +1118,54 @@ void mgs_ax_dsp_frame(void* cpu)
          * 175% of full scale; at unity the limiter worked constantly and
          * the output sat at full scale, where SDL's resampling and the
          * desktop mixer clip it outside our control - Ben: "too loud, it's
-         * still clipping". The console runs AX's compressor with a table
-         * the game supplies, which we do not parse; until that is modelled
-         * the level is set here. MGS_VOLUME=<percent> (0-200), default
+         * still clipping". Since F375 the console's own compressor runs
+         * first (ax_compress) and this is only the listener's volume,
+         * applied after the output clamp. MGS_VOLUME=<percent> (0-200), default
          * 40 - Ben's ear, a little under the first 50; the launcher's
          * settings screen is to offer the rest of the range. */
         static int32_t master = -1;
+        /* MGS_AUDIO_MIX=<path>: the mix as the voices sum, before the
+         * master volume and the limiter - 32-bit stereo - for comparing
+         * levels with Dolphin's dump of the same scene (F375). */
+        {
+            static FILE* mixf;
+            static int tried;
+            if (!tried) {
+                const char* mp = getenv("MGS_AUDIO_MIX");
+                tried = 1;
+                if (mp && *mp) mixf = fopen(mp, "wb");
+            }
+            if (mixf) {
+                int32_t pair[2];
+                for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+                    pair[0] = acc_l[i]; pair[1] = acc_r[i];
+                    fwrite(pair, sizeof pair, 1, mixf);
+                }
+            }
+        }
         if (master < 0) {
             const char* e = getenv("MGS_VOLUME");
             long pc = e && *e ? strtol(e, NULL, 10) : 40;
             if (pc < 0) pc = 0;
             if (pc > 200) pc = 200;
             master = (int32_t)((pc << 16) / 100);
+        }
+        if (ax_compressor_ready(cpu)) {
+            /* The console's order: compressor, then the output clamp
+             * (Dolphin's OutputSamples clamps to +-32767), then - ours -
+             * the listener's volume. */
+            ax_compress(cpu, acc_l, acc_r, AX_FRAME_SAMPLES);
+            for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+                int32_t l = acc_l[i], r = acc_r[i];
+                ++s_out_samples;
+                if (l > 32767 || l < -32767) ++s_clipped;
+                if (r > 32767 || r < -32767) ++s_clipped;
+                if (l > 32767) l = 32767; if (l < -32767) l = -32767;
+                if (r > 32767) r = 32767; if (r < -32767) r = -32767;
+                out[i * 2u] = (int16_t)(((int64_t)l * master) >> 16);
+                out[i * 2u + 1u] = (int16_t)(((int64_t)r * master) >> 16);
+            }
+            goto mixed;
         }
         for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
             acc_l[i] = (int32_t)(((int64_t)acc_l[i] * master) >> 16);
@@ -1111,6 +1214,7 @@ void mgs_ax_dsp_frame(void* cpu)
         need_held = need_cur;
         held_valid = 1;
     }
+mixed:
     /* MGS_AUDIO_WAV=<path>: the mixed output, so it can be JUDGED.
      *
      * Every audio measurement in this file until now has been a count -
@@ -1238,6 +1342,9 @@ void mgs_ax_dsp_report(void)
                    (unsigned)(s_pan_key[pi] & 0xFFFFu),
                    (unsigned long long)s_pan_hits[pi]);
         printf("%s\n", s_pan_n >= 8u ? "  (list full)" : "");
+        printf("   low-pass filter on in %llu of %llu voice-mixes\n",
+               (unsigned long long)s_lpf_on,
+               (unsigned long long)(s_lpf_on + s_lpf_off));
         printf("   mixerCtrl values:");
         for (pi = 0; pi < s_mctrl_n; ++pi)
             printf("  %04X x%llu", (unsigned)s_mctrl_key[pi],

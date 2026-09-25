@@ -193,3 +193,5 @@ nothing — so they are not a partial upgrade.
   commit and what was changed. "Copied from Dolphin" is not a record; a commit
   hash is.
 - Moving a pin is its own commit, saying what moved and why.
+| AX compressor (`host/ax_dsp.c`, `ax_compress`) | Dolphin, `Source/Core/Core/HW/DSPHLE/UCodes/AX.cpp` `AXUCode::RunCompressor`, commit `ee018d0` | GPL-2.0-or-later (compatible with this project's GPL-3.0) | Re-implemented from Dolphin's logic in C over our mixer's 32-bit frame; threshold 0x8000, 10 release frames and the table address taken from the AX library's command (community decomp `dolsdk2004` `AXCL.c`), the table read from guest memory at run time. |
+

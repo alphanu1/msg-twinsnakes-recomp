@@ -15940,3 +15940,40 @@ the aux-B bus (every voice sends to it; on the console it returns through
 the game's effect callback into the main mix) and AX's compressor. The way
 to settle it is a Dolphin audio dump of the same menu against ours.
 
+### F375 — AX's compressor, from the game's own table; measured against Dolphin
+
+**Reference recorded.** Dolphin (flatpak, `-p headless -v Null`, its own
+user dir `build/dolphin-oracle` - under home, because the sandbox has a
+private /tmp - with `[DSP] DumpAudio = True`, `Backend = No Audio
+Output`, DSP HLE) booted the Europe disc 1 image with no input for 130 s:
+`Dump/Audio/*_dspdump.wav`, 32,028 Hz. Ours: the same no-input boot,
+device-paced (SDL disk driver), with the new `MGS_AUDIO_MIX=<path>` dump of
+the mix before any output stage.
+
+**Before:** our raw mix ran +3 dB over Dolphin on the median and +6 to +10
+dB in the loudest passages, peaking at 193% of full scale.
+
+**The compressor.** The AX library appends `0x12, 0x8000, 0x000A,
+__AXCompressorTable` to every frame's command list while its compressor is
+on, which `__AXClInit` makes the default (dolsdk2004 `AXCL.c`). Dolphin's
+`AXUCode::RunCompressor` (ee018d0) is the model: if any main left/right
+sample of the 5 ms frame exceeds the threshold, one attack ramp chosen by
+the release position, then ten release ramps. The table is the game's -
+found at 0x801E19C0 by its first six words, which occur once in main.dol,
+and checked at run time - read from guest memory; nothing of it is in the
+tree. Output order is now the console's: compressor, clamp to +-32767 (as
+Dolphin's `OutputSamples`), then the listener's volume. The old limiter
+remains behind `MGS_AX_LIMITER=1`.
+
+**After** (volume 100 = console level): median +2.6 dB over Dolphin, 0.03%
+of samples at the clamp. The compressor acts only on peaks, so the steady
+offset is elsewhere; per-voice low-pass filtering was checked and is never
+used by the game (0 of 44,882 voice-mixes), so it is not it. **Caveat on
+the per-section numbers:** Dolphin models disc timing and we load at once,
+so the two recordings drift apart after the first load; only the median is
+trustworthy, not a section-by-section difference. Aligning the two by
+content (the start of each piece of music) is the way to compare the menu
+itself.
+
+Default listener volume stays 40%, which is where Ben set it by ear.
+
