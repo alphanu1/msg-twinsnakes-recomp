@@ -15859,3 +15859,36 @@ In `build/phase1/module-llvm13`, not installed.
 DCInvalidateRange 0.56M in 200 s; memset 1.8M, OSGetTime 1.0M) each leave
 native code and come back through the run loop twice.
 
+### F372 — the logos at 38 on Ben's screen: we threw frames away ourselves
+
+After F371 Ben still saw the intro logos at 36-47 (MangoHud, which counts
+presents), with GPU 10% and CPU 18% - and `build/run-old.sh` (the host from
+3e55f7e with the every-block module) did the same, so not a regression of
+F370. Headless the logos are a steady 50 with Quartus running, and Ben's own
+`MGS_TIME_FRAME=1` log showed every 50-frame block at 1,000 ms: the game
+made 50 frames a second. His exit report: 1,052 frames handed to the
+presenter, **965 presented** - MangoHud's 38 exactly.
+
+Two things between the game and SDL dropped frames:
+
+- `mgs_display_present`'s **same-picture fingerprint** (1,800 sampled
+  bytes) returned without presenting. It predates the frame key (buffer VI
+  scans, frame copy in it), which already hands each frame over once; a
+  fade or a still logo has frames that sample alike, and each was lost.
+- The **frame cap** in the threaded presenter refused a present more than
+  half a frame early and the frame was never shown. Frames arrive at the
+  rate the game flips, which its own VI timing already paces.
+
+`MGS_FPS_CAP=0` alone did not fix it; removing both did. Ben: "thats much
+better". His next log: every second 50 handed over, 0 merged, 50 shown,
+presenter's longest stall 2-4 ms (one 50 ms). The fingerprint is now only
+counted; the cap stays for the inline presenter. **`MGS_TIME_FRAME=1` now
+prints a `[present]` line each second** - handed over, merged before taken
+(lost), same picture, shown, and the presenter's longest loop gap, present
+call and event pump - so a loss between game and screen names itself.
+
+Also recorded: `build/run.sh` and the old build side by side
+(`build/run-old.sh`, local) is how a "worse than before" report is checked
+on Ben's own screen; the virtual display renders in software and cannot
+show absolute frame rates.
+

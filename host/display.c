@@ -1467,6 +1467,8 @@ void mgs_display_put_draw_done(void)
 /* Present whatever the video interface is scanning. Returns 0 if there is
  * nothing to present, so the caller can leave the boot overlay up rather than
  * replace it with a black rectangle. */
+static unsigned long long s_same_picture;
+
 int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem);
 int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
 {
@@ -1536,7 +1538,12 @@ int mgs_display_present(MgsMmio* mmio, const GuestMemory* mem)
                 sig *= 1099511628211ull;
             }
             sig ^= (uint64_t)xfb;
-            if (has_last && sig == last_sig) return 0;   /* same picture */
+            /* NOT A REASON TO SKIP A FRAME ANY MORE (F372). Frames are
+             * handed over once each by the frame key in frame_pump, and a
+             * frame that looks the same as the last is still a frame: fades
+             * and still logos have plenty. Dropping them held the logos at
+             * ~38 on Ben's screen. Kept only as a count. */
+            if (has_last && sig == last_sig) ++s_same_picture;
             last_sig = sig;
             has_last = 1;
         }

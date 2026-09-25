@@ -1502,6 +1502,9 @@ This is the project. ~200 functions and the widest error bars in the plan.
         +18-22% (cutscene at double speed 48 fps against 41), engine code
         442 -> 310 MB, first build ~4-5 minutes. Full Dock run: 0
         fallbacks, cutscene 25.0, gameplay 50.
+      - Every frame the game makes is shown (F372): the presenter's
+        same-picture skip and frame cap dropped the logos to ~38 on Ben's
+        screen; both removed, 50 handed over and 50 shown each second.
       - Presentation decided on the render thread (F370) broke windowed
         pacing - menu at 25, logos 36-48 - and is reverted (F371); the
         flip wait is the default again.

@@ -398,6 +398,12 @@ static int s_quit_requested;
  * MGS_PRESENT_INLINE=1 puts presentation back on the game's thread. */
 static int s_present_threaded;
 static int s_present_pending;
+/* WHERE A FRAME IS LOST BETWEEN THE GAME AND THE SCREEN (F372), printed
+ * once a second with MGS_TIME_FRAME=1: frames the game handed over, those
+ * handed over again before the presenter took the last (merged - never
+ * shown), refused by the frame cap, dropped as the same picture, and
+ * presented; with the presenter's longest stall per second. */
+static unsigned s_pst_flagged, s_pst_merged;
 
 /* PRESENTATION CADENCE: fields between one new picture and the next, as the
  * screen gets them. The copy cadence says how fast the game draws; this says
@@ -580,7 +586,9 @@ static void frame_pump(void)
         /* Hand it over and carry on: the main thread presents. */
         shown = copies;
         note_present_cadence();
-        __atomic_store_n(&s_present_pending, 1, __ATOMIC_RELEASE);
+        __atomic_fetch_add(&s_pst_flagged, 1u, __ATOMIC_RELAXED);
+        if (__atomic_exchange_n(&s_present_pending, 1, __ATOMIC_ACQ_REL))
+            __atomic_fetch_add(&s_pst_merged, 1u, __ATOMIC_RELAXED);
         return;
     }
     /* The frame cap lives here now, as a question rather than a sleep: a
@@ -660,23 +668,59 @@ static MgsRunResult run_with_presenter(const MgsModule* mod, void* cpu,
     }
     fprintf(stderr, "[video] the game runs on its own thread; this one "
                     "presents (MGS_PRESENT_INLINE=1 to present inline)\n");
+    int pst_on = getenv("MGS_TIME_FRAME") != NULL;
+    unsigned pst_capped = 0, pst_same = 0, pst_shown = 0;
+    long long pst_t0 = 0, pst_last = 0, pst_worst_gap = 0, pst_worst_call = 0,
+              pst_worst_pump = 0;
     while (!__atomic_load_n(&g.done, __ATOMIC_ACQUIRE)) {
+        struct timespec lt;
+        long long now, pump_ns;
+        clock_gettime(CLOCK_MONOTONIC, &lt);
+        now = (long long)lt.tv_sec * 1000000000ll + lt.tv_nsec;
+        if (pst_last && now - pst_last > pst_worst_gap) pst_worst_gap = now - pst_last;
+        pst_last = now;
+        if (!pst_t0) pst_t0 = now;
+        if (pst_on && now - pst_t0 >= 1000000000ll) {
+            fprintf(stderr, "[present] 1 s: %u handed over, %u merged before "
+                    "taken, %u refused by the cap, %u same picture, %u shown; "
+                    "longest: loop gap %.1f ms, present %.1f ms, events %.1f ms\n",
+                    __atomic_exchange_n(&s_pst_flagged, 0u, __ATOMIC_RELAXED),
+                    __atomic_exchange_n(&s_pst_merged, 0u, __ATOMIC_RELAXED),
+                    pst_capped, pst_same, pst_shown, pst_worst_gap / 1e6,
+                    pst_worst_call / 1e6, pst_worst_pump / 1e6);
+            pst_capped = pst_same = pst_shown = 0;
+            pst_worst_gap = pst_worst_call = pst_worst_pump = 0;
+            pst_t0 = now;
+        }
         if (!mgs_video_pump()) {
             s_quit_requested = 1;
             mgs_module_interrupted = 1;
         }
+        clock_gettime(CLOCK_MONOTONIC, &lt);
+        pump_ns = (long long)lt.tv_sec * 1000000000ll + lt.tv_nsec - now;
+        if (pump_ns > pst_worst_pump) pst_worst_pump = pump_ns;
         if (__atomic_exchange_n(&s_present_pending, 0, __ATOMIC_ACQ_REL)) {
             int mgs_display_may_present(void);
             void mgs_display_add_present_ns(long long ns);
-            if (mgs_display_may_present()) {
+            /* NO FRAME CAP HERE (F372). Frames arrive at the rate the
+             * game flips, which its own video timing already paces; a cap
+             * could only refuse one, and a refused frame was never shown. */
+            (void)mgs_display_may_present;
+            {
                 struct timespec a, b;
+                long long call;
                 clock_gettime(CLOCK_MONOTONIC, &a);
-                if (mgs_display_present(mgs_host_mmio(), s_display_mem))
+                if (mgs_display_present(mgs_host_mmio(), s_display_mem)) {
                     mgs_video_present();
+                    ++pst_shown;
+                } else {
+                    ++pst_same;
+                }
                 clock_gettime(CLOCK_MONOTONIC, &b);
-                mgs_display_add_present_ns(
-                    ((long long)b.tv_sec - a.tv_sec) * 1000000000ll
-                    + (b.tv_nsec - a.tv_nsec));
+                call = ((long long)b.tv_sec - a.tv_sec) * 1000000000ll
+                       + (b.tv_nsec - a.tv_nsec);
+                if (call > pst_worst_call) pst_worst_call = call;
+                mgs_display_add_present_ns(call);
             }
         } else {
             SDL_DelayNS(500000);    /* 0.5 ms: well inside a 20 ms field */
