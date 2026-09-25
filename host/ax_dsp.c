@@ -1016,6 +1016,26 @@ void mgs_ax_dsp_frame(void* cpu)
         static int32_t need_held = 1 << 16;
         static int     held_valid;
         int32_t peak = 0, need_cur, g0 = gain, g1;
+        /* MASTER VOLUME (F373), before the limiter. The game mixes its
+         * voices at full level into both channels and the sum peaks at
+         * 175% of full scale; at unity the limiter worked constantly and
+         * the output sat at full scale, where SDL's resampling and the
+         * desktop mixer clip it outside our control - Ben: "too loud, it's
+         * still clipping". The console runs AX's compressor with a table
+         * the game supplies, which we do not parse; until that is modelled
+         * the level is set here. MGS_VOLUME=<percent>, default 50. */
+        static int32_t master = -1;
+        if (master < 0) {
+            const char* e = getenv("MGS_VOLUME");
+            long pc = e && *e ? strtol(e, NULL, 10) : 50;
+            if (pc < 0) pc = 0;
+            if (pc > 200) pc = 200;
+            master = (int32_t)((pc << 16) / 100);
+        }
+        for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
+            acc_l[i] = (int32_t)(((int64_t)acc_l[i] * master) >> 16);
+            acc_r[i] = (int32_t)(((int64_t)acc_r[i] * master) >> 16);
+        }
 
         for (i = 0; i < AX_FRAME_SAMPLES; ++i) {
             int32_t a = acc_l[i] < 0 ? -acc_l[i] : acc_l[i];

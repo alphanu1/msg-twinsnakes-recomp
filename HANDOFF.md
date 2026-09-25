@@ -15892,3 +15892,28 @@ Also recorded: `build/run.sh` and the old build side by side
 on Ben's own screen; the virtual display renders in software and cannot
 show absolute frame rates.
 
+### F373 — the sound was too loud: a master volume, 50% by default
+
+Ben: *"I think audio is too loud, it's still clipping"*. Measured on a
+device-paced run (SDL's disk driver, 180 s, the Dock script): the mix peaks
+at 175% of full scale before the limiter (every voice-mix reads main
+volume 0x7FFF left and right - the offsets 0x12/0x16 match Dolphin's
+`AXPB.mixer`, so that is the game's own setting), and the output after it
+averages -13 to -15 dBFS with peaks at full scale. A limiter keeps our own
+samples off the rails (0 clipped), but a signal sitting at full scale is
+clipped again downstream by resampling to the device rate. Ben asked for it
+simply to be turned down: `MGS_VOLUME=<percent>` scales the mix before the
+limiter, default 50 (-6 dB), so 175% peaks land near 88%.
+
+Not a model of the console: AX runs a compressor whose table the game
+supplies by DSP command (Dolphin `AXUCode::RunCompressor`), which we do not
+parse. Comparing our output level with a Dolphin audio dump of the same
+section is the way to set this properly.
+
+Also measured this session, for the echo Ben reported: with the audio paced
+by a device, the new build and the old one are indistinguishable - strong
+repeats (r > 0.9) in 7 of 341 half-second windows at scattered lags in
+both, no constant-lag echo like F-era 95 ms one; voice starvations 7,591
+against 7,463 in 180 s. Starvation (~42 a second, each played on into the
+next block) is long-standing, not from F370-F372.
+
