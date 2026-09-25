@@ -1359,6 +1359,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
       first-run generation inside the game process: recompiling emits 50-150
       MB of C and then compiles it, which needs a toolchain and minutes, and
       does not belong behind a game window.
+      **Its settings screen** (Ben, 2026-09-25) carries what is an
+      environment variable today, so a player never needs one: master
+      volume (`MGS_VOLUME`, F373), window size and scaling, frame cap,
+      controller mapping. Saved beside the executable and read at start.
       **These three are native binaries, not Python**, because they ship to
       people with a game and a computer rather than a development
       environment. The scripts under `tools/` stay scripts — different
