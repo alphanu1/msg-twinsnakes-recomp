@@ -16129,3 +16129,29 @@ game should be added" to the launcher. Done:
 - `mgs_card_path` is now the one place the card's path is decided, for the
   game and the launcher both.
 
+### F381 — the save fault: the memory card never said "done"
+
+After every sector erase and every page write, the SDK's CARD library does
+nothing until `__CARDExiHandler` runs, and that runs only from the card's
+own EXI interrupt (EXIINT, CSR bit 1, unmasked by bit 0), which the card
+raises when an operation finishes - having been told to by command 0x81
+(`__CARDEnableInterrupt`; dolsdk2004 `CARDBios.c`). Our card model ignored
+0x81 and the EXI model had no EXIINT at all, only the transfer-complete
+TCINT. So a save erased the block map and waited for ever for "done":
+exactly the card F380 found (block 3 erased, never rewritten).
+
+**Fix:** the card records 0x81's enable and raises "done" when an erase or
+a page program completes (at deselect, which is when ours completes); the
+EXI model sets EXIINT on channel 0, raises the EXI line when unmasked, and
+clears it on a write of one. `tests/test_card.c` checks it: silent when not
+enabled, raised after an erase and after a write (with the data landing),
+silent again after 0x81 0x00.
+
+**Also changed, visibly:** the boot mount now ends "mount step 7, result 0
+(READY)", where before it ended NOFILE and the card was dropped as
+NOCARD - so the missing interrupt was costing the mount as well. Logos,
+movie and menus unchanged; booting does not write the card.
+
+**Not yet checked: an actual save.** No scripted route reaches one; Ben's
+playthrough is the test.
+

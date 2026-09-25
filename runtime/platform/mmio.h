@@ -74,6 +74,7 @@ typedef struct MgsMmio {
     int          trace_dsp;
     unsigned     dsp_traced;
     uint8_t      exi_tcint[3];   /* transfer-complete, per channel */
+    uint8_t      exi_exiint[3];  /* the device's own interrupt (F380) */
     uint64_t     exi_transfers, exi_to_card;
     int          trace_exi;
     unsigned     exi_traced;         /* which device the last CSR write selected */

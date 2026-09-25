@@ -35,6 +35,12 @@ typedef struct MgsExiCard {
     uint32_t  address;
     uint8_t   status;
     uint8_t   program[128];  /* a page, staged before it is committed */
+    /* THE CARD'S "DONE" SIGNAL (F380). Command 0x81 with a 1 asks the card
+     * to interrupt when an erase or a write has finished; the SDK's CARD
+     * library waits for that before its next step. `irq_pending` is taken
+     * by the EXI model, which raises the channel's EXIINT. */
+    uint8_t   irq_enabled;
+    uint8_t   irq_pending;
 
     uint64_t  commands;      /* how many the device was ever given */
     int       dirty;

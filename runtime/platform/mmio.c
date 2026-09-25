@@ -131,11 +131,20 @@ static void     pi_set_cause(MgsMmio* m, uint32_t cause);
  * pending; the run loop delivers it at a point it chooses, the same as every
  * other source.
  */
+/* THE DEVICE'S OWN INTERRUPT, EXIINT (CSR bit 1, unmasked by bit 0).
+ * A memory card raises it when an erase or a write has finished, having
+ * been asked to with command 0x81; the CARD library's __CARDExiHandler runs
+ * from it and nothing else starts the next step of a save (F380). */
+#define EXI_EXIINT         0x02u
+#define EXI_EXIINTMSK      0x01u
+
 static void exi_sync_tcint(MgsMmio* m, unsigned chan)
 {
     uint32_t off = (MMIO_EXI - MMIO_BASE) + chan * EXI_CHANNEL_STRIDE + EXI_CSR;
     if (m->exi_tcint[chan]) m->regs[off + 3u] |= (uint8_t)EXI_TCINT;
     else                    m->regs[off + 3u] &= (uint8_t)~EXI_TCINT;
+    if (m->exi_exiint[chan]) m->regs[off + 3u] |= (uint8_t)EXI_EXIINT;
+    else                     m->regs[off + 3u] &= (uint8_t)~EXI_EXIINT;
 }
 
 static void exi_refresh_line(MgsMmio* m)
@@ -147,6 +156,7 @@ static void exi_refresh_line(MgsMmio* m)
     for (c = 0; c < 3u; ++c) {
         uint32_t off = (MMIO_EXI - MMIO_BASE) + c * EXI_CHANNEL_STRIDE + EXI_CSR;
         if (m->exi_tcint[c] && (m->regs[off + 3u] & EXI_TCINTMSK)) asserted = 1;
+        if (m->exi_exiint[c] && (m->regs[off + 3u] & EXI_EXIINTMSK)) asserted = 1;
     }
     if (asserted) pi_set_cause(m, cause | PI_EXI);
     else          pi_set_cause(m, cause & ~PI_EXI);
@@ -1053,7 +1063,13 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                 uint8_t cs = (uint8_t)((value >> 7) & 7u);
                 if (cs != m->exi_cs) {
                     m->exi_cs = cs;
-                    if (m->card_ready) mgs_exi_card_select(&m->card, (cs & 1u) != 0u);
+                    if (m->card_ready) {
+                        mgs_exi_card_select(&m->card, (cs & 1u) != 0u);
+                        if (m->card.irq_pending) {      /* erase/write done */
+                            m->card.irq_pending = 0u;
+                            m->exi_exiint[0] = 1u;
+                        }
+                    }
                     mgs_exi_ipl_select(&m->ipl, (cs & 2u) != 0u);
                 }
                 /* EXT is the slot's own answer about whether anything is
@@ -1062,6 +1078,7 @@ void mgs_mmio_write(MgsMmio* m, uint32_t addr, uint32_t value, unsigned size)
                  * the whole register from accidentally unplugging the card. */
                 if (m->card_ready) m->regs[off - within + EXI_CSR + 2u] |= 0x10u;
                 if (value & EXI_TCINT) m->exi_tcint[chan] = 0u;  /* write-one-to-clear */
+                if (value & EXI_EXIINT) m->exi_exiint[chan] = 0u;
                 exi_sync_tcint(m, chan);
                 exi_refresh_line(m);
 

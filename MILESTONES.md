@@ -182,6 +182,8 @@ native function never would: the SRAM said MONO for weeks (F377).
 - [ ] **Memory card and clock (EXI):** `CARD*` and `OSGetTime` native.
       **First: saving is broken** - a save erased the card's block map and
       never wrote it back (F380), which stops the game at the next boot.
+      Cause found and fixed (F381): the card never raised its "done"
+      interrupt. Awaiting a real save to confirm.
 - [ ] Anything the engine does to hardware directly, bypassing the SDK,
       found by the register-access log and replaced per call site.
 

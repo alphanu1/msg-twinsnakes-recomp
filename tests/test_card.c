@@ -148,6 +148,41 @@ int main(void)
     }
 
     mgs_exi_card_free(&card);
+    {   /* THE "DONE" INTERRUPT (F380). The CARD library waits for it
+         * after every erase and every page write; without it a save erased
+         * the block map and never wrote it back. Command bytes are clocked
+         * one at a time between select and deselect, as EXI does. */
+        MgsExiCard c2;
+        static const uint8_t on[2]    = { 0x81u, 0x01u };
+        static const uint8_t off[2]   = { 0x81u, 0x00u };
+        static const uint8_t erase[3] = { 0xF1u, 0x00u, 0x10u };   /* block 1 */
+        uint8_t prog[5 + 128];
+        unsigned k;
+        #define SEND(buf, n) do { mgs_exi_card_select(&c2, 1); \
+            for (k = 0; k < (n); ++k) { uint8_t b = (buf)[k]; mgs_exi_card_byte(&c2, &b); } \
+            mgs_exi_card_select(&c2, 0); } while (0)
+        CHECK(mgs_exi_card_init(&c2, NULL, 16u, flash_id));
+        SEND(erase, 3u);
+        CHECK(!c2.irq_pending);                 /* not asked for: silent */
+        SEND(on, 2u);
+        CHECK(c2.irq_enabled);
+        SEND(erase, 3u);
+        CHECK(c2.irq_pending);
+        CHECK(c2.image[0x2000] == 0xFFu && c2.image[0x3FFF] == 0xFFu);
+        c2.irq_pending = 0u;
+        memset(prog, 0x5Au, sizeof prog);
+        prog[0] = 0xF2u; prog[1] = 0x00u; prog[2] = 0x10u; prog[3] = 0x00u; prog[4] = 0x00u;
+        SEND(prog, (unsigned)sizeof prog);
+        CHECK(c2.irq_pending);
+        CHECK(c2.image[0x2000] == 0x5Au && c2.image[0x207F] == 0x5Au);
+        c2.irq_pending = 0u;
+        SEND(off, 2u);
+        SEND(erase, 3u);
+        CHECK(!c2.irq_pending);
+        #undef SEND
+        mgs_exi_card_free(&c2);
+    }
+
     printf(failures ? "card: FAILED\n" : "card: ok\n");
     return failures ? 1 : 0;
 }

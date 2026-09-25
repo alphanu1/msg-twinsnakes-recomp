@@ -302,7 +302,16 @@ void mgs_exi_card_select(MgsExiCard* c, int asserted)
                 memcpy(c->image + c->address, c->program, n);
                 c->dirty = 1;
             }
+            if (c->irq_enabled) c->irq_pending = 1u;
         }
+        /* An erase or a write is finished the moment it is given here, so
+         * "done" follows at once. Without it the CARD library waited for
+         * ever after erasing the block map, and a save left the card with
+         * that block erased and never written back (F380). */
+        if (c->command == CMD_SECTOR_ERASE && c->position >= 3u && c->irq_enabled)
+            c->irq_pending = 1u;
+        if (c->command == CMD_CHIP_ERASE && c->irq_enabled)
+            c->irq_pending = 1u;
         c->position = 0u;
         c->command  = 0u;
     }
@@ -415,6 +424,11 @@ void mgs_exi_card_byte(MgsExiCard* c, uint8_t* byte)
         break;
 
     case CMD_SET_INTERRUPT:
+        /* 0x81 0x01 enables the done-interrupt, 0x81 0x00 disables it. */
+        if (c->position == 1u) c->irq_enabled = (uint8_t)(in & 1u);
+        *byte = 0xFFu;
+        break;
+
     case CMD_WAKE_UP:
     case CMD_SLEEP:
     case CMD_CHIP_ERASE:
