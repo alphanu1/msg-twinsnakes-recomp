@@ -1794,6 +1794,10 @@ export DOLRECOMP_EXTRA_ENTRIES=$PWD/build/phase1/rel-dol-entries.txt   # same pa
 grep -o "{0x[0-9A-Fa-f]*u" runtime/os/patch_table.c | tr -d '{u' \
     > build/phase1/guarded-entries.txt         # the 39 functions the host may intercept
 export DOLRECOMP_GUARDED_ENTRIES=$PWD/build/phase1/guarded-entries.txt # DolRecomp-entry-guards.patch
+# The engine only - after main.dol has been generated:
+python3 tools/dol-ranges.py build/phase1/dol-llvm/generated/generated.h \
+    > build/phase1/dol-ranges.txt              # main.dol's 2,287 function ranges
+DOLRECOMP_EXTERNAL_RANGES=$PWD/build/phase1/dol-ranges.txt   # DolRecomp-pipeline-switches.patch
 export DOLRECOMP_MEM2_BASE=0x3E000000          # tools/patches/DolRecomp-mem2-base.patch
 export DOLRECOMP_EE_EXIT_WHEN_PENDING=1        # tools/patches/DolRecomp-ee-exit-when-pending.patch
 export DOLRECOMP_FP_NATIVE=1                   # tools/patches/DolRecomp-fp-native.patch
@@ -1856,6 +1860,20 @@ every-block entries the engine builds in 64 CPU-minutes, but native code
 then resumes where it has no entry; entries only at lazy-FPU trap points
 were measured NOT enough (an integer-only re-entry at 0x7F0F7E18 remains
 unexplained).
+
+**Engine calls into the SDK made direct (F386):** a call from the REL to a
+main.dol function had no range in the REL's generation, so it left native
+code: the run loop dispatched the SDK function and, on its return, the
+engine again - two trips per call. The main thread's own dispatches (a new
+`MGS_PROFILE_THREAD=<OSThread>` filter on the run-loop histogram) were led
+by exactly these: PSMTXMultVec 5.6%, PSVECNormalize 4.4%, PSVECDotProduct
+2.5%, GXSetArray 2.4%, and the engine's return points after them. With
+`DOLRECOMP_EXTERNAL_RANGES` (main.dol's ranges from `tools/dol-ranges.py`)
+the engine's objects call the SDK's `func_*_budget` symbols directly -
+5,789 references - and the combined module links them. Engine generation
+5 min 32 s. **Measured** at triple speed, alternating: 61.6 and 62.5 fps
+against 53.5 and 53.5 - about +16%. A full normal-speed Dock run: 0
+unhandled, logos and menus 50, cutscene 25, gameplay 48-50 at load 25.
 
 **Entry guards only where they can fire (F384):** every native function
 entry asked the host whether it had been replaced by a native SDK function

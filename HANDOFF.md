@@ -16299,3 +16299,33 @@ imports and exports above; Ben reports it running under Wine. **Not yet
 run on real Windows** - Ben's test. On a player's machine the launcher's
 first-run build will produce the platform's own objects in the same way.
 
+### F386 — the engine's calls into the SDK no longer go through the host: +16%
+
+Ben: "crack on with all the native static recomp where emulation is used".
+Where the game thread still left native code was measured first:
+`MGS_PROFILE_THREAD=80209D78` samples only the run-loop dispatches made
+while the game's main thread is current. The leaders were SDK functions -
+PSMTXMultVec 5.6%, PSVECNormalize 4.4%, PSVECDotProduct 2.5%, GXSetArray
+2.4%, PSMTX44Concat 1.8% - and a group of engine addresses just after
+calls (0x7F133C38/44/54/60/6C): every engine (REL) call into the SDK
+(main.dol) left native code, because DolRecomp generates the two binaries
+separately and a target outside the one being compiled has no range to call.
+Two trips through the run loop per call, thousands of calls a frame.
+
+**Fix:** `DOLRECOMP_EXTERNAL_RANGES=<file>` (pipeline-switches patch) gives
+the emitter main.dol's function ranges (`tools/dol-ranges.py`, all 2,287,
+from the DOL generation's dispatch header, both its single-range and table
+forms) - to the emitter only, the REL's dispatch header still describes the
+REL. The engine's objects then reference the SDK's `func_*_budget` symbols
+directly (5,789 references) and the combined module links them; a call to
+a patched SDK function still meets its entry guard and exits as calls
+within main.dol always have. **+16%** at triple speed (61.6/62.5 fps
+against 53.5/53.5); a full normal-speed Dock run correct, 0 unhandled.
+Installed. Tonight's generator changes together (entries F370, FMA F383,
+guards F384, direct SDK calls F386) take the triple-speed cutscene from
+~41 to ~62.
+
+Ben asked whether the launcher does the one-time build yet: no - it needs
+DolRecomp (with LLVM) and a linker carried inside the port and built for
+each platform; next launcher milestone.
+

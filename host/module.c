@@ -2185,7 +2185,18 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
         }
 
         if (diag_any) {
-            if (profile && (r.steps % PROF_INTERVAL) == 0ull) prof_sample(pc);
+            /* MGS_PROFILE_THREAD=<OSThread>: only the dispatches made while
+             * that guest thread is current - which of the game's own trips
+             * through this loop are the frequent ones. */
+            if (profile && (r.steps % PROF_INTERVAL) == 0ull) {
+                static long only = -1;
+                if (only < 0) {
+                    const char* e = getenv("MGS_PROFILE_THREAD");
+                    only = e ? (long)strtoul(e, NULL, 16) : 0;
+                }
+                if (!only || gread32(cpu, 0x800000E4u) == (uint32_t)only)
+                    prof_sample(pc);
+            }
             if (caller_of && pc == caller_of) {
                 const uint32_t* g = mgs_module_gpr(cpu);
                 uint32_t lr;

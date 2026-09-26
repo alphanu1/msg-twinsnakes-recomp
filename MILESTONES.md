@@ -1548,8 +1548,10 @@ This is the project. ~200 functions and the widest error bars in the plan.
         game summed left and right into both speakers - Ben's echo. Now
         panned as on the console; level within 0.0 dB of Dolphin; AX's
         compressor from the game's table (F375).
-      - The game thread made cheaper: hardware FMA (x86-64-v3, +5%, F383)
-        and the per-call guard only on patched functions (+11%, F384).
+      - The game thread made cheaper: hardware FMA (x86-64-v3, +5%, F383),
+        the per-call guard only on patched functions (+11%, F384), and
+        the engine's calls into the SDK direct instead of through the run
+        loop (+16%, F386).
         Steam Deck runs the Linux release (F382), 30 fps at most so far.
       - Every frame the game makes is shown (F372): the presenter's
         same-picture skip and frame cap dropped the logos to ~38 on Ben's

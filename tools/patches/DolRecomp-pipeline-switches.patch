@@ -1,5 +1,5 @@
 diff --git a/src/app/pipeline.c b/src/app/pipeline.c
-index 9526e45..98ab750 100644
+index 9526e45..455fb83 100644
 --- a/src/app/pipeline.c
 +++ b/src/app/pipeline.c
 @@ -293,6 +293,25 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
@@ -16,7 +16,7 @@ index 9526e45..98ab750 100644
 +            "DOLRECOMP_PURE_EXTERNAL", "DOLRECOMP_NATIVE_SERVICES",
 +            "DOLRECOMP_LLVM_OPT_LEVEL", "DOLRECOMP_NO_THINLTO",
 +            "DOLRECOMP_ENTER_TRAP_POINTS", "DOLRECOMP_ENTER_DATA_REFS",
-+            "DOLRECOMP_GUARDED_ENTRIES",
++            "DOLRECOMP_GUARDED_ENTRIES", "DOLRECOMP_EXTERNAL_RANGES",
 +        };
 +        size_t k;
 +        for (k = 0; k < sizeof switches / sizeof switches[0]; ++k) {
@@ -175,7 +175,74 @@ index 9526e45..98ab750 100644
      options.verify = 1;
      options.function_ranges = job->ranges;
      options.function_range_count = job->range_count;
-@@ -1680,9 +1802,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
+@@ -1048,6 +1170,55 @@ static int emit_code_sections_llvm(const LoadedCodeSection* sections,
+                 dolllvm_report_abi_stats(ranges, range_count, triple, stdout);
+         }
+     }
++    /* FUNCTIONS OF ANOTHER BINARY LINKED INTO THE SAME MODULE
++     * (DOLRECOMP_EXTERNAL_RANGES=<file of "start end" hex pairs>).
++     *
++     * A call to an address outside this binary has no range, so the emitter
++     * cannot call it directly and exits to the runtime, which dispatches the
++     * callee and, when it returns, dispatches back: two trips through the
++     * host per call. A REL calls its DOL's SDK all the time - Twin Snakes'
++     * engine calls PSMTXMultVec, PSVECNormalize, GXSetArray thousands of
++     * times a frame (HANDOFF F386). When both are linked into one module
++     * the DOL's func_XXXXXXXX_budget symbols are there to call, so listed
++     * ranges are given to the emitter - and only to it: the dispatch header
++     * still describes this binary alone. */
++    DolLLVMFunctionRange* job_ranges = ranges;
++    u32 job_range_count = range_count;
++    {
++        const char* ext = getenv("DOLRECOMP_EXTERNAL_RANGES");
++        FILE* ef = (ext && ext[0]) ? fopen(ext, "r") : NULL;
++        if (ext && ext[0] && !ef) {
++            fprintf(stderr, "error: DOLRECOMP_EXTERNAL_RANGES: cannot open %s\n", ext);
++            goto fail;
++        }
++        if (ef) {
++            u32 cap = range_count + 4096u, n = range_count;
++            unsigned long a, b;
++            DolLLVMFunctionRange* all =
++                (DolLLVMFunctionRange*)calloc(cap, sizeof(*all));
++            if (!all) { fclose(ef); goto fail; }
++            memcpy(all, ranges, (size_t)range_count * sizeof(*all));
++            while (fscanf(ef, "%lx %lx", &a, &b) == 2) {
++                if (n == cap) {
++                    DolLLVMFunctionRange* grown = (DolLLVMFunctionRange*)realloc(
++                        all, (size_t)(cap * 2u) * sizeof(*all));
++                    if (!grown) { free(all); fclose(ef); goto fail; }
++                    memset(grown + cap, 0, (size_t)cap * sizeof(*grown));
++                    all = grown;
++                    cap *= 2u;
++                }
++                if (llvm_range_for(ranges, range_count, (u32)a)) continue;
++                all[n].start = (u32)a;
++                all[n].end = (u32)b;
++                ++n;
++            }
++            fclose(ef);
++            job_ranges = all;
++            job_range_count = n;
++            printf("external ranges: %u functions of the other binary callable directly\n",
++                   n - range_count);
++        }
++    }
+     u32 emitted_range_count = 0;
+     for (u32 s = 0; s < section_count; s++) {
+         const LoadedCodeSection* section = &sections[s];
+@@ -1142,8 +1313,8 @@ static int emit_code_sections_llvm(const LoadedCodeSection* sections,
+                 target_job->function_address = function_address;
+                 target_job->index = output_index * profile_count + variant + 1u;
+                 target_job->total = range_count * profile_count;
+-                target_job->ranges = ranges;
+-                target_job->range_count = range_count;
++                target_job->ranges = job_ranges;
++                target_job->range_count = job_range_count;
+                 target_job->entry_points = entry_points;
+                 target_job->entry_point_count = entry_point_count;
+                 target_job->target_profile = profiles[variant];
+@@ -1680,9 +1851,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
@@ -214,7 +281,7 @@ index 9526e45..98ab750 100644
  }
  
  int emit_rpx_split(const RPXFile* rpx, const char* output_path,
-@@ -1736,9 +1884,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
+@@ -1736,9 +1933,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
