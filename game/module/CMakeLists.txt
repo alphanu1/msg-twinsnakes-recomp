@@ -29,6 +29,13 @@ endif()
 # run on the current host.
 set(REL_BASE "0x7F008000" CACHE STRING "Virtual load address of the overlay")
 
+# Which build this module is for. Stamps MODULE_GAME_ID (the host refuses a
+# module whose id differs from the mounted disc's) and names the output
+# g<id>_recomp after it. GGSPA4 is the only build with a verified module;
+# another id needs that build's own DolRecomp generation and config
+# (config/GGSEA4.toml) - the id alone does not port anything.
+set(MGS_GAME_ID "GGSPA4" CACHE STRING "Six-character game id of the build")
+
 foreach(V DOL_GENERATED REL_GENERATED GXRUNTIME_DIR)
   if(NOT ${V})
     message(FATAL_ERROR "set -D${V}=<path>")
@@ -183,7 +190,7 @@ target_include_directories(mgs_module PRIVATE
   "${DOL_GENERATED}"                 # module_export.c includes generated.h
   "${GXRUNTIME_DIR}/include" "${CHASSIS_ABI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_module PRIVATE
-  DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="GGSPA4")
+  DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="${MGS_GAME_ID}")
 # The float helpers live here; see -fno-semantic-interposition above.
 if(NOT MSVC)
   target_compile_options(mgs_module PRIVATE -fno-fast-math -ffp-contract=off
@@ -198,7 +205,7 @@ target_link_libraries(mgs_module PRIVATE
   $<TARGET_OBJECTS:mgs_dispatch>
   m)   # the generated float paths call fmod/sqrt; libm is not implicit here
 set_target_properties(mgs_module PROPERTIES
-  OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
+  OUTPUT_NAME "g${MGS_GAME_ID}_recomp" PREFIX ""
   LINK_FLAGS "-Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")
 
 # WHAT THE MODULE EXPORTS, from one list for every platform: module.exports
