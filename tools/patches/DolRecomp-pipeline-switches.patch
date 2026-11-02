@@ -1,5 +1,5 @@
 diff --git a/src/app/pipeline.c b/src/app/pipeline.c
-index 9526e45..455fb83 100644
+index 9526e45..5e9f8b3 100644
 --- a/src/app/pipeline.c
 +++ b/src/app/pipeline.c
 @@ -293,6 +293,25 @@ static u64 llvm_job_hash(const LLVMChunkJob* job) {
@@ -242,7 +242,7 @@ index 9526e45..455fb83 100644
                  target_job->entry_points = entry_points;
                  target_job->entry_point_count = entry_point_count;
                  target_job->target_profile = profiles[variant];
-@@ -1680,9 +1851,35 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
+@@ -1680,9 +1851,39 @@ int emit_dol_split(const DOLFile* dol, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
@@ -251,6 +251,7 @@ index 9526e45..455fb83 100644
 -                                    local_chunks_dir, symbols, options);
 +    u32* refs = NULL;
 +    u32 ref_count = 0, ref_capacity = 0;
++#ifdef DOLRECOMP_ENABLE_LLVM
 +    if (enter_data_refs()) {
 +        for (u32 i = 0; i < DOL_NUM_DATA; i++) {
 +            u32 offset = dol->header.data_offsets[i];
@@ -271,22 +272,26 @@ index 9526e45..455fb83 100644
 +    }
 +    data_ref_entries = refs;
 +    data_ref_entry_count = ref_count;
++#endif
 +    int ok = emit_code_sections_split(sections, section_count, output_path, cpu,
 +                                      dol->header.entry_point, jobs,
 +                                      local_chunks_dir, symbols, options);
++#ifdef DOLRECOMP_ENABLE_LLVM
 +    data_ref_entries = NULL;
 +    data_ref_entry_count = 0;
++#endif
 +    free(refs);
 +    return ok;
  }
  
  int emit_rpx_split(const RPXFile* rpx, const char* output_path,
-@@ -1736,9 +1933,35 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
+@@ -1736,9 +1937,39 @@ int emit_rel_split(const RELFile* rel, const char* output_path,
          section->embedded_data_mode = EMBEDDED_DATA_DOL;
      }
  
 +    u32* refs = NULL;
 +    u32 ref_count = 0, ref_capacity = 0;
++#ifdef DOLRECOMP_ENABLE_LLVM
 +    if (enter_data_refs()) {
 +        for (u32 i = 0; i < rel->section_count; i++) {
 +            const RELSection* data = &rel->sections[i];
@@ -308,11 +313,14 @@ index 9526e45..455fb83 100644
 +    }
 +    data_ref_entries = refs;
 +    data_ref_entry_count = ref_count;
++#endif
      int ok = emit_code_sections_split(sections, section_count, output_path, cpu,
                                        rel->entry_point, jobs, local_chunks_dir,
                                        NULL, options);
++#ifdef DOLRECOMP_ENABLE_LLVM
 +    data_ref_entries = NULL;
 +    data_ref_entry_count = 0;
++#endif
 +    free(refs);
      free(sections);
      return ok;
