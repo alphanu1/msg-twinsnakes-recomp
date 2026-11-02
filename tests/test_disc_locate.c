@@ -8,6 +8,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+/* setenv/unsetenv are POSIX; MinGW/MSVC only have _putenv_s. */
+static int setenv(const char* name, const char* value, int overwrite)
+{
+    (void)overwrite;
+    return _putenv_s(name, value);
+}
+static int unsetenv(const char* name) { return _putenv_s(name, ""); }
+#endif
 
 static int failures;
 #define CHECK(cond) do { \
