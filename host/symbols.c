@@ -82,7 +82,13 @@ void mgs_symbols_load(const char* dir)
     s_dol_n = load(path, &s_dol, NULL);
     snprintf(path, sizeof path, "%s/mgso_pal.rel.symbols.txt", dir);
     s_rel_n = load(path, &s_rel, ".text");
-    printf("symbols: %zu from main.dol, %zu from mgso_pal.rel .text\n",
+    if (!s_rel_n) {
+        /* The US/Japanese overlay is mgso.rel; its symbol file, once that
+         * build has one, sits beside the PAL one under the same rule. */
+        snprintf(path, sizeof path, "%s/mgso.rel.symbols.txt", dir);
+        s_rel_n = load(path, &s_rel, ".text");
+    }
+    printf("symbols: %zu from main.dol, %zu from the overlay .text\n",
            s_dol_n, s_rel_n);
 }
 
