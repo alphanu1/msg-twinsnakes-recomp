@@ -1,0 +1,6 @@
+# DolRecomp patches are applied with `git apply` by tools/bootstrap.sh.
+# git apply matches context lines literally, so a patch file checked out
+# with CRLF endings (core.autocrlf=true on Windows) fails against the LF
+# sources in extern/ and bootstrap silently skips it ("patch already
+# applied or does not fit"). Keep patch files LF on every platform.
+tools/patches/*.patch text eol=lf
