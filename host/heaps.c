@@ -490,13 +490,22 @@ void mgs_report_movie(void* cpu, uint32_t rel_bss)
  * than assumed: the displacement is decoded from the instruction itself, so
  * this keeps working if the map moves.
  */
-#define OS_SET_INTERRUPT_HANDLER 0x8001FD18u
+#define OS_SET_INTERRUPT_HANDLER 0x8001FD18u   /* GGSPA4 */
+#define OS_SET_INTERRUPT_HANDLER_USA 0x800206CCu /* GGSEA4/GGSJA4 */
 #define OS_INTERRUPT_COUNT       32u
 
 void mgs_report_interrupts(void* cpu);
 void mgs_report_interrupts(void* cpu)
 {
-    uint32_t insn = mgs_module_guest_read32(cpu, OS_SET_INTERRUPT_HANDLER + 4u);
+    /* Whichever build's __OSSetInterruptHandler decodes as the expected
+     * lwz off r13 is the build in front of us; the check below is what
+     * makes trying both safe rather than hopeful. */
+    uint32_t handler = OS_SET_INTERRUPT_HANDLER;
+    uint32_t insn = mgs_module_guest_read32(cpu, handler + 4u);
+    if (!((insn >> 26) == 32u && ((insn >> 16) & 0x1Fu) == 13u)) {
+        handler = OS_SET_INTERRUPT_HANDLER_USA;
+        insn = mgs_module_guest_read32(cpu, handler + 4u);
+    }
     uint32_t r13  = mgs_module_gpr(cpu)[13];
     int32_t  disp;
     uint32_t slot, table;
@@ -507,7 +516,7 @@ void mgs_report_interrupts(void* cpu)
      * confident nonsense. */
     if ((insn >> 26) != 32u || ((insn >> 16) & 0x1Fu) != 13u) {
         printf("interrupt table: 0x%08X+4 is not `lwz rD,d(r13)` (0x%08X); "
-               "the symbol map has moved\n", OS_SET_INTERRUPT_HANDLER, insn);
+               "the symbol map has moved\n", handler, insn);
         return;
     }
     disp  = (int32_t)(int16_t)(uint16_t)(insn & 0xFFFFu);

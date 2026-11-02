@@ -899,6 +899,8 @@ static int mem_shim_disabled(void)
 static MgsSdkFn (*s_patch_lookup)(uint32_t) = mgs_patch_lookup;
 static uint32_t s_patch_lo = MGS_PATCH_LO;
 static uint32_t s_patch_span = MGS_PATCH_SPAN;
+static uint32_t s_dispatch_addr = 0x800201A4u; /* GGSPA4 __OSDispatchInterrupt */
+static uint32_t s_oslink_addr = 0x80020AD8u;   /* GGSPA4 OSLink */
 static uint32_t s_os_disable = 0x8001FCCCu;   /* GGSPA4 OSDisableInterrupts */
 static uint32_t s_os_restore = 0x8001FCF4u;   /* GGSPA4 OSRestoreInterrupts */
 
@@ -909,6 +911,8 @@ static void patch_select(const char* game_id)
         s_patch_lookup = mgs_patch_lookup_usa;
         s_patch_lo = MGS_PATCH_LO_USA;
         s_patch_span = MGS_PATCH_SPAN_USA;
+        s_dispatch_addr = 0x80020B58u;
+        s_oslink_addr = 0x8002148Cu;
         s_os_disable = 0x80020680u;
         s_os_restore = 0x800206A8u;
     }
@@ -2185,7 +2189,7 @@ int main(int argc, char** argv)
                     {
                         MgsSdkFn probe = s_patch_lookup(s_patch_lo);
                         (void)probe;
-                        mgs_interrupt_set_dispatch(0x800201A4u);  /* __OSDispatchInterrupt */
+                        mgs_interrupt_set_dispatch(s_dispatch_addr);  /* __OSDispatchInterrupt */
                         /* OSLink(module, bss). The bss pointer is the base
                          * every engine global is an offset from, and nothing
                          * else reports it. */
@@ -2194,7 +2198,7 @@ int main(int argc, char** argv)
                             const char* e = getenv("MGS_LINK_BSS");
                             mgs_module_relink_bss(!(e && e[0] == '0'));
                         }
-                        mgs_module_watch(0x80020AD8u);
+                        mgs_module_watch(s_oslink_addr);
                         /* Zero the overlay's .bss the moment linking is
                          * done. Until then the relocation tables occupying
                          * that memory are still needed. */
