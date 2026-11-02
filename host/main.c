@@ -1690,6 +1690,31 @@ static const char* find_module(const char* argv0, char* out, size_t out_size)
     return NULL;
 }
 
+/* WHICH BUILD'S DISCS TO LOOK FOR. GGSPA4 is the only build with a module,
+ * so it stays the default; MGS_GAME_ID names another build's discs (US
+ * GGSEA4, Japanese GGSJA4) so they can at least be mounted, hash-checked
+ * and loaded as far as the module check - which then refuses the PAL
+ * module against them by game id, as it should until that build has a
+ * module of its own (config/GGSEA4.toml). The id only steers the
+ * discs/<id>/discN development-layout search; explicit --disc1/--disc2
+ * paths and the module/disc game-id check are unaffected. */
+static const char* port_game_id(void)
+{
+    const char* env = getenv("MGS_GAME_ID");
+    return (env && strlen(env) == 6u) ? env : "GGSPA4";
+}
+
+/* The overlay's name is part of the build, not of the game: PAL calls it
+ * mgso_pal.rel, the US and Japanese builds call it mgso.rel. Derived from
+ * the MOUNTED disc's own id, so the self-check below reads the overlay
+ * that is actually on the disc in front of it. */
+static const char* overlay_rel_path(const char* game_id)
+{
+    return (game_id && strcmp(game_id, "GGSPA4") == 0)
+               ? "shared/mgso_pal.rel"
+               : "shared/mgso.rel";
+}
+
 int main(int argc, char** argv)
 {
     const char* disc1_arg = NULL;
@@ -1800,11 +1825,11 @@ int main(int argc, char** argv)
                 find_module(argv[0], found_module, sizeof found_module))
                 module_path = found_module;
             memset(&choice, 0, sizeof choice);
-            if (mgs_disc_locate(1u, disc1_arg, exe_dir_buf, "GGSPA4",
+            if (mgs_disc_locate(1u, disc1_arg, exe_dir_buf, port_game_id(),
                                 choice.found_disc1, sizeof choice.found_disc1)
                 == MGS_DISC_SOURCE_NONE)
                 choice.found_disc1[0] = '\0';
-            if (mgs_disc_locate(2u, disc2_arg, exe_dir_buf, "GGSPA4",
+            if (mgs_disc_locate(2u, disc2_arg, exe_dir_buf, port_game_id(),
                                 choice.found_disc2, sizeof choice.found_disc2)
                 == MGS_DISC_SOURCE_NONE)
                 choice.found_disc2[0] = '\0';
@@ -1824,7 +1849,7 @@ int main(int argc, char** argv)
     }
 #endif
 
-    src1 = mgs_disc_locate(1u, disc1_arg, exe_dir_buf, "GGSPA4", path1, sizeof path1);
+    src1 = mgs_disc_locate(1u, disc1_arg, exe_dir_buf, port_game_id(), path1, sizeof path1);
     if (src1 == MGS_DISC_SOURCE_NONE) {
         fprintf(stderr, "no disc 1 found. Pass --disc1 <path>.\n");
         guest_memory_free(&rt.mem);
@@ -1844,7 +1869,7 @@ int main(int argc, char** argv)
     overlay_line("DISC 1: %s  (%u FST ENTRIES)", disc1.game_id, disc1.fst.entry_count);
 
     memset(&disc2, 0, sizeof disc2);
-    src2 = mgs_disc_locate(2u, disc2_arg, exe_dir_buf, "GGSPA4", path2, sizeof path2);
+    src2 = mgs_disc_locate(2u, disc2_arg, exe_dir_buf, port_game_id(), path2, sizeof path2);
     if (src2 != MGS_DISC_SOURCE_NONE && mgs_disc_mount(&disc2, path2))
         printf("disc 2: %s  [%s, disc %u]\n", path2, disc2.game_id,
                disc2.disc_number + 1u);
@@ -1975,7 +2000,7 @@ int main(int argc, char** argv)
      * landing in real guest memory.
      */
     {
-        long n = mgs_dvd_read_sync(&dvd, "shared/mgso_pal.rel", 0x80100000u, 0u, 32u);
+        long n = mgs_dvd_read_sync(&dvd, overlay_rel_path(disc1.game_id), 0x80100000u, 0u, 32u);
         printf("self-check: read %ld bytes of the overlay; first word 0x%08X "
                "(its module id)\n", n, guest_read32(&rt.mem, 0x80100000u));
         overlay_line("DVD SELF-CHECK: %ld BYTES OK", n);
