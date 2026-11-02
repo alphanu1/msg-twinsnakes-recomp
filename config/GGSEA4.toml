@@ -1,0 +1,82 @@
+# Metal Gear Solid: The Twin Snakes - USA
+#
+# NOT YET A BUILD TARGET. Every address and symbol in this project is tied
+# to the PAL build (GGSPA4); this file records the US build's identity so
+# the per-build port (symbol recovery, DolRecomp generation, host ID
+# parameterisation) has verified inputs to start from. The host still
+# mounts GGSPA4 only.
+#
+# Hashes are of the EXTRACTED executables, not of the disc image, exactly
+# as in config/GGSPA4.toml: the recompiler consumes main.dol and the REL,
+# not the ISO, and the check stays independent of the container format.
+#
+# Verified 2026-11-02 from extracted discs (stdlib extractor, FST trees
+# of 1,647 / 1,657 files on discs 1 / 2).
+
+[paths]
+# Extracted discs live in the repository under discs/, which is git-ignored.
+# Nothing disc-derived is ever committed (project rule 8).
+disc1 = "discs/GGSEA4/disc1"
+disc2 = "discs/GGSEA4/disc2"
+
+[game]
+id          = "GGSEA4"
+name        = "Metal Gear Solid: The Twin Snakes"
+region      = "NTSC-U"
+revision    = 0
+developer   = "Silicon Knights"
+publisher   = "Konami"
+year        = 2004
+discs       = 2
+
+[sdk]
+# Identified from main.dol strings: every Dolphin SDK component reports
+# release build (0x2301), with the same component dates as the PAL build:
+#   AI ARQ AR   2003-04-17    EXI SI VI   2003-04-17
+#   CARD DSP    2003-04-17    OS GX DVD   2003-07-23
+#   AX          2003-07-29    PAD         2003-08-06
+version     = "0x2301"
+newest_component_build = "2003-08-06"
+compiler    = "Metrowerks CodeWarrior"
+
+[executables]
+# IDENTICAL on both discs -- verified by SHA-1. The recompiler runs ONCE,
+# not once per disc. Only the asset filesystem differs between them.
+# This same main.dol is also byte-identical in the Japanese (GGSJA4)
+# discs; only the REL differs there.
+[executables.main_dol]
+path        = "sys/main.dol"
+size        = 1988704
+sha1        = "4864afb5eacc8dd11ad98dbf14f79053767d7a6d"
+md5         = "aafc154d4add583802df9e6432a2be27"
+
+[executables.rel]
+# The US overlay is mgso.rel, not mgso_pal.rel - host/test code that names
+# the overlay must be parameterised per build before this target can run.
+path        = "files/shared/mgso.rel"
+size        = 5729024
+sha1        = "239b8426c412b7c58490ccc6e4b7c0c6d78a0340"
+
+[executables.apploader]
+path        = "sys/apploader.img"
+size        = 119332
+sha1        = "1e30e91a7412677ff82f99cc437898ac811a3cb6"
+
+[discs.1]
+# The disc number lives at offset 0x06 of boot.bin; both discs share the ID.
+disc_number = 0
+[discs.2]
+disc_number = 1
+
+[audio]
+# Same engine as the PAL build; codec identification carried over from
+# GGSPA4.toml pending per-build string verification.
+stream_codec = "ogg-vorbis"
+
+[source]
+# As GGSPA4: NKit-scrubbed images, retained knowingly. NKit rewrites junk
+# and padding between files, not the files themselves, so the extracted
+# executables are expected to be byte-exact. UNVERIFIED until someone with
+# a redump-verified image confirms the same main.dol SHA-1. See HANDOFF F8.
+container   = "nkit"
+verified_against_redump = false
