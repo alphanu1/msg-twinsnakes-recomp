@@ -23,6 +23,7 @@ add_library(mgs_runtime STATIC
   os/cpu_seam.c
   os/ppc_shims.c
   os/patch_table.c
+  os/patch_table_usa.c
   platform/jobs.c
   platform/mmio.c
   platform/exi_card.c

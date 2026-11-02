@@ -16,6 +16,7 @@
 #include "launcher.h"
 #include "launcher_core.h"
 #include "os/patch_table.h"
+#include "os/patch_table_usa.h"
 #include "platform/jobs.h"
 #include "module.h"
 #include "gfx/gpu.h"
@@ -887,6 +888,32 @@ static int mem_shim_disabled(void)
     return cached;
 }
 
+/* WHICH BUILD'S PATCH TABLE IS LIVE. The tables are per build - the same
+ * SDK function lives at a different address in GGSEA4 (config/symbols/
+ * GGSEA4, byte-transferred from PAL) - so the dispatch below consults the
+ * table of the build whose disc is mounted, chosen once at mount time.
+ * GGSPA4 stays the default: until a disc says otherwise, this is exactly
+ * the table and window the port has always run with. The US table also
+ * serves GGSJA4, whose main.dol is byte-identical to the US one; only
+ * its REL differs, and the patch table covers the DOL alone. */
+static MgsSdkFn (*s_patch_lookup)(uint32_t) = mgs_patch_lookup;
+static uint32_t s_patch_lo = MGS_PATCH_LO;
+static uint32_t s_patch_span = MGS_PATCH_SPAN;
+static uint32_t s_os_disable = 0x8001FCCCu;   /* GGSPA4 OSDisableInterrupts */
+static uint32_t s_os_restore = 0x8001FCF4u;   /* GGSPA4 OSRestoreInterrupts */
+
+static void patch_select(const char* game_id)
+{
+    if (game_id &&
+        (strcmp(game_id, "GGSEA4") == 0 || strcmp(game_id, "GGSJA4") == 0)) {
+        s_patch_lookup = mgs_patch_lookup_usa;
+        s_patch_lo = MGS_PATCH_LO_USA;
+        s_patch_span = MGS_PATCH_SPAN_USA;
+        s_os_disable = 0x80020680u;
+        s_os_restore = 0x800206A8u;
+    }
+}
+
 static int native_keeps(uint32_t address);
 
 static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
@@ -896,7 +923,7 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
     /* THE MISS FIRST, and without a call. This runs on every guest function
      * call and almost none is a patch; every patch lies in one window near
      * the bottom of MEM1, which the generator emits as constants. */
-    if (address - MGS_PATCH_LO > MGS_PATCH_SPAN) return 0;
+    if (address - s_patch_lo > s_patch_span) return 0;
 
     if (mem_shim_disabled() &&
         (address == 0x800050B4u || address == 0x800050E4u ||
@@ -904,7 +931,7 @@ static int mgs_host_patch_dispatch(void* cpu_state, uint32_t address)
         return 0;
     if (native_keeps(address)) return 0;
 
-    fn = mgs_patch_lookup(address);
+    fn = s_patch_lookup(address);
     if (!fn) return 0;
 
     patch_count(address);
@@ -940,18 +967,18 @@ static int s_native_module;
 static int native_keeps(uint32_t address)
 {
     return s_native_module &&
-           (address == 0x8001FCCCu || address == 0x8001FCF4u);
+           (address == s_os_disable || address == s_os_restore);
 }
 
 static int mgs_host_patch_query(uint32_t address)
 {
-    if (address - MGS_PATCH_LO > MGS_PATCH_SPAN) return 0;
+    if (address - s_patch_lo > s_patch_span) return 0;
     if (native_keeps(address)) return 0;
     if (mem_shim_disabled() &&
         (address == 0x800050B4u || address == 0x800050E4u ||
          address == 0x8000519Cu))
         return 0;
-    return mgs_patch_lookup(address) != NULL;
+    return s_patch_lookup(address) != NULL;
 }
 
 /* A SECOND signal exits outright.
@@ -1867,6 +1894,7 @@ int main(int argc, char** argv)
            path1, disc1.game_id, disc1.disc_number + 1u,
            mgs_disc_source_name(src1));
     overlay_line("DISC 1: %s  (%u FST ENTRIES)", disc1.game_id, disc1.fst.entry_count);
+    patch_select(disc1.game_id);
 
     memset(&disc2, 0, sizeof disc2);
     src2 = mgs_disc_locate(2u, disc2_arg, exe_dir_buf, port_game_id(), path2, sizeof path2);
@@ -2155,7 +2183,7 @@ int main(int argc, char** argv)
                      * hard-coded: it is a PAL-specific address, and the map is
                      * the one place that knows which build this is. */
                     {
-                        MgsSdkFn probe = mgs_patch_lookup(0x800201A4u);
+                        MgsSdkFn probe = s_patch_lookup(s_patch_lo);
                         (void)probe;
                         mgs_interrupt_set_dispatch(0x800201A4u);  /* __OSDispatchInterrupt */
                         /* OSLink(module, bss). The bss pointer is the base

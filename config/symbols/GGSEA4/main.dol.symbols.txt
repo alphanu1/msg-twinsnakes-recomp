@@ -1,0 +1,1273 @@
+#
+# Recovered by the process in docs/decompilation-process.md. Stage 4 is
+# decomp-toolkit signature matching; stage 5 is ordered run alignment
+# against doldecomp/mkdd. Names are the community's own naming or our
+# own analysis - never leaked source (project rule 9).
+#
+# Format: <section> <address> <size> <name> <origin>
+#
+# ORIGIN is the provenance of the NAME, and it is not optional. README.md
+# claims every symbol here was produced by our own analysis or by public
+# clean-room decompilation; this column is that claim's evidence, per symbol.
+#
+#   dtk-sig     decomp-toolkit signature match against the SDK 0x2301 build
+#   mkdd-align  ordered run alignment, by consensus of three independent
+#               reference decomps (mkdd, ttyd, pikmin2) that share this
+#               SDK build. Where they disagreed, all claims were discarded
+#   sdk2004     name confirmed against doldecomp/dolsdk2004 sources
+#   sdk2004-asm full inline-assembly body matched against dolsdk2004 - the
+#               strongest signature there is: the compiler emits those
+#               instructions verbatim, so they are identical across SDK
+#               revisions, link orders and games
+#   callgraph   named by its callees and callers, weighted by rarity;
+#               ambiguity refused rather than resolved by preference
+#   fileline    named from the __FILE__/__LINE__ pair it hands its own
+#               allocator or error routine
+#   callgraph+fileline
+#               both routes independently proposed the same name at the same
+#               address - corroboration, and recorded as such
+#   message     named from its own diagnostic message
+#   ghidra      recovered by our own analysis in Ghidra
+#   own         named by our own reasoning about behaviour
+#   own+sdk2004 found by reading THIS binary's behaviour, then confirmed by
+#               name and signature against doldecomp/dolsdk2004. The two legs
+#               are independent - the behaviour is evidence from our own copy,
+#               the declaration is evidence from a public clean-room source -
+#               so agreement between them is corroboration, not one route
+#
+# NAME CASE CARRIES A CLAIM, exactly as it does in mgso_pal.rel.symbols.txt.
+# A PascalCase or SDK-spelled name asserts the function's ACTUAL name. A
+# lower_snake_case name is OUR DESCRIPTION of what the code does, offered
+# where the real identifier is unknown and is not being guessed at. Mixing
+# the two unmarked would be dishonest about which is evidence and which is
+# a label, so the case distinction carries it.
+#
+# A NAME MAY LEGITIMATELY APPEAR TWICE. `OnReset`, `AlarmHandler` and
+# `Callback` are `static` in the SDK's sources, so several translation units
+# each define one and the linker keeps them all. `BootInfo` and
+# `ResetFunctionInfo` are data. Do not "fix" these by deleting one - a
+# uniqueness check over this file must exempt statics, and a name that IS
+# unique in the SDK appearing twice is a real error. That is how
+# `GXInitLightPos` at both 0x800430D8 and 0x80043358 was caught: the first
+# writes the light object's `a[]` at +0x10 and is `GXInitLightAttnA`.
+#
+# No symbol here may originate from leaked source. See project rule 9 and
+# docs/decompilation-process.md.
+#
+# main.dol is 7.9% of the game's code and is almost entirely SDK,
+# CodeWarrior runtime and the Metrowerks TRK debugger. The engine lives
+# in mgso_pal.rel. See HANDOFF.md F9.
+
+
+# --- stage 5d/5e/5f, 2026-09-19 -------------------------------------------
+# callgraph : named by the set of already-named functions it calls, then
+#             cross-checked against the SDK module its neighbours belong to.
+# fileline  : named from the source file AND LINE NUMBER the function hands
+#             to the game's tracking allocator - __FILE__ and __LINE__,
+#             compiled in. An exact source location, not a resemblance.
+# Both routes agreeing on one address is recorded as `callgraph+fileline`.
+# Sources: doldecomp/dolsdk2004 (SDK), xiph/tremor and xiph/ogg (the Vorbis
+# decoder this game embeds). No code from any of them is in this repository.
+
+# stage 5d, second pass: callers used as evidence as well as callees, so leaf functions become identifiable (--min-distinct 2, module cross-check retained)
+
+# stage 5d, iteration 2: each confirmed name is evidence for the next pass
+
+# stage 5d, iteration 3: each confirmed name is evidence for the next pass
+
+# stage 5b, second pass: whole-assembly functions (146 in the decomp, not only the 33 inner asm{} blocks) matched on mnemonics plus the quantised W bit - which is what separates a three-component vector from a four-component quaternion, and named the three most-called unnamed functions in the game
+
+# stage 5g: named from the diagnostic message the function prints about itself
+
+# Stage 5b, inline-assembly signature match against doldecomp/dolsdk2004.
+
+# rand from its constants; PSMTX44Identity by exact body match.
+
+# GX transform functions, confirmed against dolsdk2004 GXTransform.c.
+
+# Viewport and indexed texture-matrix loads, confirmed against dolsdk2004.
+
+# Semaphore family, identified by behaviour next to the named OSInitSemaphore.
+
+# --- stage 5h, 2026-09-19: the memory-card module ---------------------------
+# Entered through CARDGetStatus, whose body matches CARDStat.c instruction for
+# instruction: the fileNo bound is CARD_MAX_FILE (0x7F), the directory stride
+# is 0x40 (sizeof CARDDir), and the two memcpys are 4 bytes into CARDStat+0x28
+# and 2 bytes into +0x2C - gameName and company, at exactly those offsets in
+# the public header. Its three callees fell out of that and each stands on its
+# own evidence, listed below. __CARDBlock's 0x220 is 2 x sizeof(CARDControl),
+# and diskID at +0x10C is loaded by two of these functions.
+
+# __CARDIsReadable HAS __CARDIsWritable INLINED INTO IT, which is why one
+# 0xF4 function contains both tests. Reading only its head gives the wrong
+# answer: the head is __CARDIsWritable verbatim - NOPERM, then permission
+# & 0x20 with two memcmps against __CARDDiskNone - and it is the tail,
+# `permission & 0x4` returning READY, that identifies the entry point. The
+# call from CARDGetStatus is to __CARDIsReadable, and that agrees.
+
+# The synchronous CARD calls are the SDK's Async-plus-__CARDSync wrapper,
+# which is a shape rather than a signature: call the Async form passing
+# __CARDSyncCallback, return early if it fails, otherwise block in
+# __CARDSync. CARDRenameAsync is pinned by taking TWO filenames, rejecting
+# a leading 0xFF or NUL in either, and returning CARD_RESULT_NAMETOOLONG
+# (-12) past 32 characters - no other CARD entry point takes two names.
+
+# --- stage 5h: three GX entry points, from the register shadows they touch --
+# __GXData+0x204 is the genMode shadow and +0x1DC is PE_CONTROL (BP 0x43 -
+# GXInit writes that index into its top byte at 0x8003F3EC, which is what
+# fixes which register it is rather than assuming it).
+#
+# GXGetCullMode is the inverse of the already-named GXSetCullMode: both map
+# 1 <-> 2, because the hardware's cull field has FRONT and BACK swapped
+# relative to the API enum. It is adjacent to GXSetCullMode and the same
+# 0x44 bytes. GXInitTexObjWrapMode sets two 2-bit fields at bits 0-1 and
+# 2-3 of the texture object's mode word - wrap_s and wrap_t. GXPixModeSync
+# takes no argument and re-sends PE_CONTROL unchanged, which is the whole
+# of what that function is for.
+
+# --- stage 5h: main.dol's only square root, and it is NOT sqrtf ------------
+# 146 calls from the engine, the most of any unnamed function in this file.
+# Body is the SDK's sqrtf exactly - frsqrte, three Newton-Raphson rounds
+# against the constants 0.0, 0.5 and 3.0 at 0x800620A0/C0/C8, then frsp -
+# with one addition: it first replaces its argument with |x| by clearing
+# the sign bit through memory, and the iterations and the early-out both
+# then run on |x|. So it returns a real root for negative input where
+# sqrtf returns the input unchanged. That is a different function and is
+# named for what it does, not for what it resembles. The genuine sqrtf is
+# in the REL at .text 0x017834; the engine calls both, deliberately.
+
+# --- stage 5h: three more of the matrix library -----------------------------
+# All three sit in the block whose constant pool is .sdata2 0x8027E530-0x5C,
+# and reading that pool out of the emitted data is what confirms them: 1.0,
+# 0.0, 0.5, 2.0, -1.0, then 0.017453292 - pi/180, which only a matrix library
+# keeps. Each function's constants are then exactly the ones its formula
+# needs, which is a per-function check rather than a regional argument.
+#
+# C_MTXOrtho writes all sixteen floats of a Mtx44: 2/(r-l) and -(r+l)/(r-l),
+# 2/(t-b) and -(t+b)/(t-b), -1/(f-n) and -f/(f-n), 1.0 - matching mtx.h's
+# (m, t, b, l, r, n, f) argument order exactly.
+#
+# PSMTXQuat reads four floats as two paired singles and writes a 3x4, with
+# 0.0 stored to all three translation components. It derives 2.0 as 1.0+1.0
+# and 0.0 as 1.0-1.0 from a single loaded constant, which is the paired-single
+# idiom throughout this library.
+#
+# PSVECDistance loads each vector twice at +0x0 and +0x4 so the three
+# components land in two paired registers, sums the squares with ps_sum0,
+# and takes one Newton-Raphson round against 0.5 and 3.0. One round, not
+# three - that is PSVECMag's refinement and it distinguishes these from the
+# scalar sqrt at 0x80006668.
+
+# --- stage 5h: a set/clear pair on one flag word ---------------------------
+# `bits |= 1 << n` and `bits &= ~(1 << n)` over the word at the head of the
+# 0x30-byte block at .bss 0x801E7DF8. Konami's own code, so these are
+# DESCRIPTIONS and lower-cased accordingly - what the block is for is not
+# established, and naming it would be a guess rather than a reading. Six
+# functions touch it; only these two are this simple.
+
+# --- stage 5i, 2026-09-19: the engine's frame pipeline, named by watching it
+# The first names here that were established by RUNNING the game rather than
+# by reading it. The boot's stopping point (HANDOFF F122-F124) is a frame
+# pipeline, and instrumenting it identified every part: a submitting side, a
+# 4-slot ring, a completion callback and an idle poll thread. All Konami's
+# own code, so all lower-case DESCRIPTIONS - what these are called is not
+# known and is not being guessed at.
+#
+# The evidence for each is its observed behaviour across a whole boot, which
+# is stronger than a static reading: the ring really does advance 0,1,2,3,0
+# in step with 62 completions, and the flag really is the thing that decides
+# whether the main loop wakes.
+#
+# Ring base 0x8020B918: producer index at +0x16F0, consumer at +0x16F8,
+# 4 slots of 0x18, per-slot wake flag at +0x64, semaphore at +0x40.
+
+# --- stage 5i: a correction, with the evidence that forced it --------------
+# 0x8004C318 CARRIED `DEMOBeforeRender`, origin `callgraph`. It is withdrawn.
+#
+# Two independent reasons, neither of which was available when it was named:
+#
+#   1. LOCALITY. config/symbols/main.dol.files.txt attributes CR_System.c at
+#      0x8004B6D8 and again at 0x8004C82C, from this binary's own __FILE__
+#      strings. 0x8004C318 sits between them - Konami's code, not the SDK's
+#      demo library.
+#   2. BEHAVIOUR. It blocks on a semaphore, arms a slot in a 4-slot frame
+#      ring, emits the frame's GX setup and advances the producer index.
+#      The SDK's DEMOBeforeRender does none of that; it is a short helper
+#      that sets up viewport and matrices. A function that SLEEPS is not it.
+#
+# The `mode` argument decides both halves together: mode == -1 skips the wait
+# AND clears the slot's wake flag, so an unwaited submission also signals
+# nobody. That symmetry is what ruled out "the flag was clear" as the cause
+# of the boot's missing signal (F124).
+
+# ---------------------------------------------------------------------------
+# CARD, by source-order alignment against doldecomp/dolsdk2004 · sdk2004-align
+#
+# The method is stage 5's, applied to a different reference: dolsdk2004
+# publishes the CARD sources, and the compiler emits a translation unit's
+# functions in source order. Where a run of unnamed functions is BRACKETED BY
+# TWO NAMED ONES and the number between matches the number the source requires
+# exactly, each name is fixed by construction - there is no room for it to be
+# anything else. A count that does not match means a function was stripped or
+# the file order differs, and nothing in that gap is named.
+#
+# Three such brackets, all exact:
+#
+#   CARDMountAsync .. __CARDFormatRegionAsync   expects 4, found 4
+#   __CARDAccess   .. __CARDIsReadable          expects 1, found 1
+#   CARDGetStatus  .. CARDRenameAsync           expects 2, found 2
+#
+# Corroborated by shape: the SDK's sync wrappers around an async call are all
+# 0x48 bytes here - CARDRename (already named) is 0x48, and so are CARDMount,
+# CARDCreate and CARDSetStatus below.
+#
+# Gaps deliberately NOT named: __CARDFormatRegionAsync..__CARDAccess expects 4
+# and has 2, and __CARDIsReadable..CreateCallbackFat expects 5 and has 4. Both
+# are short by functions the linker stripped, and which one was dropped decides
+# every name in the gap, so they stay unnamed.
+
+# CARDCreate.c holds exactly three functions and the first is named, so the
+# next two are its remaining two unless one was stripped - and the 0x48 sync
+# wrapper being present says it was not. Anchored on one side only, which is
+# why it is recorded apart from the brackets above.
+
+# GXTransform.c, same bracket method (stage 5g).
+#
+#   GXLoadPosMtxImm .. GXLoadNrmMtxImm   expects 1, found 1   taken
+#
+# Three further GX gaps were checked and REFUSED, all short by functions the
+# linker stripped:
+#   GXLoadNrmMtxImm .. GXSetCurrentMtx   expects 2 (Imm3x3, Indx3x3), found 1
+#   GXSetTevDirect  .. __GXUpdateBPMask  expects 5 (IndWarp..IndRepeat), found 1
+#   __GXCleanGPFifo .. GXGetCPUFifo      expects 2 (Set/GetCurrentGXThread), found 1
+#
+# The last is tempting - 0x80040AD8 is 0x4C, far too large for a getter that
+# returns one word, so it "must" be GXSetCurrentGXThread. That is resemblance,
+# and resemblance is what the count test exists to refuse. It stays unnamed.
+
+# ---- Konami's streaming sound layer, and the language index (F231, F232) ---
+#
+# `sd_stream_thread` is the loop the engine's `gcn_stream_serve_requests`
+# wakes: it blocks in `OSReceiveMessage` on its own queue and dispatches
+# seventeen commands through `jumptable_801E7C00`. `sd_stream_request_done`
+# is the other half of that handshake — the engine calls it when it has
+# finished serving a data request, and it posts message 1 back. Both are in
+# `sd_stream2.c` by the file attribution in main.dol.files.txt.
+#
+# `gGameLanguage` is set from the disc's country code and, for a PAL disc,
+# from `OSGetLanguage`; the engine's consumer factory refuses to create a
+# stream task unless the high half of its tag equals this byte, which is how
+# one language's audio is decoded and the rest discarded.
+#
+# Two further threads in this subsystem are identified but deliberately NOT
+# named: the loops at 0x80052764 and 0x8005440C, blocking on 0x802133A4 and
+# 0x80213384. What each is FOR is not established, and a name would be a
+# guess dressed as a finding.
+
+# ---- the AX frame callback, and what it drives (F233) ----------------------
+#
+# `AXRegisterCallback` is identified beyond doubt: `dolsdk2004`'s AXOut.c
+# body is five statements — read the old pointer, disable interrupts, store
+# the new one, restore, return the old — and this function is those five
+# instructions in that order around the word at 0x8027DF00, which is
+# therefore `__AXUserFrameCallback`. `__AXOutNewFrame` calls it through
+# `blrl` when it is non-null, once per AX frame.
+#
+# `sd_ax_frame_callback` is what this game registers there, and
+# `sd_stream_pump` is the part of it that matters to streamed media: it walks
+# eight channels of stride 0x10C from 0x8021A070 and, for a channel in state
+# 9, posts to the sound threads. That is the only driver of the sound
+# subsystem that comes from outside it — every other sender is one sound
+# thread waking another.
+
+# ---- the voice whose position clocks the whole streamed pipeline (F234) ----
+#
+# `AXSetVoiceAddr` matches `dolsdk2004`'s AXVPB.c exactly: it takes the
+# voice's `&p->pb.addr` (0x138 + 0x6E = 0x1A6, which is the constant this
+# function adds), copies four 32-bit words from its second argument under
+# `OSDisableInterrupts`, then switches on `addr->format`.
+#
+# The voice allocator at `0x8003198C` is left unnamed. Its behaviour is clear
+# — priority, callback and user context in, a voice off the free list at
+# 0x801EDF20 out — but `dolsdk2004` does not carry that function, and the
+# SDK spelling would be asserted rather than confirmed.
+
+# ---- AX's voice service, and the block the DSP owns (F235) -----------------
+#
+# `__AXServiceVPB` matches `dolsdk2004`'s AXVPB.c statement for statement: it
+# increments a voice counter, indexes an array at `index * 0xF4` (which is
+# `sizeof(AXPB)`), and on `sync == 0` copies back exactly four fields from
+# the DSP's block to the user's — `state` (+0x0E), `ve.currentVolume`
+# (+0x64) and `addr.currentAddress` (+0x7A/+0x7C). The array it indexes is
+# therefore `__AXPB`, the block AX hands to the DSP, and the counter is
+# `__AXNumVoices`, which `__AXGetNumVoices` returns in two instructions.
+#
+# Reading `__AXNumVoices` is what showed AX was servicing no voices at all
+# before the resume mail was enabled: it read 0, and that function only ever
+# increments it.
+# main.dol symbols - GGSEA4 (USA), SHA-1 4864afb5eacc8dd11ad98dbf14f79053767d7a6d
+# Transferred from the GGSPA4 map by tools/transfer-symbols.py (byte
+# matching against the US binary; origin byte-transfer = exact unique
+# match, byte-transfer-near = within 1/8 differing words at the delta the
+# exact matches establish). 953 of 1058 sized symbols placed. Names keep
+# their PAL provenance's naming; UNMATCHED symbols are absent, not guessed.
+.init 0x800050B4 0x30 memset byte-transfer
+.init 0x800050E4 0xB8 __fill_mem byte-transfer
+.init 0x8000519C 0x50 memcpy byte-transfer
+.init 0x800051EC 0x40 __check_pad3 byte-transfer-near
+.init 0x8000522C 0xC __set_debug_bba byte-transfer
+.init 0x80005238 0x8 __get_debug_bba byte-transfer
+.init 0x80005240 0x15C __start byte-transfer-near
+.init 0x8000539C 0x90 __init_registers byte-transfer-near
+.init 0x8000542C 0xC0 __init_data byte-transfer
+.init 0x80005510 0x34 __flush_cache byte-transfer
+.text 0x80006958 0x24 main byte-transfer
+.text 0x800072CC 0xF8 TRKNubMainLoop byte-transfer-near
+.text 0x800073C4 0x24 TRKDestructEvent byte-transfer
+.text 0x800073E8 0x18 TRKConstructEvent byte-transfer
+.text 0x80007400 0xE0 TRKPostEvent byte-transfer-near
+.text 0x800074E0 0xB4 TRKGetNextEvent byte-transfer-near
+.text 0x800075EC 0x28 TRKNubWelcome byte-transfer-near
+.text 0x80007614 0x24 TRKTerminateNub byte-transfer
+.text 0x80007638 0x14C TRKInitializeNub byte-transfer-near
+.text 0x80007784 0x44 TRKMessageSend byte-transfer-near
+.text 0x800077C8 0xF0 TRKReadBuffer_ui32 byte-transfer-near
+.text 0x800078B8 0x98 TRKReadBuffer_ui8 byte-transfer
+.text 0x80007950 0xE8 TRKReadBuffer1_ui64 byte-transfer-near
+.text 0x80007A38 0xFC TRKAppendBuffer_ui32 byte-transfer-near
+.text 0x80007B34 0x68 TRKAppendBuffer_ui8 byte-transfer
+.text 0x80007B9C 0xFC TRKAppendBuffer1_ui64 byte-transfer-near
+.text 0x80007C98 0x8C TRKReadBuffer byte-transfer
+.text 0x80007D24 0xA4 TRKAppendBuffer byte-transfer
+.text 0x80007DC8 0x30 TRKSetBufferPosition byte-transfer
+.text 0x80007DF8 0x40 TRKResetBuffer byte-transfer
+.text 0x80007E38 0x64 TRKReleaseBuffer byte-transfer-near
+.text 0x80007E9C 0x2C TRKGetBuffer byte-transfer-near
+.text 0x80007EC8 0xC8 TRKGetFreeBuffer byte-transfer-near
+.text 0x80007F90 0x74 TRKInitializeMessageBuffers byte-transfer-near
+.text 0x800089B8 0x8 TRKTerminateSerialHandler byte-transfer-near
+.text 0x8000800C 0xC4 TRKInitializeSerialHandler byte-transfer-near
+.text 0x800080D0 0x50 TRKProcessInput byte-transfer-near
+.text 0x80008120 0x60 TRKGetInput byte-transfer-near
+.text 0x80008180 0x13C TRKTestForPacket byte-transfer-near
+.text 0x800082C0 0x88 usr_puts_serial byte-transfer-near
+.text 0x80008348 0x170 TRKDispatchMessage byte-transfer-near
+.text 0x80008E6C 0x8 TRKInitializeDispatcher byte-transfer-near
+.text 0x800084C0 0xA8 TRKDoSetOption byte-transfer-near
+.text 0x80008568 0xA8 TRKDoStop byte-transfer
+.text 0x80008610 0x220 TRKDoStep byte-transfer
+.text 0x80008830 0xB0 TRKDoContinue byte-transfer-near
+.text 0x800088E0 0x290 TRKDoWriteRegisters byte-transfer-near
+.text 0x80008B70 0x2E0 TRKDoReadRegisters byte-transfer-near
+.text 0x80008E50 0x1F4 TRKDoWriteMemory byte-transfer-near
+.text 0x80009044 0x1EC TRKDoReadMemory byte-transfer-near
+.text 0x80009BE4 0x8 TRKDoSupportMask byte-transfer-near
+.text 0x80009BEC 0x8 TRKDoVersions byte-transfer-near
+.text 0x80009240 0x58 TRKDoOverride byte-transfer
+.text 0x80009298 0x58 TRKDoReset byte-transfer
+.text 0x800092F0 0x78 TRKDoDisconnect byte-transfer-near
+.text 0x80009368 0x64 TRKDoConnect byte-transfer-near
+.text 0x800093CC 0xC SetTRKConnected byte-transfer-near
+.text 0x800093D8 0x10 GetTRKConnected byte-transfer-near
+.text 0x800093E8 0xA8 OutputData byte-transfer-near
+.text 0x80009490 0x110 HandlePositionFileSupportRequest byte-transfer
+.text 0x800095A0 0xE8 HandleCloseFileSupportRequest byte-transfer
+.text 0x80009688 0x11C HandleOpenFileSupportRequest byte-transfer-near
+.text 0x800097A4 0x1E0 TRKRequestSend byte-transfer-near
+.text 0x80009984 0x240 TRKSuppAccessFile byte-transfer
+.text 0x8000A578 0x8 TRKReleaseMutex byte-transfer-near
+.text 0x8000A580 0x8 TRKAcquireMutex byte-transfer-near
+.text 0x8000A588 0x8 TRKInitializeMutex byte-transfer-near
+.text 0x80009BDC 0x98 TRKDoNotifyStopped byte-transfer
+.text 0x80009C74 0x38 TRK_flush_cache byte-transfer
+.text 0x80009CAC 0xB8 TRK_fill_mem byte-transfer
+.text 0x8000A718 0x8 __TRK_get_MSR byte-transfer-near
+.text 0x8000A720 0x8 __TRK_set_MSR byte-transfer-near
+.text 0x80009D74 0x3C TRK_ppc_memcpy byte-transfer
+.text 0x80009F44 0x9C TRKExceptionHandler byte-transfer-near
+.text 0x80009FE0 0xC4 TRKSwapAndGo byte-transfer-near
+.text 0x8000A0A4 0x54 TRKInterruptHandlerEnableInterrupts byte-transfer-near
+.text 0x8000A0F8 0x10 TRKTargetSetInputPendingPtr byte-transfer-near
+.text 0x8000A108 0x18 TRKTargetStop byte-transfer-near
+.text 0x8000A120 0x10 TRKTargetSetStopped byte-transfer-near
+.text 0x8000A130 0x10 TRKTargetStopped byte-transfer-near
+.text 0x8000A140 0x200 TRKTargetSupportRequest byte-transfer-near
+.text 0x8000A340 0x10 TRKTargetGetPC byte-transfer-near
+.text 0x8000A350 0xB8 TRKTargetStepOutOfRange byte-transfer-near
+.text 0x8000A408 0xAC TRKTargetSingleStep byte-transfer-near
+.text 0x8000A4B4 0x84 TRKTargetAddExceptionInfo byte-transfer-near
+.text 0x8000A538 0x8C TRKTargetAddStopInfo byte-transfer-near
+.text 0x8000A5C4 0x190 TRKTargetInterrupt byte-transfer-near
+.text 0x8000A754 0xAC TRKPostInterruptEvent byte-transfer-near
+.text 0x8000A800 0x438 TRKTargetAccessExtended2 byte-transfer-near
+.text 0x8000AC38 0x170 TRKTargetAccessExtended1 byte-transfer-near
+.text 0x8000B274 0xF4 TRKTargetAccessDefault byte-transfer-near
+.text 0x8000B368 0x4C TRKTargetReadInstruction byte-transfer
+.text 0x8000B3B4 0x14C TRKTargetAccessMemory byte-transfer-near
+.text 0x8000B500 0x2A4 TRKValidMemory32 byte-transfer-near
+.text 0x8000C164 0x8 TRKAccessFile byte-transfer-near
+.text 0x8000C16C 0x8 TRKOpenFile byte-transfer-near
+.text 0x8000C174 0x8 TRKCloseFile byte-transfer-near
+.text 0x8000C17C 0x8 TRKPositionFile byte-transfer-near
+.text 0x8000B7D0 0x1B8 TRKSaveExtended1Block byte-transfer-near
+.text 0x8000B988 0x1B8 TRKRestoreExtended1Block byte-transfer-near
+.text 0x8000BB40 0x94 InitMetroTRK byte-transfer-near
+.text 0x8000BBD8 0x94 InitMetroTRK_BBA byte-transfer-near
+.text 0x8000BCB8 0x12C __TRK_copy_vectors byte-transfer-near
+.text 0x8000BDE4 0x58 TRKTargetTranslate byte-transfer-near
+.text 0x8000BE3C 0x20 EnableMetroTRKInterrupts byte-transfer
+.text 0x8000BEB4 0x88 TRKLoadContext byte-transfer
+.text 0x8000BF98 0x30 TRK_board_display byte-transfer-near
+.text 0x8000BFC8 0x30 UnreserveEXI2Port byte-transfer-near
+.text 0x8000BFF8 0x30 ReserveEXI2Port byte-transfer-near
+.text 0x8000C028 0x3C TRKWriteUARTN byte-transfer-near
+.text 0x8000C064 0x3C TRKReadUARTN byte-transfer-near
+.text 0x8000C0A0 0x30 TRKPollUART byte-transfer-near
+.text 0x8000C0D0 0x48 EnableEXI2Interrupts byte-transfer-near
+.text 0x8000C118 0x50 TRKInitializeIntDrivenUART byte-transfer-near
+.text 0x8000C168 0x26C InitMetroTRKCommTable byte-transfer-near
+.text 0x8000C3D4 0x38 TRKEXICallBack byte-transfer-near
+.text 0x8000C40C 0x34 TRKTargetContinue byte-transfer
+.text 0x8000C440 0x10 GetUseSerialIO byte-transfer-near
+.text 0x8000C450 0xC SetUseSerialIO byte-transfer-near
+.text 0x8000C45C 0x84 __close_console byte-transfer
+.text 0x8000C4E0 0xBC __TRK_write_console byte-transfer
+.text 0x8000C59C 0xBC __read_console byte-transfer
+.text 0x8000D00C 0x8 udp_cc_post_stop byte-transfer-near
+.text 0x8000D014 0x8 udp_cc_pre_continue byte-transfer-near
+.text 0x8000D01C 0x8 udp_cc_peek byte-transfer-near
+.text 0x8000D024 0x8 udp_cc_write byte-transfer-near
+.text 0x8000D02C 0x8 udp_cc_read byte-transfer-near
+.text 0x8000D034 0x8 udp_cc_close byte-transfer-near
+.text 0x8000D03C 0x8 udp_cc_open byte-transfer-near
+.text 0x8000D044 0x8 udp_cc_shutdown byte-transfer-near
+.text 0x8000D04C 0x8 udp_cc_initialize byte-transfer-near
+.text 0x8000C6A0 0x24 ddh_cc_initinterrupts byte-transfer-near
+.text 0x8000C6C4 0x70 ddh_cc_peek byte-transfer-near
+.text 0x8000C734 0x24 ddh_cc_post_stop byte-transfer-near
+.text 0x8000C758 0x24 ddh_cc_pre_continue byte-transfer-near
+.text 0x8000C77C 0xC0 ddh_cc_write byte-transfer-near
+.text 0x8000C83C 0xEC ddh_cc_read byte-transfer-near
+.text 0x8000D2DC 0x8 ddh_cc_close byte-transfer-near
+.text 0x8000C930 0x24 ddh_cc_open byte-transfer
+.text 0x8000D308 0x8 ddh_cc_shutdown byte-transfer-near
+.text 0x8000C9E4 0x108 CircleBufferReadBytes byte-transfer
+.text 0x8000CAEC 0x108 CircleBufferWriteBytes byte-transfer
+.text 0x8000CBF4 0x50 CircleBufferInitialize byte-transfer
+.text 0x8000D5F8 0x8 CBGetBytesAvailableForRead byte-transfer-near
+.text 0x8000CC4C 0x24 gdev_cc_initinterrupts byte-transfer-near
+.text 0x8000CC70 0x70 gdev_cc_peek byte-transfer-near
+.text 0x8000CCE0 0x24 gdev_cc_post_stop byte-transfer-near
+.text 0x8000CD04 0x24 gdev_cc_pre_continue byte-transfer-near
+.text 0x8000CD28 0xC0 gdev_cc_write byte-transfer-near
+.text 0x8000CDE8 0xF4 gdev_cc_read byte-transfer-near
+.text 0x8000D890 0x8 gdev_cc_close byte-transfer-near
+.text 0x8000CEE4 0x24 gdev_cc_open byte-transfer
+.text 0x8000D8BC 0x8 gdev_cc_shutdown byte-transfer-near
+.text 0x8000CF98 0x50 MWTRACE byte-transfer-near
+.text 0x8000CFE8 0x24 MWExitCriticalSection byte-transfer-near
+.text 0x8000D00C 0x30 MWEnterCriticalSection byte-transfer-near
+.text 0x8000DADC 0xC8 __va_arg byte-transfer
+.text 0x8000DBA4 0x48 __destroy_global_chain byte-transfer
+.text 0x8000DBEC 0x5C __cvt_fp2unsigned byte-transfer-near
+.text 0x8000DC48 0x4C __save_fpr byte-transfer
+.text 0x8000DC94 0x4C __restore_fpr byte-transfer
+.text 0x8000DCE0 0x4C __save_gpr byte-transfer
+.text 0x8000DD2C 0x4C __restore_gpr byte-transfer
+.text 0x8000DD78 0xEC __div2u byte-transfer
+.text 0x8000DE64 0x138 __div2i byte-transfer
+.text 0x8000DF9C 0xE4 __mod2u byte-transfer
+.text 0x8000E080 0x10C __mod2i byte-transfer
+.text 0x8000E18C 0x24 __shl2i byte-transfer
+.text 0x8000E1B0 0x24 __shr2u byte-transfer
+.text 0x8000E1D4 0x28 __shr2i byte-transfer
+.text 0x8000E1FC 0xB4 __cvt_sll_flt byte-transfer
+.text 0x8000E4EC 0xF0 exit byte-transfer-near
+.text 0x8000E5DC 0x70 free byte-transfer-near
+.text 0x8000F4B4 0x70 __flush_all byte-transfer-near
+.text 0x8000F524 0xA8 __close_all byte-transfer-near
+.text 0x80011520 0x10 abs byte-transfer
+.text 0x80011530 0xC4 __flush_buffer byte-transfer
+.text 0x800115F4 0x34 __prep_buffer byte-transfer
+.text 0x80011634 0x24 tolower byte-transfer-near
+.text 0x80011658 0x30C __fwrite byte-transfer-near
+.text 0x80011964 0x7C fwrite byte-transfer
+.text 0x800119E0 0x138 fflush byte-transfer
+.text 0x80011B18 0x1BC fclose byte-transfer
+.text 0x80011CD4 0x6C fseek byte-transfer
+.text 0x80012024 0x118 wcstombs byte-transfer-near
+.text 0x8001213C 0x4C memcmp byte-transfer
+.text 0x80012188 0x2C __memrchr byte-transfer
+.text 0x800121B4 0x2C memchr byte-transfer
+.text 0x800121E0 0xCC memmove byte-transfer
+.text 0x800122AC 0xAC __copy_longs_rev_unaligned byte-transfer
+.text 0x80012358 0xC0 __copy_longs_unaligned byte-transfer
+.text 0x80012418 0xA8 __copy_longs_rev_aligned byte-transfer
+.text 0x800124C0 0xBC __copy_longs_aligned byte-transfer
+.text 0x8001257C 0x10 __stdio_atexit byte-transfer-near
+.text 0x8001258C 0xE0 sprintf byte-transfer-near
+.text 0x8001266C 0x78 vsprintf byte-transfer-near
+.text 0x800126E4 0x98 vprintf byte-transfer-near
+.text 0x8001285C 0x6C __StringWrite byte-transfer-near
+.text 0x800128C8 0x58 __FileWrite byte-transfer-near
+.text 0x80012920 0x774 __pformatter byte-transfer-near
+.text 0x80013094 0x71C float2str byte-transfer-near
+.text 0x800137B0 0x12C round_decimal byte-transfer
+.text 0x800138DC 0x338 double2hex byte-transfer-near
+.text 0x80013C14 0x314 longlong2str byte-transfer-near
+.text 0x80013F28 0x258 long2str byte-transfer-near
+.text 0x80014180 0x504 parse_format byte-transfer-near
+.text 0x80014684 0x16C qsort byte-transfer
+.text 0x800148A8 0x30 strchr byte-transfer
+.text 0x800148D8 0x40 strncmp byte-transfer
+.text 0x80014918 0x128 strcmp byte-transfer
+.text 0x80014A40 0x2C strcat byte-transfer
+.text 0x80014A6C 0x44 strncpy byte-transfer
+.text 0x80014AB0 0xB8 strcpy byte-transfer
+.text 0x80014B68 0x1C strlen byte-transfer
+.text 0x8001508C 0x88 fwide byte-transfer
+.text 0x80016508 0x3A0 __ieee754_rem_pio2 byte-transfer-near
+.text 0x800168A8 0xF4 __kernel_cos byte-transfer
+.text 0x8001699C 0xE54 __kernel_rem_pio2 byte-transfer-near
+.text 0x800177F0 0xA0 __kernel_sin byte-transfer
+.text 0x80017890 0x214 __kernel_tan byte-transfer-near
+.text 0x80017AA4 0x218 atan byte-transfer-near
+.text 0x80017CBC 0x144 ceil byte-transfer
+.text 0x80017E00 0x28 copysign byte-transfer
+.text 0x80017E28 0xD4 cos byte-transfer
+.text 0x80017EFC 0x148 floor byte-transfer
+.text 0x80018044 0x8C frexp byte-transfer
+.text 0x800180D0 0x1C4 ldexp byte-transfer
+.text 0x80018294 0xFC modf byte-transfer
+.text 0x80018390 0xD8 sin byte-transfer
+.text 0x80018468 0x78 tan byte-transfer
+.text 0x80018540 0x20 fmod byte-transfer
+.text 0x80018580 0x24 tanf byte-transfer
+.text 0x800185A4 0x24 sinf byte-transfer
+.text 0x800185C8 0x24 cosf byte-transfer
+.text 0x80018698 0xF4 SetExiInterruptMask byte-transfer-near
+.text 0x8001878C 0x25C EXIImm byte-transfer-near
+.text 0x800189E8 0xA0 EXIImmEx byte-transfer
+.text 0x80018A88 0xEC EXIDma byte-transfer-near
+.text 0x80018B74 0x24C EXISync byte-transfer-near
+.text 0x80018DC0 0x48 EXIClearInterrupts byte-transfer
+.text 0x80018E08 0x7C EXISetExiCallback byte-transfer-near
+.text 0x80018E84 0x174 __EXIProbe byte-transfer-near
+.text 0x80018FF8 0x80 EXIProbe byte-transfer-near
+.text 0x80019078 0xB4 EXIProbeEx byte-transfer-near
+.text 0x8001912C 0x10C EXIAttach byte-transfer-near
+.text 0x80019238 0xBC EXIDetach byte-transfer-near
+.text 0x800192F4 0x12C EXISelect byte-transfer-near
+.text 0x80019420 0x110 EXIDeselect byte-transfer-near
+.text 0x80019530 0xC8 EXIIntrruptHandler byte-transfer-near
+.text 0x800195F8 0x218 TCIntrruptHandler byte-transfer-near
+.text 0x80019810 0xD0 EXTIntrruptHandler byte-transfer-near
+.text 0x800198E0 0x1D4 EXIInit byte-transfer-near
+.text 0x80019AB4 0xF4 EXILock byte-transfer-near
+.text 0x80019BA8 0xDC EXIUnlock byte-transfer-near
+.text 0x80019C84 0x18 EXIGetState byte-transfer-near
+.text 0x80019C9C 0x28 UnlockedHandler byte-transfer
+.text 0x80019CC4 0x3B0 EXIGetID byte-transfer-near
+.text 0x8001A074 0x18C ProbeBarnacle byte-transfer
+.text 0x8001A200 0x1BC __OSEnableBarnacle byte-transfer
+.text 0x8001A3BC 0x70 InitializeUART byte-transfer
+.text 0x8001A42C 0x21C WriteUARTN byte-transfer
+.text 0x8001A648 0x20 SIBusy byte-transfer-near
+.text 0x8001A668 0x3C SIIsChanBusy byte-transfer-near
+.text 0x8001A6A4 0x2FC CompleteTransfer byte-transfer-near
+.text 0x8001A9A0 0x344 SIInterruptHandler byte-transfer-near
+.text 0x8001ACE4 0x98 SIEnablePollingInterrupt byte-transfer-near
+.text 0x8001AD7C 0xCC SIRegisterPollingHandler byte-transfer-near
+.text 0x8001AE48 0xF4 SIUnregisterPollingHandler byte-transfer-near
+.text 0x8001AF3C 0xB4 SIInit byte-transfer-near
+.text 0x8001AFF0 0x20C __SITransfer byte-transfer-near
+.text 0x8001B1FC 0x7C SIGetStatus byte-transfer-near
+.text 0x8001B278 0x14 SISetCommand byte-transfer
+.text 0x8001B28C 0x10 SITransferCommands byte-transfer
+.text 0x8001B29C 0x6C SISetXY byte-transfer-near
+.text 0x8001B308 0x9C SIEnablePolling byte-transfer-near
+.text 0x8001B3A4 0x6C SIDisablePolling byte-transfer-near
+.text 0x8001B410 0xD4 SIGetResponseRaw byte-transfer-near
+.text 0x8001B4E4 0xC4 SIGetResponse byte-transfer-near
+.text 0x8001B5A8 0x8C AlarmHandler byte-transfer-near
+.text 0x8001B634 0x16C SITransfer byte-transfer-near
+.text 0x8001B7A0 0x298 GetTypeCallback byte-transfer-near
+.text 0x8001BA38 0x1C4 SIGetType byte-transfer-near
+.text 0x8001BBFC 0x13C SIGetTypeAsync byte-transfer-near
+.text 0x8001BD38 0x14C SIDecodeType byte-transfer
+.text 0x8001BE84 0x24 SIProbe byte-transfer
+.text 0x8001BEA8 0xE4 SISetSamplingRate byte-transfer-near
+.text 0x8001BF8C 0x24 SIRefreshSamplingRate byte-transfer
+.text 0x8001BFB0 0x8 PPCMfmsr byte-transfer-near
+.text 0x8001BFB8 0x8 PPCMtmsr byte-transfer-near
+.text 0x8001BFC0 0x8 PPCMfhid0 byte-transfer
+.text 0x8001BFC8 0x8 PPCMthid0 byte-transfer-near
+.text 0x8001BFD0 0x8 PPCMfl2cr byte-transfer
+.text 0x8001BFD8 0x8 PPCMtl2cr byte-transfer
+.text 0x8001BFE0 0x8 PPCMtdec byte-transfer
+.text 0x8001BFE8 0x8 PPCSync byte-transfer-near
+.text 0x8001BFF0 0x14 PPCHalt byte-transfer
+.text 0x8001C004 0x8 PPCMtmmcr0 byte-transfer
+.text 0x8001C00C 0x8 PPCMtmmcr1 byte-transfer
+.text 0x8001C014 0x8 PPCMtpmc1 byte-transfer
+.text 0x8001C01C 0x8 PPCMtpmc2 byte-transfer
+.text 0x8001C024 0x8 PPCMtpmc3 byte-transfer
+.text 0x8001C02C 0x8 PPCMtpmc4 byte-transfer
+.text 0x8001C034 0x20 PPCMffpscr byte-transfer
+.text 0x8001C054 0x28 PPCMtfpscr byte-transfer
+.text 0x8001C07C 0x8 PPCMfhid2 byte-transfer
+.text 0x8001C084 0x8 PPCMthid2 byte-transfer
+.text 0x8001C08C 0xC PPCMfwpar byte-transfer
+.text 0x8001C098 0x8 PPCMtwpar byte-transfer
+.text 0x8001C0A0 0x28 PPCDisableSpeculation byte-transfer
+.text 0x8001C0C8 0x8 PPCSetFpNonIEEEMode byte-transfer
+.text 0x8001C0D0 0x128 __OSFPRInit byte-transfer-near
+.text 0x8001C1F8 0x28 OSGetConsoleType byte-transfer
+.text 0x8001C220 0x128 ClearArena byte-transfer-near
+.text 0x8001C348 0x3C InquiryCallback byte-transfer-near
+.text 0x8001C384 0x3D8 OSInit byte-transfer-near
+.text 0x8001C75C 0x280 OSExceptionInit byte-transfer-near
+.text 0x8001C9DC 0x24 __OSDBIntegrator byte-transfer
+.text 0x8001CA04 0x1C __OSSetExceptionHandler byte-transfer
+.text 0x8001CA20 0x14 __OSGetExceptionHandler byte-transfer
+.text 0x8001CA34 0x9C OSExceptionVector byte-transfer-near
+.text 0x8001CAD0 0x58 OSDefaultExceptionHandler byte-transfer
+.text 0x8001CB28 0x54 __OSPSInit byte-transfer
+.text 0x8001CB7C 0x14 __OSGetDIConfig byte-transfer
+.text 0x8001CB90 0x2C OSRegisterVersion byte-transfer
+.text 0x8001CBBC 0x58 OSInitAlarm byte-transfer-near
+.text 0x8001CC14 0x10 OSCreateAlarm byte-transfer
+.text 0x8001CC24 0x250 InsertAlarm byte-transfer-near
+.text 0x8001CE74 0x68 OSSetAlarm byte-transfer
+.text 0x8001CEDC 0x11C OSCancelAlarm byte-transfer
+.text 0x8001CFF8 0x230 DecrementerExceptionCallback byte-transfer
+.text 0x8001D228 0x50 DecrementerExceptionHandler byte-transfer
+.text 0x8002F69C 0xBC OnReset byte-transfer
+.text 0x8001D318 0xAC DLInsert byte-transfer
+.text 0x8001D3C4 0xFC OSAllocFromHeap byte-transfer
+.text 0x8001D4C0 0x7C OSFreeToHeap byte-transfer
+.text 0x8001D53C 0x10 OSSetCurrentHeap byte-transfer
+.text 0x8001D54C 0x70 OSInitAlloc byte-transfer
+.text 0x8001D5BC 0x6C OSCreateHeap byte-transfer
+.text 0x8001D72C 0x8 OSGetArenaHi byte-transfer
+.text 0x8001D734 0x8 OSGetArenaLo byte-transfer
+.text 0x8001D73C 0x8 OSSetArenaHi byte-transfer
+.text 0x8001D744 0x8 OSSetArenaLo byte-transfer
+.text 0x8001D74C 0x2C OSAllocFromArenaLo byte-transfer
+.text 0x8001D778 0x1BC __OSInitAudioSystem byte-transfer-near
+.text 0x8001D934 0xD8 __OSStopAudioSystem byte-transfer
+.text 0x8001DA0C 0x14 DCEnable byte-transfer
+.text 0x8001DA20 0x2C DCInvalidateRange byte-transfer
+.text 0x8001DA4C 0x30 DCFlushRange byte-transfer
+.text 0x8001DA7C 0x30 DCStoreRange byte-transfer
+.text 0x8001DAAC 0x2C DCFlushRangeNoSync byte-transfer
+.text 0x8001DAD8 0x2C DCStoreRangeNoSync byte-transfer
+.text 0x8001DB04 0x34 ICInvalidateRange byte-transfer
+.text 0x8001DB38 0x10 ICFlashInvalidate byte-transfer
+.text 0x8001DB48 0x14 ICEnable byte-transfer
+.text 0x8001DB5C 0xCC __LCEnable byte-transfer
+.text 0x8001DC28 0x38 LCEnable byte-transfer
+.text 0x8001DC60 0x28 LCDisable byte-transfer
+.text 0x8001DC88 0x24 LCStoreBlocks byte-transfer
+.text 0x8001DCAC 0xAC LCStoreData byte-transfer
+.text 0x8001DD58 0x14 LCQueueWait byte-transfer
+.text 0x8001DD6C 0x98 L2GlobalInvalidate byte-transfer-near
+.text 0x8001DE04 0x160 DMAErrorHandler byte-transfer-near
+.text 0x8001DF64 0xF4 __OSCacheInit byte-transfer-near
+.text 0x8001E058 0x124 __OSLoadFPUContext byte-transfer
+.text 0x8001E17C 0x128 __OSSaveFPUContext byte-transfer
+.text 0x8001E2A4 0x8 OSSaveFPUContext byte-transfer
+.text 0x8001E2AC 0x5C OSSetCurrentContext byte-transfer
+.text 0x8001E308 0xC OSGetCurrentContext byte-transfer
+.text 0x8001E314 0x80 OSSaveContext byte-transfer
+.text 0x8001E394 0xD8 OSLoadContext byte-transfer-near
+.text 0x8001E46C 0x8 OSGetStackPointer byte-transfer
+.text 0x8001E4A4 0x24 OSClearContext byte-transfer
+.text 0x8001E4C8 0xBC OSInitContext byte-transfer
+.text 0x8001E584 0x2A8 OSDumpContext byte-transfer-near
+.text 0x8001E82C 0x84 OSSwitchFPUContext byte-transfer
+.text 0x8001E8B0 0x48 __OSContextInit byte-transfer-near
+.text 0x8001E8F8 0x80 OSReport byte-transfer-near
+.text 0x8001E978 0x12C OSPanic byte-transfer-near
+.text 0x8001EAA4 0x218 OSSetErrorHandler byte-transfer-near
+.text 0x8001ECBC 0x2E8 __OSUnhandledException byte-transfer-near
+.text 0x8001FC54 0x19C GetFontCode byte-transfer-near
+.text 0x8001FDF0 0x174 Decode byte-transfer
+.text 0x8001FF64 0x58 OSGetFontEncode byte-transfer
+.text 0x8001FFBC 0x8C ReadROM byte-transfer
+.text 0x80020048 0x334 OSLoadFont byte-transfer
+.text 0x80020680 0x14 OSDisableInterrupts byte-transfer
+.text 0x80020694 0x14 OSEnableInterrupts byte-transfer
+.text 0x800206A8 0x24 OSRestoreInterrupts byte-transfer
+.text 0x800206CC 0x1C __OSSetInterruptHandler byte-transfer
+.text 0x800206E8 0x14 __OSGetInterruptHandler byte-transfer
+.text 0x800206FC 0x74 __OSInterruptInit byte-transfer-near
+.text 0x80020770 0x2D8 SetInterruptMask byte-transfer
+.text 0x80020A48 0x88 __OSMaskInterrupts byte-transfer
+.text 0x80020AD0 0x88 __OSUnmaskInterrupts byte-transfer
+.text 0x80020B58 0x344 __OSDispatchInterrupt byte-transfer-near
+.text 0x80020E9C 0x50 ExternalInterruptHandler byte-transfer
+.text 0x80020EF0 0x2BC Relocate byte-transfer-near
+.text 0x800211AC 0x2E0 Link byte-transfer-near
+.text 0x8002148C 0x24 OSLink byte-transfer
+.text 0x800214B0 0x18 __OSModuleInit byte-transfer
+.text 0x800214C8 0x60 OSInitMessageQueue byte-transfer
+.text 0x80021528 0xC8 OSSendMessage byte-transfer
+.text 0x800215F0 0xDC OSReceiveMessage byte-transfer
+.text 0x8002F69C 0xBC OnReset byte-transfer
+.text 0x80021708 0x6C MEMIntrruptHandler byte-transfer-near
+.text 0x80021774 0x80 Config24MB byte-transfer
+.text 0x800217F4 0x80 Config48MB byte-transfer
+.text 0x80021874 0x18 RealMode byte-transfer
+.text 0x8002188C 0x118 __OSInitMemoryProtection byte-transfer-near
+.text 0x800219A4 0x38 OSInitMutex byte-transfer
+.text 0x800219DC 0xDC OSLockMutex byte-transfer
+.text 0x80021AB8 0xC8 OSUnlockMutex byte-transfer
+.text 0x80021B80 0x70 __OSUnlockAllMutex byte-transfer
+.text 0x80021BF0 0x10 Run byte-transfer
+.text 0x80021C00 0xC Callback byte-transfer
+.text 0x80021C0C 0x340 __OSReboot byte-transfer-near
+.text 0x80021F4C 0x84 OSRegisterResetFunction byte-transfer
+.text 0x80022064 0x70 Reset byte-transfer
+.text 0x800220D4 0x48 __OSDoHotReset byte-transfer
+.text 0x8002211C 0x2B8 OSResetSystem byte-transfer-near
+.text 0x800223D4 0x30 OSGetResetCode byte-transfer
+.text 0x80022404 0xF4 __OSResetSWInterruptHandler byte-transfer
+.text 0x800224F8 0x298 OSGetResetButtonState byte-transfer-near
+.text 0x80022790 0x60 WriteSramCallback byte-transfer-near
+.text 0x800227F0 0x118 WriteSram byte-transfer-near
+.text 0x80022908 0x13C __OSInitSram byte-transfer-near
+.text 0x80022A44 0x5C __OSLockSram byte-transfer-near
+.text 0x80022AA0 0x5C __OSLockSramEx byte-transfer-near
+.text 0x80022AFC 0x33C UnlockSram byte-transfer-near
+.text 0x80022E38 0x24 __OSUnlockSram byte-transfer
+.text 0x80022E5C 0x24 __OSUnlockSramEx byte-transfer
+.text 0x80022E80 0x10 __OSSyncSram byte-transfer-near
+.text 0x80022E90 0x124 __OSReadROM byte-transfer
+.text 0x80022FB4 0x80 OSGetSoundMode byte-transfer-near
+.text 0x80023034 0xA4 OSSetSoundMode byte-transfer-near
+.text 0x800230D8 0x70 OSGetProgressiveMode byte-transfer-near
+.text 0x80023148 0xA4 OSSetProgressiveMode byte-transfer-near
+.text 0x80023258 0x84 OSGetWirelessID byte-transfer-near
+.text 0x800232DC 0xAC OSSetWirelessID byte-transfer-near
+.text 0x80023388 0x70 OSGetGbsMode byte-transfer-near
+.text 0x800233F8 0xB8 OSSetGbsMode byte-transfer-near
+.text 0x800237CC 0x64 __OSInitSystemCall byte-transfer-near
+.text 0x80023834 0x158 __OSThreadInit byte-transfer-near
+.text 0x8002398C 0x10 OSInitThreadQueue byte-transfer
+.text 0x8002399C 0xC OSGetCurrentThread byte-transfer
+.text 0x800239A8 0x40 OSDisableScheduler byte-transfer
+.text 0x800239E8 0x40 OSEnableScheduler byte-transfer
+.text 0x80023A28 0x68 UnsetRun byte-transfer
+.text 0x80023A90 0x3C __OSGetEffectivePriority byte-transfer
+.text 0x80023ACC 0x1C0 SetEffectivePriority byte-transfer-near
+.text 0x80023C8C 0x50 __OSPromoteThread byte-transfer
+.text 0x80023CDC 0x228 SelectThread byte-transfer-near
+.text 0x80023F04 0x30 __OSReschedule byte-transfer
+.text 0x80023F34 0x3C OSYieldThread byte-transfer
+.text 0x80023F70 0x1E8 OSCreateThread byte-transfer-near
+.text 0x80024158 0xE4 OSExitThread byte-transfer
+.text 0x8002423C 0x1BC OSCancelThread byte-transfer
+.text 0x800243F8 0x288 OSResumeThread byte-transfer-near
+.text 0x80024680 0x170 OSSuspendThread byte-transfer
+.text 0x800247F0 0xEC OSSleepThread byte-transfer
+.text 0x800248DC 0x104 OSWakeupThread byte-transfer-near
+.text 0x800249E0 0xAC OSClearStack byte-transfer
+.text 0x80024A8C 0x18 OSGetTime byte-transfer
+.text 0x80024AA4 0x8 OSGetTick byte-transfer
+.text 0x80024AAC 0x64 __OSGetSystemTime byte-transfer
+.text 0x80024B10 0x19C GetDates byte-transfer-near
+.text 0x80024CAC 0x204 OSTicksToCalendarTime byte-transfer-near
+.text 0x80024EB0 0x20 __init_user byte-transfer-near
+.text 0x80024ED0 0x54 __init_cpp byte-transfer-near
+.text 0x80024F24 0x20 _ExitProcess byte-transfer
+.text 0x80024F44 0x28 DBInit byte-transfer-near
+.text 0x80024F6C 0x48 __DBExceptionDestinationAux byte-transfer-near
+.text 0x80024FB4 0x10 __DBExceptionDestination byte-transfer
+.text 0x80024FC4 0x1C __DBIsExceptionMarked byte-transfer
+.text 0x80024FE0 0x50 DBPrintf byte-transfer-near
+.text 0x80025030 0x2C PSMTXIdentity byte-transfer
+.text 0x8002505C 0x34 PSMTXCopy byte-transfer
+.text 0x80025090 0xCC PSMTXConcat byte-transfer-near
+.text 0x800251AC 0xF8 PSMTXInverse byte-transfer
+.text 0x800252A4 0xC8 PSMTXInvXpose byte-transfer
+.text 0x8002536C 0x70 PSMTXRotRad byte-transfer
+.text 0x800253DC 0xB0 PSMTXRotTrig byte-transfer
+.text 0x8002548C 0x34 PSMTXTrans byte-transfer
+.text 0x800254C0 0x4C PSMTXTransApply byte-transfer
+.text 0x8002550C 0x28 PSMTXScale byte-transfer
+.text 0x80025534 0x58 PSMTXScaleApply byte-transfer
+.text 0x80025630 0x18C C_MTXLookAt byte-transfer
+.text 0x800257BC 0x94 C_MTXLightFrustum byte-transfer
+.text 0x80025850 0xCC C_MTXLightPerspective byte-transfer
+.text 0x80025FD8 0x24 PSVECAdd byte-transfer
+.text 0x80025FFC 0x24 PSVECSubtract byte-transfer
+.text 0x80026020 0x1C PSVECScale byte-transfer
+.text 0x8002603C 0x44 PSVECNormalize byte-transfer
+.text 0x80026080 0x18 PSVECSquareMag byte-transfer
+.text 0x80026098 0x44 PSVECMag byte-transfer
+.text 0x800260DC 0x20 PSVECDotProduct byte-transfer
+.text 0x800260FC 0x3C PSVECCrossProduct byte-transfer
+.text 0x80026138 0x28 PSVECSquareDistance byte-transfer
+.text 0x80026470 0x40 __DVDInitWA byte-transfer-near
+.text 0x800264B0 0x2E0 __DVDInterruptHandler byte-transfer-near
+.text 0x8001B5A8 0x8C AlarmHandler byte-transfer-near
+.text 0x80026814 0x70 AlarmHandlerForTimeout byte-transfer
+.text 0x80026884 0x110 Read byte-transfer-near
+.text 0x80026994 0x80 SeekTwiceBeforeRead byte-transfer-near
+.text 0x80026A14 0x298 DVDLowRead byte-transfer-near
+.text 0x80026CAC 0x94 DVDLowSeek byte-transfer-near
+.text 0x80026D40 0x2C DVDLowWaitCoverClose byte-transfer
+.text 0x80026D6C 0xA4 DVDLowReadDiskID byte-transfer-near
+.text 0x80026E10 0x8C DVDLowStopMotor byte-transfer-near
+.text 0x80026E9C 0x8C DVDLowRequestError byte-transfer-near
+.text 0x80026F28 0x9C DVDLowInquiry byte-transfer-near
+.text 0x80026FC4 0x98 DVDLowAudioStream byte-transfer-near
+.text 0x8002705C 0x8C DVDLowRequestAudioStatus byte-transfer-near
+.text 0x800270E8 0x9C DVDLowAudioBufferConfig byte-transfer-near
+.text 0x80027184 0xBC DVDLowReset byte-transfer
+.text 0x80027240 0x14 DVDLowBreak byte-transfer
+.text 0x80027254 0x1C DVDLowClearCallback byte-transfer
+.text 0x80027270 0x44 __DVDLowSetWAType byte-transfer
+.text 0x800272B4 0x38 __DVDLowTestAlarm byte-transfer-near
+.text 0x800272EC 0x38 __DVDFSInit byte-transfer
+.text 0x80027324 0x2F4 DVDConvertPathToEntrynum byte-transfer-near
+.text 0x80027618 0x74 DVDFastOpen byte-transfer
+.text 0x8002768C 0xC8 DVDOpen byte-transfer-near
+.text 0x80027754 0x24 DVDClose byte-transfer
+.text 0x80027778 0x160 entryToPath byte-transfer
+.text 0x800278D8 0xC4 DVDGetCurrentDir byte-transfer
+.text 0x8002799C 0xC0 DVDReadAsyncPrio byte-transfer-near
+.text 0x80027A5C 0x30 cbForReadAsync byte-transfer
+.text 0x80027A8C 0x118 DVDReadPrio byte-transfer-near
+.text 0x80027BA4 0x24 cbForReadSync byte-transfer
+.text 0x80027BCC 0xCC DVDInit byte-transfer-near
+.text 0x80027D2C 0x8C cbForStateReadingFST byte-transfer-near
+.text 0x80027DB8 0xAC cbForStateError byte-transfer-near
+.text 0x80027E64 0x34 stateTimeout byte-transfer
+.text 0x80027E98 0x28 stateGettingError byte-transfer-near
+.text 0x80027EC0 0xB4 CategorizeError byte-transfer
+.text 0x80027F74 0x294 cbForStateGettingError byte-transfer-near
+.text 0x80028208 0x68 cbForUnrecoveredError byte-transfer-near
+.text 0x80028270 0x98 cbForUnrecoveredErrorRetry byte-transfer-near
+.text 0x80028308 0x28 stateGoToRetry byte-transfer-near
+.text 0x80028330 0x158 cbForStateGoToRetry byte-transfer-near
+.text 0x80028568 0x34 stateCheckID3 byte-transfer-near
+.text 0x8002859C 0x34 stateCheckID2a byte-transfer-near
+.text 0x800285D0 0x74 cbForStateCheckID2a byte-transfer-near
+.text 0x8002867C 0x114 cbForStateCheckID1 byte-transfer-near
+.text 0x80028790 0xE4 cbForStateCheckID2 byte-transfer-near
+.text 0x80028874 0xFC cbForStateCheckID3 byte-transfer-near
+.text 0x8001B5A8 0x8C AlarmHandler byte-transfer-near
+.text 0x800289B4 0xCC stateCoverClosed byte-transfer-near
+.text 0x80028A80 0x30 stateCoverClosed_CMD byte-transfer-near
+.text 0x80028AB0 0x70 cbForStateCoverClosed byte-transfer-near
+.text 0x80028B20 0x28 stateMotorStopped byte-transfer-near
+.text 0x80028B48 0xE4 cbForStateMotorStopped byte-transfer-near
+.text 0x80028C2C 0x230 stateReady byte-transfer-near
+.text 0x80028E5C 0x320 stateBusy byte-transfer-near
+.text 0x8002917C 0x638 cbForStateBusy byte-transfer-near
+.text 0x800297B4 0xDC DVDReadAbsAsyncPrio byte-transfer
+.text 0x80029890 0xD0 DVDReadAbsAsyncForBS byte-transfer
+.text 0x80029960 0xD4 DVDReadDiskID byte-transfer
+.text 0x80029A34 0xBC DVDCancelStreamAsync byte-transfer
+.text 0x80029C00 0xD0 DVDInquiryAsync byte-transfer
+.text 0x80029CD0 0x44 DVDReset byte-transfer
+.text 0x80029D14 0x4C DVDGetCommandBlockStatus byte-transfer
+.text 0x80029D60 0xAC DVDGetDriveStatus byte-transfer-near
+.text 0x80029E0C 0x10 DVDSetAutoInvalidation byte-transfer
+.text 0x80029E1C 0x50 DVDResume byte-transfer
+.text 0x80029E6C 0x27C DVDCancelAsync byte-transfer-near
+.text 0x8002A0E8 0xAC DVDCancel byte-transfer-near
+.text 0x8002A194 0x24 cbForCancelSync byte-transfer
+.text 0x8002A1B8 0x8 DVDGetCurrentDiskID byte-transfer
+.text 0x8002A1C0 0xF8 DVDCheckDisk byte-transfer-near
+.text 0x8002A2B8 0x11C __DVDPrepareResetAsync byte-transfer
+.text 0x8002A3D4 0x38 __DVDTestAlarm byte-transfer-near
+.text 0x8002A40C 0x38 __DVDClearWaitingQueue byte-transfer-near
+.text 0x8002A444 0x68 __DVDPushWaitingQueue byte-transfer-near
+.text 0x8002A4AC 0xA0 __DVDPopWaitingQueue byte-transfer-near
+.text 0x8002A54C 0x58 __DVDCheckWaitingQueue byte-transfer-near
+.text 0x8002A5A4 0x60 __DVDDequeueWaitingQueue byte-transfer
+.text 0x8002A604 0x11C ErrorCode2Num byte-transfer-near
+.text 0x8002A720 0x7C __DVDStoreErrorCode byte-transfer
+.text 0x8002A79C 0xF8 DVDCompareDiskID byte-transfer
+.text 0x8002A990 0x30 __DVDPrintFatalMessage byte-transfer
+.text 0x8002A9C0 0xD8 cb byte-transfer-near
+.text 0x8002AA98 0x168 __fstLoad byte-transfer-near
+.text 0x8002AC00 0x274 __VIRetraceHandler byte-transfer-near
+.text 0x8002AE74 0x44 VISetPreRetraceCallback byte-transfer
+.text 0x8002AEB8 0x44 VISetPostRetraceCallback byte-transfer
+.text 0x8002AEFC 0xA0 getTiming byte-transfer-near
+.text 0x8002AF9C 0x200 __VIInit byte-transfer
+.text 0x8002B19C 0x4B0 VIInit byte-transfer-near
+.text 0x8002B64C 0x54 VIWaitForRetrace byte-transfer
+.text 0x8002B6A0 0x2D4 setFbbRegs byte-transfer-near
+.text 0x8002B974 0x1A0 setVerticalRegs byte-transfer-near
+.text 0x8002BB14 0x828 VIConfigure byte-transfer-near
+.text 0x8002C6D0 0x130 VIFlush byte-transfer-near
+.text 0x8002C800 0x6C VISetNextFrameBuffer byte-transfer-near
+.text 0x8002C86C 0x7C VISetBlack byte-transfer-near
+.text 0x8002C8E8 0x8 VIGetRetraceCount byte-transfer
+.text 0x8002C958 0x98 VIGetCurrentLine byte-transfer
+.text 0x8002C9F0 0x68 VIGetTvFormat byte-transfer-near
+.text 0x8002CA58 0x3C VIGetDTVStatus byte-transfer
+.text 0x8002CA94 0x21C __VIDisplayPositionToXY byte-transfer-near
+.text 0x8002CCB0 0x60 __VIGetCurrentPosition byte-transfer
+.text 0x8002DF40 0x1A4 UpdateOrigin byte-transfer-near
+.text 0x8002E0E4 0xC4 PADOriginCallback byte-transfer-near
+.text 0x8002E1A8 0xCC PADOriginUpdateCallback byte-transfer
+.text 0x8002E274 0xD8 PADProbeCallback byte-transfer-near
+.text 0x8002E34C 0x32C PADTypeAndStatusCallback byte-transfer-near
+.text 0x8002E678 0x140 PADReceiveCheckCallback byte-transfer-near
+.text 0x8002E7B8 0x110 PADReset byte-transfer-near
+.text 0x8002E8C8 0x114 PADRecalibrate byte-transfer-near
+.text 0x8002E9DC 0x150 PADInit byte-transfer-near
+.text 0x8002EB2C 0x300 PADRead byte-transfer-near
+.text 0x8002EE2C 0xB8 PADControlMotor byte-transfer
+.text 0x8002EEE4 0x60 PADSetSpec byte-transfer-near
+.text 0x8002EF44 0x174 SPEC0_MakeStatus byte-transfer
+.text 0x8002F0B8 0x174 SPEC1_MakeStatus byte-transfer
+.text 0x8002F22C 0x470 SPEC2_MakeStatus byte-transfer-near
+.text 0x8002F69C 0xBC OnReset byte-transfer
+.text 0x8002F758 0x60 SamplingHandler byte-transfer
+.text 0x8002F7B8 0x54 PADSetSamplingCallback byte-transfer-near
+.text 0x8002F80C 0x7C __PADDisableRecalibration byte-transfer
+.text 0x8002F888 0x44 AIRegisterDMACallback byte-transfer
+.text 0x8002F8CC 0x88 AIInitDMA byte-transfer
+.text 0x8002F954 0x18 AIStartDMA byte-transfer
+.text 0x8002F96C 0xD8 AISetStreamPlayState byte-transfer
+.text 0x8002FA44 0x10 AIGetStreamPlayState byte-transfer
+.text 0x8002FA54 0xE0 AISetDSPSampleRate byte-transfer
+.text 0x8002FB34 0x14 AIGetDSPSampleRate byte-transfer
+.text 0x8002FB48 0xD4 __AI_set_stream_sample_rate byte-transfer
+.text 0x8002FC1C 0x10 AIGetStreamSampleRate byte-transfer
+.text 0x8002FC2C 0x1C AISetStreamVolLeft byte-transfer
+.text 0x8002FC48 0x10 AIGetStreamVolLeft byte-transfer
+.text 0x8002FC58 0x1C AISetStreamVolRight byte-transfer
+.text 0x8002FC74 0x10 AIGetStreamVolRight byte-transfer
+.text 0x8002FC84 0x16C AIInit byte-transfer-near
+.text 0x8002FDF0 0x7C __AISHandler byte-transfer
+.text 0x8002FE6C 0xAC __AIDHandler byte-transfer
+.text 0x8002FF70 0x1E4 __AI_SRC_INIT byte-transfer
+.text 0x80030154 0x44 ARRegisterDMACallback byte-transfer
+.text 0x80030198 0x3C ARGetDMAStatus byte-transfer
+.text 0x800301D4 0xF0 ARStartDMA byte-transfer
+.text 0x800302C4 0x68 ARAlloc byte-transfer
+.text 0x800303F0 0x8 ARGetSize byte-transfer
+.text 0x800303F8 0x78 __ARHandler byte-transfer
+.text 0x80030470 0x20 __ARClearInterrupt byte-transfer
+.text 0x80030490 0x10 __ARGetInterruptStatus byte-transfer
+.text 0x800304A0 0x17F4 __ARChecksize byte-transfer-near
+.text 0x80031C94 0x100 __ARQServiceQueueLo byte-transfer
+.text 0x80031D98 0xCC __ARQInterruptServiceRoutine byte-transfer
+.text 0x80031E64 0x70 ARQInit byte-transfer-near
+.text 0x80031ED4 0x15C ARQPostRequest byte-transfer-near
+.text 0x8003F774 0xFC __GXDefaultTexRegionCallback byte-transfer
+.text 0x8003F870 0x24 __GXDefaultTlutRegionCallback byte-transfer
+.text 0x8003F894 0x190 __GXShutdown byte-transfer
+.text 0x8003FA24 0x798 GXInit byte-transfer-near
+.text 0x800401BC 0x938 __GXInitGX byte-transfer-near
+.text 0x80040AF4 0x134 GXCPInterruptHandler byte-transfer
+.text 0x80040C28 0x6C GXInitFifoBase byte-transfer
+.text 0x80040C94 0x70 GXInitFifoPtrs byte-transfer
+.text 0x80040D04 0xC GXInitFifoLimits byte-transfer
+.text 0x80040D10 0x128 GXSetCPUFifo byte-transfer
+.text 0x80040E38 0x178 GXSetGPFifo byte-transfer
+.text 0x80040FB0 0x20 GXSaveCPUFifo byte-transfer-near
+.text 0x80040FD0 0xDC __GXSaveCPUFifoAux byte-transfer
+.text 0x800410AC 0x50 GXGetGPStatus byte-transfer
+.text 0x800410FC 0x98 GXGetFifoPtrs byte-transfer
+.text 0x80041264 0x4C __GXFifoInit byte-transfer-near
+.text 0x800412B0 0x24 __GXFifoReadEnable byte-transfer
+.text 0x800412D4 0x24 __GXFifoReadDisable byte-transfer
+.text 0x800412F8 0x34 __GXFifoLink byte-transfer
+.text 0x8004132C 0x30 __GXWriteFifoIntEnable byte-transfer
+.text 0x8004135C 0x30 __GXWriteFifoIntReset byte-transfer
+.text 0x8004138C 0x100 __GXCleanGPFifo byte-transfer
+.text 0x800414D8 0x8 GXGetCPUFifo byte-transfer
+.text 0x800414E0 0x8 GXGetGPFifo byte-transfer
+.text 0x800414E8 0x8 GXGetOverflowCount byte-transfer
+.text 0x800414F0 0x10 GXResetOverflowCount byte-transfer
+.text 0x80041500 0x26C GXSetVtxDesc byte-transfer-near
+.text 0x8004176C 0x288 GXSetVtxDescv byte-transfer-near
+.text 0x800419F4 0xBC __GXSetVCD byte-transfer
+.text 0x80041AB0 0x124 __GXCalculateVLim byte-transfer
+.text 0x80041BD4 0x38 GXClearVtxDesc byte-transfer
+.text 0x80041C0C 0x25C GXSetVtxAttrFmt byte-transfer-near
+.text 0x80041E68 0x280 GXSetVtxAttrFmtv byte-transfer-near
+.text 0x800420E8 0x9C __GXSetVAT byte-transfer
+.text 0x80042184 0x8C GXSetArray byte-transfer
+.text 0x80042210 0x10 GXInvalidateVtxCache byte-transfer
+.text 0x80042220 0x280 GXSetTexCoordGen2 byte-transfer-near
+.text 0x800424A0 0x3C GXSetNumTexGens byte-transfer
+.text 0x800424DC 0x94 GXSetMisc byte-transfer
+.text 0x80042570 0x5C GXFlush byte-transfer
+.text 0x800425CC 0x34 GXResetWriteGatherPipe byte-transfer
+.text 0x80042600 0x16C __GXAbort byte-transfer
+.text 0x8004276C 0x170 GXAbortFrame byte-transfer
+.text 0x800428DC 0x98 GXSetDrawDone byte-transfer
+.text 0x80042974 0x4C GXWaitDrawDone byte-transfer
+.text 0x800429C0 0x80 GXDrawDone byte-transfer
+.text 0x80042A64 0x14 GXPokeAlphaMode byte-transfer
+.text 0x80042A78 0x20 GXPokeAlphaRead byte-transfer
+.text 0x80042A98 0x18 GXPokeAlphaUpdate byte-transfer
+.text 0x80042AB0 0x64 GXPokeBlendMode byte-transfer
+.text 0x80042B14 0x18 GXPokeColorUpdate byte-transfer
+.text 0x80042B2C 0x24 GXPokeDstAlpha byte-transfer
+.text 0x80042B50 0x18 GXPokeDither byte-transfer
+.text 0x80042B68 0x20 GXPokeZMode byte-transfer
+.text 0x80042B88 0x44 GXSetDrawSyncCallback byte-transfer
+.text 0x80042BCC 0x88 GXTokenInterruptHandler byte-transfer
+.text 0x80042C54 0x44 GXSetDrawDoneCallback byte-transfer
+.text 0x80042C98 0x80 GXFinishInterruptHandler byte-transfer
+.text 0x80042D18 0x74 __GXPEInit byte-transfer-near
+.text 0x80042D8C 0x80 __GXSetDirtyState byte-transfer
+.text 0x80042E0C 0xD0 GXBegin byte-transfer
+.text 0x80042EDC 0x88 __GXSendFlushPrim byte-transfer
+.text 0x80042F64 0x40 GXSetLineWidth byte-transfer
+.text 0x80042FA4 0x40 GXSetPointSize byte-transfer
+.text 0x80042FE4 0x48 GXEnableTexOffsets byte-transfer
+.text 0x8004302C 0x44 GXSetCullMode byte-transfer
+.text 0x800430B4 0x34 GXSetCoPlanar byte-transfer
+.text 0x800430E8 0x24 __GXSetGenMode byte-transfer
+.text 0x8004310C 0x7C GXSetDispCopySrc byte-transfer
+.text 0x80043188 0x7C GXSetTexCopySrc byte-transfer
+.text 0x80043204 0x34 GXSetDispCopyDst byte-transfer
+.text 0x80043238 0x130 GXSetTexCopyDst byte-transfer
+.text 0x80043368 0x24 GXSetDispCopyFrame2Field byte-transfer
+.text 0x8004338C 0x58 GXSetCopyClamp byte-transfer
+.text 0x800433E4 0xCC GXSetDispCopyYScale byte-transfer-near
+.text 0x800434B0 0x78 GXSetCopyClear byte-transfer
+.text 0x80043528 0x208 GXSetCopyFilter byte-transfer
+.text 0x80043730 0x14 GXSetDispCopyGamma byte-transfer
+.text 0x80043744 0x168 GXCopyDisp byte-transfer
+.text 0x800438AC 0x18C GXCopyTex byte-transfer
+.text 0x80043A38 0x38 GXClearBoundingBox byte-transfer
+.text 0x80043A70 0x1C GXInitLightAttn byte-transfer
+.text 0x80043A8C 0x10 GXInitLightAttnA byte-transfer
+.text 0x80043A9C 0x10 GXInitLightAttnK byte-transfer
+.text 0x80043AAC 0x190 GXInitLightSpot byte-transfer-near
+.text 0x80043C3C 0xD0 GXInitLightDistAttn byte-transfer
+.text 0x80043D0C 0x10 GXInitLightPos byte-transfer
+.text 0x80043D1C 0x1C GXInitLightDir byte-transfer
+.text 0x80043D38 0xE4 GXInitSpecularDir byte-transfer
+.text 0x80043E1C 0xC GXInitLightColor byte-transfer
+.text 0x80043E28 0x7C GXLoadLightObjImm byte-transfer
+.text 0x80043EA4 0xF0 GXSetChanAmbColor byte-transfer
+.text 0x80043F94 0xF0 GXSetChanMatColor byte-transfer
+.text 0x80044084 0x3C GXSetNumChans byte-transfer
+.text 0x800440C0 0xB8 GXSetChanCtrl byte-transfer
+.text 0x80044178 0x15C GXGetTexBufferSize byte-transfer-near
+.text 0x800442D4 0xC8 __GetImageTileCount byte-transfer-near
+.text 0x8004439C 0x24C GXInitTexObj byte-transfer-near
+.text 0x800445E8 0x48 GXInitTexObjCI byte-transfer
+.text 0x80044630 0x164 GXInitTexObjLOD byte-transfer
+.text 0x800447B0 0xC GXGetTexObjData byte-transfer
+.text 0x800447BC 0x10 GXGetTexObjWidth byte-transfer
+.text 0x800447CC 0x10 GXGetTexObjHeight byte-transfer
+.text 0x800447DC 0x8 GXGetTexObjFmt byte-transfer
+.text 0x800447E4 0x18 GXGetTexObjMipMap byte-transfer
+.text 0x800447FC 0x17C GXLoadTexObjPreLoaded byte-transfer
+.text 0x80044978 0x54 GXLoadTexObj byte-transfer
+.text 0x800449CC 0x38 GXInitTlutObj byte-transfer
+.text 0x80044A04 0x98 GXLoadTlut byte-transfer
+.text 0x80044A9C 0xF4 GXInitTexCacheRegion byte-transfer
+.text 0x80044B90 0x38 GXInitTlutRegion byte-transfer
+.text 0x80044BC8 0x48 GXInvalidateTexAll byte-transfer
+.text 0x80044C10 0x14 GXSetTexRegionCallback byte-transfer
+.text 0x80044C24 0x14 GXSetTlutRegionCallback byte-transfer
+.text 0x80044C38 0xA0 __SetSURegs byte-transfer
+.text 0x80044CD8 0x17C __GXSetSUTexRegs byte-transfer
+.text 0x80044E54 0x354 __GXSetTmemConfig byte-transfer
+.text 0x800451A8 0x6C GXSetTevIndirect byte-transfer
+.text 0x80045214 0x178 GXSetIndTexMtx byte-transfer
+.text 0x8004538C 0x144 GXSetIndTexCoordScale byte-transfer
+.text 0x800454D0 0xEC GXSetIndTexOrder byte-transfer
+.text 0x800455BC 0x24 GXSetNumIndStages byte-transfer
+.text 0x800455E0 0x48 GXSetTevDirect byte-transfer
+.text 0x80045738 0x30 __GXSetIndirectMask byte-transfer
+.text 0x80045768 0x24 __GXFlushTextureState byte-transfer
+.text 0x8004578C 0x8C GXSetTevOp byte-transfer-near
+.text 0x80045818 0x44 GXSetTevColorIn byte-transfer
+.text 0x8004585C 0x44 GXSetTevAlphaIn byte-transfer
+.text 0x800458A0 0x68 GXSetTevColorOp byte-transfer
+.text 0x80045908 0x68 GXSetTevAlphaOp byte-transfer
+.text 0x80045970 0x7C GXSetTevColor byte-transfer
+.text 0x800459EC 0x7C GXSetTevColorS10 byte-transfer
+.text 0x80045A68 0x74 GXSetTevKColor byte-transfer
+.text 0x80045ADC 0x5C GXSetTevKColorSel byte-transfer
+.text 0x80045B38 0x5C GXSetTevKAlphaSel byte-transfer
+.text 0x80045B94 0x48 GXSetTevSwapMode byte-transfer
+.text 0x80045BDC 0x80 GXSetTevSwapModeTable byte-transfer
+.text 0x80045C5C 0x44 GXSetAlphaCompare byte-transfer
+.text 0x80045CA0 0x8C GXSetZTexture byte-transfer
+.text 0x80045D2C 0x19C GXSetTevOrder byte-transfer-near
+.text 0x80045EC8 0x28 GXSetNumTevStages byte-transfer
+.text 0x80045EF0 0x224 GXSetFog byte-transfer-near
+.text 0x80046114 0x124 GXSetFogRangeAdj byte-transfer
+.text 0x80046238 0x54 GXSetBlendMode byte-transfer
+.text 0x8004628C 0x2C GXSetColorUpdate byte-transfer
+.text 0x800462B8 0x2C GXSetAlphaUpdate byte-transfer
+.text 0x800462E4 0x34 GXSetZMode byte-transfer
+.text 0x80046318 0x34 GXSetZCompLoc byte-transfer
+.text 0x8004634C 0xD4 GXSetPixelFmt byte-transfer-near
+.text 0x80046420 0x2C GXSetDither byte-transfer
+.text 0x8004644C 0x3C GXSetDstAlpha byte-transfer
+.text 0x80046488 0x38 GXSetFieldMask byte-transfer
+.text 0x800464C0 0x78 GXSetFieldMode byte-transfer
+.text 0x800466D4 0x70 GXCallDisplayList byte-transfer
+.text 0x80046744 0x174 GXProject byte-transfer
+.text 0x800468B8 0xA4 GXSetProjection byte-transfer
+.text 0x8004695C 0x8C GXSetProjectionv byte-transfer
+.text 0x800469E8 0x48 GXGetProjectionv byte-transfer
+.text 0x80046A30 0x50 GXLoadPosMtxImm byte-transfer
+.text 0x80046D70 0x78 GXSetScissor byte-transfer
+.text 0x80046DE8 0x48 GXGetScissor byte-transfer
+.text 0x80046E30 0x40 GXSetScissorBoxOffset byte-transfer
+.text 0x80046E70 0x28 GXSetClipMode byte-transfer
+.text 0x80046E98 0x84 __GXSetMatrixIndex byte-transfer
+.text 0x80046F1C 0x848 GXSetGPMetric byte-transfer-near
+.text 0x80047764 0x10 GXClearGPMetric byte-transfer
+.text 0x80048A10 0x8 Hu_IsStub byte-transfer
+.text 0x80047F68 0x260 DBWrite byte-transfer
+.text 0x800481C8 0x8C DBRead byte-transfer
+.text 0x80048254 0x9C DBQueryData byte-transfer
+.text 0x80048344 0x78 DBInitComm byte-transfer
+.text 0x800483BC 0x40 DBGHandler byte-transfer
+.text 0x800483FC 0x3C MWCallback byte-transfer
+.text 0x80048438 0xAC DBGReadStatus byte-transfer
+.text 0x800484E4 0xDC DBGWrite byte-transfer
+.text 0x800485C0 0xDC DBGRead byte-transfer
+.text 0x8004869C 0xAC DBGReadMailbox byte-transfer
+.text 0x80048748 0x298 DBGEXIImm byte-transfer
+.text 0x800489F8 0x8 EXI2_WriteN byte-transfer-near
+.text 0x80048A08 0x8 AMC_IsStub byte-transfer-near
+.text 0x80048A10 0x8 Hu_IsStub byte-transfer
+.data 0x801DF0BC 0x9 gTRKRestoreFlags byte-transfer-near
+.data 0x801DF39C 0x14 Si byte-transfer-near
+.data 0x801DF3B0 0x10 Type byte-transfer
+.data 0x801DF470 0x30 XYNTSC byte-transfer
+.data 0x801DF700 0x10 ResetFunctionInfo byte-transfer-near
+.data 0x801DFAA8 0x80 DSPInitCode byte-transfer
+.data 0x801DF700 0x10 ResetFunctionInfo byte-transfer-near
+.data 0x801E668C 0xC0 GXTexRegionAddrTable byte-transfer
+.text 0x80021C00 0xC Callback byte-transfer
+.text 0x80018634 0x64 __EXIAttach byte-transfer
+.text 0x8001F47C 0x154 OSFatal byte-transfer-near
+.text 0x8001F5D0 0x684 Halt byte-transfer-near
+.text 0x800234B0 0x58 OSInitSemaphore byte-transfer
+.text 0x80029AF0 0x110 issueCommand byte-transfer-near
+.text 0x8002CEF4 0xF8 AMPushData byte-transfer-near
+.text 0x8002CFEC 0x220 __AMPushBuffered byte-transfer-near
+.text 0x8003032C 0xC4 ARInit byte-transfer-near
+.text 0x80038CAC 0x118 __CARDExiHandler byte-transfer-near
+.text 0x80038DC4 0xA8 __CARDTxHandler byte-transfer-near
+.text 0x80039A10 0xAC CARDInit byte-transfer-near
+.text 0x8003C3A0 0x590 CARDCheckExAsync byte-transfer-near
+.text 0x8003CA50 0x17C CARDProbeEx byte-transfer-near
+.text 0x8003CBCC 0x410 DoMount byte-transfer-near
+.text 0x8003D114 0x1A0 CARDMountAsync byte-transfer-near
+.text 0x8003D588 0x658 __CARDFormatRegionAsync byte-transfer-near
+.text 0x800411D8 0x8C GXEnableBreakPt byte-transfer
+.text 0x80046538 0xC8 GXBeginDisplayList byte-transfer-near
+.text 0x80046600 0xD4 GXEndDisplayList byte-transfer-near
+.text 0x800478A4 0x12C TEXGetGXTexObjFromPalette byte-transfer-near
+.text 0x8001F380 0xFC ConfigureVideo byte-transfer
+.text 0x80026218 0x258 ProcessNextCommand byte-transfer-near
+.text 0x8002A894 0x8C ShowMessage byte-transfer-near
+.text 0x8002CD10 0xC4 __AM_dvd_callback byte-transfer-near
+.text 0x800326F0 0x23C __AXProcessAux byte-transfer-near
+.text 0x80033434 0x3A0 __AXOutInit byte-transfer-near
+.text 0x8003952C 0x1B4 SetupTimeoutAlarm byte-transfer-near
+.text 0x8003AE10 0x324 DoneCallback byte-transfer-near
+.text 0x8003CFDC 0x138 __CARDMountCallback byte-transfer-near
+.text 0x8003E220 0x130 CreateCallbackFat byte-transfer-near
+.text 0x80047AF0 0x108 TEXGetGXTexObjFromPaletteCI byte-transfer
+.text 0x80007204 0xA8 DEMOPadRead byte-transfer-near
+.text 0x80032054 0x4C AXInitEx byte-transfer
+.text 0x80033064 0x1B8 __AXOutNewFrame byte-transfer-near
+.text 0x8003321C 0xBC __AXOutAiCallback byte-transfer-near
+.text 0x800332E4 0x58 __AXDSPResumeCallback byte-transfer
+.text 0x800261B4 0x24 PSQUATAdd byte-transfer
+.text 0x800261D8 0x24 PSQUATSubtract byte-transfer
+.text 0x800261FC 0x1C PSQUATScale byte-transfer
+.text 0x8001D628 0x104 OSCheckHeap byte-transfer-near
+.text 0x8001E474 0x30 OSSwitchFiber byte-transfer
+.text 0x8002591C 0x54 PSMTXMultVec byte-transfer
+.text 0x80025A3C 0x44 PSMTX44Copy byte-transfer
+.text 0x80025A80 0x104 PSMTX44Concat byte-transfer
+.text 0x80025B84 0x64 PSMTX44Transpose byte-transfer
+.text 0x800147F8 0x20 rand byte-transfer
+.text 0x80025A08 0x34 PSMTX44Identity byte-transfer
+.text 0x80046AB0 0x50 GXLoadNrmMtxImm byte-transfer
+.text 0x80046B34 0x34 GXSetCurrentMtx byte-transfer
+.text 0x80046B68 0xB4 GXLoadTexMtxImm byte-transfer
+.text 0x80046C1C 0x58 GXLoadTexMtxIndx byte-transfer
+.text 0x80046C74 0x90 __GXSetViewport byte-transfer
+.text 0x80046D04 0x48 GXSetViewport byte-transfer
+.text 0x80046D4C 0x24 GXGetViewportv byte-transfer
+.text 0x80023508 0x70 OSWaitSemaphore byte-transfer
+.text 0x80023578 0x60 OSSignalSemaphore byte-transfer
+.text 0x800235D8 0x8 OSGetSemaphoreCount byte-transfer-near
+.text 0x80039AFC 0xB8 __CARDGetControlBlock byte-transfer-near
+.text 0x8003B7B8 0x8 __CARDGetDirBlock byte-transfer
+.text 0x8003DC9C 0x94 __CARDAccess byte-transfer-near
+.text 0x8003DE64 0xF4 __CARDIsReadable byte-transfer-near
+.text 0x8003F19C 0x114 CARDGetStatus byte-transfer-near
+.text 0x80038BA0 0x34 __CARDSyncCallback byte-transfer-near
+.text 0x80039DEC 0x98 __CARDSync byte-transfer-near
+.text 0x8003F46C 0x1FC CARDRenameAsync byte-transfer-near
+.text 0x8003F668 0x48 CARDRename byte-transfer-near
+.text 0x80042A40 0x24 GXPixModeSync byte-transfer
+.text 0x80043070 0x44 GXGetCullMode byte-transfer
+.text 0x80044794 0x1C GXInitTexObjWrapMode byte-transfer
+.text 0x80006668 0x84 sqrt_abs byte-transfer-near
+.text 0x8002558C 0xA4 PSMTXQuat byte-transfer
+.text 0x80025970 0x98 C_MTXOrtho byte-transfer
+.text 0x80026160 0x54 PSVECDistance byte-transfer
+.text 0x80006A50 0x20 flagword_set byte-transfer-near
+.text 0x80006A70 0x1C flagword_clear byte-transfer-near
+.text 0x8004BA74 0x24 frame_ring_advance byte-transfer
+.text 0x8003D2B4 0x48 CARDMount byte-transfer-near
+.text 0x8003D2FC 0x9C DoUnmount byte-transfer-near
+.text 0x8003D398 0xAC CARDUnmount byte-transfer-near
+.text 0x8003D444 0x144 FormatCallback byte-transfer-near
+.text 0x8003DD30 0x134 __CARDIsWritable byte-transfer-near
+.text 0x8003F2B0 0x174 CARDSetStatusAsync byte-transfer-near
+.text 0x8003F424 0x48 CARDSetStatus byte-transfer-near
+.text 0x8003E350 0x220 CARDCreateAsync byte-transfer-near
+.text 0x8003E570 0x48 CARDCreate byte-transfer-near
+.text 0x80046A80 0x30 GXLoadPosMtxIndx byte-transfer
+.text 0x80021FD0 0x94 __OSCallResetFunctions byte-transfer
+.text 0x8002C33C 0x394 VIConfigurePan byte-transfer-near
+.text 0x80033368 0xCC __AXOutInitDSP byte-transfer-near
+.text 0x80038BD4 0xD8 __CARDExtHandler byte-transfer-near
+.text 0x80038E6C 0x84 __CARDUnlockedHandler byte-transfer-near
+.text 0x8003914C 0xA4 TimeoutHandler byte-transfer-near
+.text 0x80039BB4 0x64 __CARDPutControlBlock byte-transfer
+.text 0x8003333C 0x2C __AXDSPDoneCallback byte-transfer
+.text 0x8003A040 0x144 ReadArrayUnlock byte-transfer-near
+.text 0x8003B958 0xC4 __CARDUpdateDir byte-transfer-near
+.text 0x8003C930 0x54 CARDCheckEx byte-transfer-near
+.text 0x800235E0 0x2C OSInitStopwatch byte-transfer
+.text 0x8002360C 0x3C OSStartStopwatch byte-transfer
+.text 0x80023648 0xCC OSStopStopwatch byte-transfer
+.text 0x80023714 0x70 OSCheckStopwatch byte-transfer
+.text 0x8003B7C0 0xD0 WriteCallback byte-transfer-near
+.text 0x8003B890 0xC8 EraseCallback byte-transfer-near
+.text 0x8003A184 0xC4 DummyLen byte-transfer
+.text 0x80038EF0 0xC0 __CARDEnableInterrupt byte-transfer
+.text 0x80038FB0 0xF0 __CARDReadStatus byte-transfer
+.text 0x800390A0 0xAC __CARDClearStatus byte-transfer
+.text 0x80039ABC 0x8 __CARDGetFontEncode byte-transfer
+.text 0x80039AC4 0x38 __CARDSetDiskID byte-transfer-near
+.text 0x800489E8 0x8 EXI2_Poll byte-transfer-near
+.text 0x800489F0 0x8 EXI2_ReadN byte-transfer-near
+.text 0x8002515C 0x50 PSMTXTranspose byte-transfer
+.text 0x8002A920 0x70 DVDSetAutoFatalMessaging byte-transfer-near
+.text 0x8001277C 0xE0 fprintf byte-transfer-near
+.text 0x800337D4 0x44 AXRegisterCallback byte-transfer
+.text 0x80034B20 0x110 AXSetVoiceAddr byte-transfer
+.text 0x80033CE4 0x74C __AXServiceVPB byte-transfer-near
+.text 0x80033CDC 0x8 __AXGetNumVoices byte-transfer
