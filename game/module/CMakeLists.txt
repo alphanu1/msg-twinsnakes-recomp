@@ -150,7 +150,7 @@ set_target_properties(mgs_dispatch PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # __OSLoadFPUContext. The SDK shifts between builds (+0x9B4 on GGSEA4), so the
 # addresses are stamped per build; another build's addresses run mid-function
 # code on every FPU switch and corrupt the switched state.
-if(MGS_GAME_ID STREQUAL "GGSEA4")
+if(MGS_GAME_ID STREQUAL "GGSEA4" OR MGS_GAME_ID STREQUAL "GGSJA4")
   set(MGS_OS_LOAD_FPU_ADDR 0x8001E058)
   set(MGS_OS_SAVE_FPU_ADDR 0x8001E17C)
 else()
