@@ -139,6 +139,19 @@ add_library(mgs_dispatch OBJECT dispatch.c)
 target_include_directories(mgs_dispatch PRIVATE
   "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(mgs_dispatch PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# The in-place FPU context switch calls this build's __OSSaveFPUContext /
+# __OSLoadFPUContext. The SDK shifts between builds (+0x9B4 on GGSEA4), so the
+# addresses are stamped per build; another build's addresses run mid-function
+# code on every FPU switch and corrupt the switched state.
+if(MGS_GAME_ID STREQUAL "GGSEA4")
+  set(MGS_OS_LOAD_FPU_ADDR 0x8001E058)
+  set(MGS_OS_SAVE_FPU_ADDR 0x8001E17C)
+else()
+  set(MGS_OS_LOAD_FPU_ADDR 0x8001D6A4)
+  set(MGS_OS_SAVE_FPU_ADDR 0x8001D7C8)
+endif()
+target_compile_definitions(mgs_dispatch PRIVATE
+  MGS_OS_LOAD_FPU=${MGS_OS_LOAD_FPU_ADDR} MGS_OS_SAVE_FPU=${MGS_OS_SAVE_FPU_ADDR})
 
 # --- the loadable module ----------------------------------------------------
 # ModernGekko dlopen()s this and calls staticrecomp_get_module(). The export

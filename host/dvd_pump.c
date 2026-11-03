@@ -33,8 +33,21 @@
 
 /* Guest addresses from config/symbols/main.dol.symbols.txt. These are the
  * scheduler's public brackets, not internals. */
-#define GUEST_OSDisableScheduler 0x80022FF4u
-#define GUEST_OSEnableScheduler  0x80023034u
+/* Per-build scheduler brackets, from the mounted build's symbol map
+ * (config/symbols/, GGSEA4 in config/symbols/GGSEA4/). The build is the
+ * MODULE's game id: the pump only runs against the loaded module. */
+static uint32_t guest_os_disable_scheduler(const MgsModule* mod)
+{
+    return (mod && strncmp(mod->game_id, "GGSPA4", 6) != 0)
+               ? 0x800239A8u : 0x80022FF4u;
+}
+static uint32_t guest_os_enable_scheduler(const MgsModule* mod)
+{
+    return (mod && strncmp(mod->game_id, "GGSPA4", 6) != 0)
+               ? 0x800239E8u : 0x80023034u;
+}
+#define GUEST_OSDisableScheduler guest_os_disable_scheduler(mod)
+#define GUEST_OSEnableScheduler  guest_os_enable_scheduler(mod)
 
 #define MSR_EE 0x8000u
 

@@ -354,7 +354,22 @@ int mgs_interrupt_aid(const MgsModule* mod, void* cpu)
 /* `__DSP_curr_task` in main.dol: the SDK's current DSP task, or null when
  * there is none. Read before posting a task mail, because the handler
  * dereferences it without checking (see below). */
-#define GUEST_DSP_CURR_TASK 0x8027DF94u
+/* PER BUILD: the variable sits in the DOL's .sbss, whose layout differs
+ * between releases (GGSPA4 0x8027DF94, GGSEA4/GGSJA4 0x8027E3D4 - the
+ * DSP module's own slot, at the same r13 displacement and with the same
+ * reference count in both DOLs). Reading the PAL address on the US build
+ * reads a word that is never the task pointer, so no resume mail was
+ * ever posted there: AX never ran, the sound position never moved, and
+ * the movie - whose clock is that position - parked for good. */
+static uint32_t s_dsp_curr_task = 0x8027DF94u;   /* GGSPA4 __DSP_curr_task */
+
+void mgs_interrupt_set_dsp_curr_task(uint32_t guest_address);
+void mgs_interrupt_set_dsp_curr_task(uint32_t guest_address)
+{
+    s_dsp_curr_task = guest_address;
+}
+
+#define GUEST_DSP_CURR_TASK s_dsp_curr_task
 
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu);
 int mgs_interrupt_dsp_task(const MgsModule* mod, void* cpu)
