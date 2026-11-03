@@ -226,6 +226,30 @@ comes out.
 recompiler is GPL-3 already. See [THIRD_PARTY.md](THIRD_PARTY.md) for the
 licence position of every dependency.
 
+## Controls
+
+Keyboard, gamepad and mouse are all remappable, in the launcher's
+**Controls** section (start with `--launcher` to see it). Settings save
+to `controls.ini` in the same per-user folder as `settings.ini`, and the
+file is hand-editable; unknown keys are ignored, never fatal.
+
+Two keyboard presets: **WASD** (default: WASD and the arrows both move,
+`X` = A, `Z` = B, `F` = X button, `C` = Y button, `Q` = L, `R` = R,
+`E` = Z, `Enter` = Start) and **Classic** (the original layout: arrows
+move, `S`/`A`/`W` are X/Y/R). Any binding can be changed per button in
+the launcher, or in the file.
+
+A USB gamepad (anything SDL recognises, hot-plugged at any time) maps
+its face buttons to A/B/X/Y, right shoulder to Z, D-pad to D-pad, sticks
+to sticks, and the analog triggers to L/R with their click. Buttons are
+remappable in the same Controls section, with a stick dead-zone slider.
+
+The mouse steers the camera (the C-stick): move it over the game window
+and the stick follows, centring when your hand stops. Left click is A,
+right click is B; sensitivity and Y inversion are in the launcher.
+`tools/probes/kb_probe` prints what the keyboard and mouse are producing,
+live, in the same button words the guest reads.
+
 ## Building
 
 ```sh

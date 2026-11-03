@@ -1915,6 +1915,18 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
                     (uint8_t)(gp >> 16), (uint8_t)(gp >> 24),
                     (uint8_t)(gp >> 32), (uint8_t)(gp >> 40),
                     (uint8_t)(gp >> 48), (uint8_t)(gp >> 56));
+                {   /* The mouse rides the C-stick when it is deflected;
+                     * centred, the pad's own C-stick stands. Called once
+                     * per frame, here, because it drains the accumulator. */
+                    void mgs_video_mouse_substick(uint8_t*, uint8_t*);
+                    uint8_t mx, my;
+                    mgs_video_mouse_substick(&mx, &my);
+                    if (mx != 128u || my != 128u)
+                        mgs_mmio_set_pad_analog(mmio_p,
+                            (uint8_t)(gp >> 16), (uint8_t)(gp >> 24),
+                            mx, my,
+                            (uint8_t)(gp >> 48), (uint8_t)(gp >> 56));
+                }
             }
             mgs_mmio_tick_frame(mmio_p);
             mgs_interrupt_vi(mod, cpu);

@@ -10,6 +10,8 @@
 #include "launcher.h"
 #include "launcher_core.h"
 #include "platform/exi_card.h"
+#include "platform/controls.h"
+#include "platform/sdl_video.h"
 
 #include <SDL3/SDL.h>
 #include "imgui.h"
@@ -105,6 +107,9 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
     memset(out->disc2, 0, sizeof out->disc2);
     memset(disc, 0, sizeof disc);
     mgs_settings_load(&set);
+    MgsControls ctl;
+    mgs_controls_load(&ctl);
+    int capture_btn = -1;   /* GC button waiting for a key press, -1 none */
     SDL_strlcpy(disc[0].path, set.disc1, sizeof disc[0].path);
     SDL_strlcpy(disc[1].path, set.disc2, sizeof disc[1].path);
     if (!disc[0].path[0] && out->found_disc1[0])
@@ -145,6 +150,16 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
         while (SDL_PollEvent(&ev)) {
             ImGui_ImplSDL3_ProcessEvent(&ev);
             if (ev.type == SDL_EVENT_QUIT) { done = 1; result = 0; }
+            if (capture_btn >= 0 && ev.type == SDL_EVENT_KEY_DOWN) {
+                if (ev.key.key == SDLK_ESCAPE) {
+                    /* cancelled: keep the old binding */
+                } else if (ev.key.key != SDLK_UNKNOWN) {
+                    ctl.key[capture_btn][0] = (int32_t)ev.key.key;
+                    ctl.key[capture_btn][1] = 0;
+                    ctl.preset = MGS_PRESET_CUSTOM;
+                }
+                capture_btn = -1;
+            }
         }
         SDL_LockMutex(g_pending.lock);
         if (g_pending.slot) {
@@ -267,6 +282,103 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+        ImGui::SeparatorText("Controls");
+        {
+            static const char* const preset_names = "Classic\0WASD\0Custom\0";
+            ImGui::SetNextItemWidth(360.0f);
+            if (ImGui::Combo("Preset", &ctl.preset, preset_names)) {
+                if (ctl.preset != MGS_PRESET_CUSTOM)
+                    mgs_controls_defaults(&ctl, ctl.preset);
+            }
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "WASD moves; every key can be changed below");
+
+            ImGui::TextUnformatted("Keyboard");
+            for (int b = 0; b < MGS_BTN_COUNT; ++b) {
+                char label[128];
+                label[0] = '\0';
+                for (int s = 0; s < MGS_KEYS_PER_BUTTON; ++s) {
+                    if (!ctl.key[b][s]) continue;
+                    if (label[0]) SDL_strlcat(label, " + ", sizeof label);
+                    SDL_strlcat(label, SDL_GetKeyName((SDL_Keycode)ctl.key[b][s]),
+                                sizeof label);
+                }
+                if (!label[0]) SDL_strlcpy(label, "(none)", sizeof label);
+                ImGui::PushID(b);
+                ImGui::Text("%-8s", mgs_controls_button_name(b));
+                ImGui::SameLine(110.0f);
+                if (capture_btn == b) {
+                    ImGui::Button("press a key... (Esc cancels)", ImVec2(260.0f, 0.0f));
+                } else if (ImGui::Button(label, ImVec2(260.0f, 0.0f))) {
+                    capture_btn = b;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("clear")) {
+                    ctl.key[b][0] = 0;
+                    ctl.key[b][1] = 0;
+                    ctl.preset = MGS_PRESET_CUSTOM;
+                    if (capture_btn == b) capture_btn = -1;
+                }
+                ImGui::PopID();
+            }
+
+            ImGui::TextUnformatted("Gamepad");
+            {
+                char items[512];
+                items[0] = '\0';
+                SDL_strlcat(items, "none", sizeof items);
+                for (int i = 0; i < MGS_PADBTN_COUNT; ++i) {
+                    SDL_strlcat(items, "\0", sizeof items);
+                    SDL_strlcat(items, mgs_controls_padbtn_name(i), sizeof items);
+                }
+                SDL_strlcat(items, "\0", sizeof items);
+                for (int b = 0; b < MGS_BTN_COUNT; ++b) {
+                    int sel = (int)ctl.pad[b] + 1;
+                    ImGui::PushID(100 + b);
+                    ImGui::Text("%-8s", mgs_controls_button_name(b));
+                    ImGui::SameLine(110.0f);
+                    ImGui::SetNextItemWidth(260.0f);
+                    if (ImGui::Combo("", &sel, items)) {
+                        ctl.pad[b] = (int8_t)(sel - 1);
+                        ctl.preset = MGS_PRESET_CUSTOM;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::SetNextItemWidth(360.0f);
+                ImGui::SliderFloat("Stick dead zone", &ctl.deadzone, 0.0f, 0.5f, "%.2f");
+                ImGui::TextColored(kDim, "L and R stay on the analog triggers.");
+            }
+
+            ImGui::TextUnformatted("Mouse");
+            {
+                bool en = ctl.mouse.enabled != 0, cl = ctl.mouse.clicks != 0,
+                     iv = ctl.mouse.invert_y != 0;
+                if (ImGui::Checkbox("Mouse steers the camera (C-stick)", &en))
+                    ctl.mouse.enabled = en;
+                if (ImGui::Checkbox("Mouse buttons: left = A, right = B", &cl))
+                    ctl.mouse.clicks = cl;
+                if (ImGui::Checkbox("Invert mouse Y", &iv)) ctl.mouse.invert_y = iv;
+                ImGui::SetNextItemWidth(360.0f);
+                ImGui::SliderFloat("Mouse sensitivity", &ctl.mouse.sensitivity,
+                                   0.2f, 3.0f, "%.1f");
+            }
+
+            {
+                uint16_t held = mgs_video_pad();
+                char now[256];
+                now[0] = '\0';
+                for (int b = 0; b < MGS_BTN_COUNT; ++b) {
+                    if (!(held & mgs_controls_button_bit(b))) continue;
+                    if (now[0]) SDL_strlcat(now, " ", sizeof now);
+                    SDL_strlcat(now, mgs_controls_button_name(b), sizeof now);
+                }
+                ImGui::Text("Keys now read as:");
+                ImGui::SameLine();
+                if (now[0]) ImGui::TextColored(kGood, "%s", now);
+                else ImGui::TextColored(kDim, "-");
+            }
+        }
+
         const bool ready = disc[0].status == MGS_DISC_OK &&
                            (disc[1].status == MGS_DISC_OK || !disc[1].path[0]) &&
                            module_path && module_path[0];
@@ -278,7 +390,7 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
         static int autoplay = -1;
         if (autoplay < 0) autoplay = SDL_getenv("MGS_LAUNCHER_AUTOPLAY") != NULL;
         if (ImGui::Button("PLAY", ImVec2(220.0f, 56.0f)) || (ready && autoplay) ||
-            (ready && ImGui::IsKeyPressed(ImGuiKey_Enter, false) && !ImGui::IsAnyItemActive())) {
+            (ready && capture_btn < 0 && ImGui::IsKeyPressed(ImGuiKey_Enter, false) && !ImGui::IsAnyItemActive())) {
             done = 1; result = 1;
         }
         ImGui::PopFont();
@@ -312,6 +424,8 @@ extern "C" int mgs_launcher_run(SDL_Window* window, SDL_Renderer* renderer,
     SDL_strlcpy(set.disc1, disc[0].path, sizeof set.disc1);
     SDL_strlcpy(set.disc2, disc[1].path, sizeof set.disc2);
     mgs_settings_save(&set);
+    mgs_controls_set(&ctl);
+    mgs_controls_save(&ctl);
     if (result) {
         mgs_settings_apply(&set);
         SDL_strlcpy(out->disc1, disc[0].path, sizeof out->disc1);
