@@ -189,12 +189,24 @@ static int adpcm_step(void* cpu, uint32_t pb, uint32_t at, int* ok)
     return out;
 }
 
+/* PER BUILD: __AXPB lives in the DOL's .bss, whose layout differs
+ * between releases (GGSPA4 0x801F5E00, GGSEA4/GGSJA4 0x801F7D00 - read
+ * out of __AXServiceVPB's own address computation in each DOL). Mixing
+ * at the PAL address on the US build writes voice state into unrelated
+ * US .bss (and into the real array at half-voice offsets), corrupting
+ * the game. Set from the host's per-build selection; MGS_AXPB still
+ * overrides for experiments. */
+static uint32_t s_axpb_base = AXPB_DEFAULT_BASE;
+
+void mgs_ax_set_pb_base(uint32_t guest_address);
+void mgs_ax_set_pb_base(uint32_t guest_address) { s_axpb_base = guest_address; }
+
 static uint32_t base(void)
 {
     static uint32_t cached;
     if (!cached) {
         const char* env = getenv("MGS_AXPB");
-        cached = env ? (uint32_t)strtoul(env, NULL, 0) : AXPB_DEFAULT_BASE;
+        cached = env ? (uint32_t)strtoul(env, NULL, 0) : s_axpb_base;
     }
     return cached;
 }
@@ -225,7 +237,20 @@ static uint32_t rd16(void* cpu, uint32_t at)
  * Without it our mix ran 3 dB over Dolphin's on average and 6-10 dB over
  * in the loud passages - exactly where a compressor acts - measured on the
  * same no-input boot (F375). */
-#define AX_COMP_TABLE      0x801E19C0u
+/* PER BUILD: __AXCompressorTable lives in the DOL's .data (GGSPA4
+ * 0x801E19C0, GGSEA4/GGSJA4 0x801E1C80 - the same six-word head, found
+ * by searching each DOL for it). At the PAL address the US build fails
+ * the head check below and falls back to the limiter: not a fault, but
+ * the wrong dynamics. */
+static uint32_t s_ax_comp_table = 0x801E19C0u;
+
+void mgs_ax_set_comp_table(uint32_t guest_address);
+void mgs_ax_set_comp_table(uint32_t guest_address)
+{
+    s_ax_comp_table = guest_address;
+}
+
+#define AX_COMP_TABLE      s_ax_comp_table
 #define AX_COMP_THRESHOLD  0x8000
 #define AX_COMP_RELEASE    10u
 #define AX_COMP_ATTACKS    11u
@@ -242,7 +267,8 @@ static int ax_compressor_ready(void* cpu)
         ready = getenv("MGS_AX_LIMITER") == NULL;
         for (k = 0; ready && k < 6u; ++k)
             if (rd16(cpu, AX_COMP_TABLE + 2u * k) != head[k]) ready = 0;
-        fprintf(stderr, "[ax] %s\n", ready
+        if (ready) fprintf(stderr, "[ax] AX compressor: the game's table at 0x%08X\n", AX_COMP_TABLE);
+        else fprintf(stderr, "[ax] %s\n", ready
                 ? "AX compressor: the game's table at 0x801E19C0"
                 : "AX compressor unavailable; using the limiter");
     }

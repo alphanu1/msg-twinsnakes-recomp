@@ -1662,7 +1662,7 @@ MgsRunResult mgs_module_run(const MgsModule* mod, void* cpu, uint64_t max_steps)
      * every step - once per 13 guest instructions - and at 12 entries the
      * index cost a 32-bit division each time. Sixteen is the same
      * diagnostic without the divide. */
-    #define RECENT 16
+    #define RECENT 128
     static uint32_t recent[RECENT];
     unsigned recent_n = 0u;
     s_recent_ring = recent;

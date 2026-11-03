@@ -903,6 +903,11 @@ static uint32_t s_dispatch_addr = 0x800201A4u; /* GGSPA4 __OSDispatchInterrupt *
 static uint32_t s_oslink_addr = 0x80020AD8u;   /* GGSPA4 OSLink */
 static uint32_t s_os_disable = 0x8001FCCCu;   /* GGSPA4 OSDisableInterrupts */
 static uint32_t s_os_restore = 0x8001FCF4u;   /* GGSPA4 OSRestoreInterrupts */
+static uint32_t s_dsp_curr_task = 0x8027DF94u; /* GGSPA4 __DSP_curr_task */
+static uint32_t s_alloc_addr = 0x8004E7BCu;    /* GGSPA4 tracking allocator */
+static uint32_t s_free_addr = 0x8004E830u;     /* GGSPA4 tracking free */
+static uint32_t s_axpb_base = 0x801F5E00u;     /* GGSPA4 __AXPB */
+static uint32_t s_ax_comp_table = 0x801E19C0u; /* GGSPA4 __AXCompressorTable */
 
 static void patch_select(const char* game_id)
 {
@@ -915,6 +920,15 @@ static void patch_select(const char* game_id)
         s_oslink_addr = 0x8002148Cu;
         s_os_disable = 0x80020680u;
         s_os_restore = 0x800206A8u;
+        s_dsp_curr_task = 0x8027E3D4u;
+        s_alloc_addr = 0x8004DD4Cu;
+        s_free_addr = 0x8004DDC0u;
+        s_axpb_base = 0x801F7D00u;
+        s_ax_comp_table = 0x801E1C80u;
+    {   void mgs_ax_set_pb_base(uint32_t);
+        void mgs_ax_set_comp_table(uint32_t);
+        mgs_ax_set_pb_base(s_axpb_base);
+        mgs_ax_set_comp_table(s_ax_comp_table); }
     }
 }
 
@@ -2190,6 +2204,8 @@ int main(int argc, char** argv)
                         MgsSdkFn probe = s_patch_lookup(s_patch_lo);
                         (void)probe;
                         mgs_interrupt_set_dispatch(s_dispatch_addr);  /* __OSDispatchInterrupt */
+                        {   void mgs_interrupt_set_dsp_curr_task(uint32_t);
+                            mgs_interrupt_set_dsp_curr_task(s_dsp_curr_task); }
                         /* OSLink(module, bss). The bss pointer is the base
                          * every engine global is an offset from, and nothing
                          * else reports it. */
@@ -2251,8 +2267,8 @@ int main(int argc, char** argv)
                             mgs_module_trace_calls3(0x80045B84u, trace_begin_dl);
                         }
                         if (getenv("MGS_TRACE_ALLOC")) {
-                            mgs_module_trace_calls(0x8004E7BCu, trace_alloc);
-                            mgs_module_trace_calls2(0x8004E830u, trace_free);
+                            mgs_module_trace_calls(s_alloc_addr, trace_alloc);
+                            mgs_module_trace_calls2(s_free_addr, trace_free);
                             mgs_module_trace_calls3(0x8001CC08u, trace_createheap);
                             mgs_module_trace_calls4(0x8001CD90u, trace_setarenalo);
                         }
@@ -2336,6 +2352,10 @@ int main(int argc, char** argv)
                         };
                         printf("\nstopped after %llu steps: %s, pc = 0x%08X\n",
                                (unsigned long long)r.steps, why[r.stop], r.pc);
+                        if (r.stop == MGS_STOP_UNCOVERED)
+                            printf("  lr = 0x%08X (return address: the "
+                                   "instruction after the bad branch)\n",
+                                   *mgs_module_lr_ptr(cpu));
                         {
                             /* r13 and r2 are the small-data-area bases, set
                              * once by __init_registers. A wrong r13 makes
