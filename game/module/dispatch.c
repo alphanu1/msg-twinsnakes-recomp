@@ -124,8 +124,17 @@ void mgs_dispatch_set_vmem(u8* base) { g_mgs_vmem = base; }
  * MGS_FPU_TRAP=1 takes the real exception instead. */
 #define MGS_OS_CURRENT_CONTEXT 0x000000D4u   /* __OSCurrentContext */
 #define MGS_OS_FPU_CONTEXT     0x000000D8u   /* __OSFPUContext */
-#define MGS_OS_SAVE_FPU        0x8001D7C8u   /* __OSSaveFPUContext, dtk-sig */
-#define MGS_OS_LOAD_FPU        0x8001D6A4u   /* __OSLoadFPUContext, dtk-sig */
+/* __OSSaveFPUContext / __OSLoadFPUContext. These are this build's addresses:
+ * the build stamps them, because the SDK shifts between builds (+0x9B4 on
+ * GGSEA4). Calling another build's addresses runs mid-function code on every
+ * FPU context switch and corrupts the switched registers - that is how the
+ * USA build died. Defaults are GGSPA4's. */
+#ifndef MGS_OS_SAVE_FPU
+#define MGS_OS_SAVE_FPU        0x8001D7C8u
+#endif
+#ifndef MGS_OS_LOAD_FPU
+#define MGS_OS_LOAD_FPU        0x8001D6A4u
+#endif
 
 bool __real_ppc_fp_available(CPUState* cpu, u32 cia);
 bool __wrap_ppc_fp_available(CPUState* cpu, u32 cia);

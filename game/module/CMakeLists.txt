@@ -29,6 +29,13 @@ endif()
 # run on the current host.
 set(REL_BASE "0x7F008000" CACHE STRING "Virtual load address of the overlay")
 
+# Which build this module is for. Stamps MODULE_GAME_ID (the host refuses a
+# module whose id differs from the mounted disc's) and names the output
+# g<id>_recomp after it. GGSPA4 is the only build with a verified module;
+# another id needs that build's own DolRecomp generation and config
+# (config/GGSEA4.toml) - the id alone does not port anything.
+set(MGS_GAME_ID "GGSPA4" CACHE STRING "Six-character game id of the build")
+
 foreach(V DOL_GENERATED REL_GENERATED GXRUNTIME_DIR)
   if(NOT ${V})
     message(FATAL_ERROR "set -D${V}=<path>")
@@ -139,6 +146,19 @@ add_library(mgs_dispatch OBJECT dispatch.c)
 target_include_directories(mgs_dispatch PRIVATE
   "${GXRUNTIME_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}")
 set_target_properties(mgs_dispatch PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# The in-place FPU context switch calls this build's __OSSaveFPUContext /
+# __OSLoadFPUContext. The SDK shifts between builds (+0x9B4 on GGSEA4), so the
+# addresses are stamped per build; another build's addresses run mid-function
+# code on every FPU switch and corrupt the switched state.
+if(MGS_GAME_ID STREQUAL "GGSEA4" OR MGS_GAME_ID STREQUAL "GGSJA4")
+  set(MGS_OS_LOAD_FPU_ADDR 0x8001E058)
+  set(MGS_OS_SAVE_FPU_ADDR 0x8001E17C)
+else()
+  set(MGS_OS_LOAD_FPU_ADDR 0x8001D6A4)
+  set(MGS_OS_SAVE_FPU_ADDR 0x8001D7C8)
+endif()
+target_compile_definitions(mgs_dispatch PRIVATE
+  MGS_OS_LOAD_FPU=${MGS_OS_LOAD_FPU_ADDR} MGS_OS_SAVE_FPU=${MGS_OS_SAVE_FPU_ADDR})
 
 # --- the loadable module ----------------------------------------------------
 # ModernGekko dlopen()s this and calls staticrecomp_get_module(). The export
@@ -183,12 +203,18 @@ target_include_directories(mgs_module PRIVATE
   "${DOL_GENERATED}"                 # module_export.c includes generated.h
   "${GXRUNTIME_DIR}/include" "${CHASSIS_ABI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(mgs_module PRIVATE
-  DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="GGSPA4")
+  DOLRECOMP_ENABLE_REPLACEMENTS=1 MODULE_GAME_ID="${MGS_GAME_ID}")
 # The float helpers live here; see -fno-semantic-interposition above.
 if(NOT MSVC)
   target_compile_options(mgs_module PRIVATE -fno-fast-math -ffp-contract=off
                                             -fno-semantic-interposition)
 endif()
+
+# _fltused (see fltused.c): referenced by some DolRecomp generations
+# (GGSJA4 REL: 7988 objects; GGSEA4: none), defined by nothing else in
+# this link. Its own static library, so the linker pulls it only when an
+# object actually references it and builds that do not are unchanged.
+add_library(mgs_fltused STATIC fltused.c)
 
 # --whole-archive: the chunk functions are only ever reached through the
 # dispatch tables, never by a direct reference, so a normal static link would
@@ -196,9 +222,10 @@ endif()
 target_link_libraries(mgs_module PRIVATE
   -Wl,--whole-archive mgs_dol_code mgs_rel_code -Wl,--no-whole-archive
   $<TARGET_OBJECTS:mgs_dispatch>
-  m)   # the generated float paths call fmod/sqrt; libm is not implicit here
+  m   # the generated float paths call fmod/sqrt; libm is not implicit here
+  mgs_fltused)
 set_target_properties(mgs_module PROPERTIES
-  OUTPUT_NAME "gGGSPA4_recomp" PREFIX ""
+  OUTPUT_NAME "g${MGS_GAME_ID}_recomp" PREFIX ""
   LINK_FLAGS "-Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")
 
 # WHAT THE MODULE EXPORTS, from one list for every platform: module.exports
