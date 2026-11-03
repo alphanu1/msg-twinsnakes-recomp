@@ -1,4 +1,5 @@
 #include "sdl_video.h"
+#include "controls.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -148,37 +149,75 @@ void mgs_video_text(int x, int y, uint32_t argb, const char* text)
  * Keyboard first because it needs no hardware to test with. A real gamepad
  * goes through SDL_Gamepad and ORs into the same word.
  */
-static const struct { SDL_Keycode key; uint16_t button; } s_pad_keys[] = {
-    { SDLK_RETURN, 0x1000u },   /* Start  */
-    { SDLK_X,      0x0100u },   /* A      */
-    { SDLK_Z,      0x0200u },   /* B      */
-    { SDLK_S,      0x0400u },   /* X      */
-    { SDLK_A,      0x0800u },   /* Y      */
-    { SDLK_Q,      0x0040u },   /* L      */
-    { SDLK_W,      0x0020u },   /* R      */
-    { SDLK_E,      0x0010u },   /* Z      */
-    { SDLK_LEFT,   0x0001u },
-    { SDLK_RIGHT,  0x0002u },
-    { SDLK_DOWN,   0x0004u },
-    { SDLK_UP,     0x0008u },
-};
-
+/* Bindings come from controls.ini (controls.c): presets there, the
+ * launcher's Controls section edits them, and a hand-edited file is read
+ * the same way. Two keys may share a button (WASD and the arrows). */
 uint16_t mgs_video_pad(void)
 {
-    const SDL_Keycode* unused = NULL;
+    const MgsControls* c = mgs_controls_get();
     const bool* keys = SDL_GetKeyboardState(NULL);
     uint16_t held = 0u;
-    size_t i;
+    int b, s;
 
-    (void)unused;
-    if (!keys) return 0u;
-
-    for (i = 0; i < sizeof s_pad_keys / sizeof s_pad_keys[0]; ++i) {
-        SDL_Scancode sc = SDL_GetScancodeFromKey(s_pad_keys[i].key, NULL);
-        if (sc != SDL_SCANCODE_UNKNOWN && keys[sc]) held |= s_pad_keys[i].button;
+    if (keys) {
+        for (b = 0; b < MGS_BTN_COUNT; ++b)
+            for (s = 0; s < MGS_KEYS_PER_BUTTON; ++s) {
+                SDL_Scancode sc;
+                if (!c->key[b][s]) continue;
+                sc = SDL_GetScancodeFromKey((SDL_Keycode)c->key[b][s], NULL);
+                if (sc != SDL_SCANCODE_UNKNOWN && keys[sc])
+                    held |= mgs_controls_button_bit(b);
+            }
+    }
+    /* Mouse clicks as A and B, with the game window focused - reading the
+     * global mouse state without the focus check would let a click on
+     * another window press the game's buttons. */
+    if (c->mouse.enabled && c->mouse.clicks &&
+        SDL_GetKeyboardFocus() == s_window) {
+        Uint32 m = SDL_GetMouseState(NULL, NULL);
+        if (m & SDL_BUTTON_LMASK) held |= mgs_controls_button_bit(MGS_BTN_A);
+        if (m & SDL_BUTTON_RMASK) held |= mgs_controls_button_bit(MGS_BTN_B);
     }
     return held;
 }
+
+/* The mouse as the C-stick (camera, in this game). Relative motion charges
+ * a deflection that decays every frame, so the stick follows the hand and
+ * centres when the hand stops - the way a thumbstick pushed and released
+ * behaves, rather than a position the cursor happens to sit at. */
+void mgs_video_mouse_substick(uint8_t* out_x, uint8_t* out_y)
+{
+    static float s_mouse_acc_x, s_mouse_acc_y;
+    const MgsControls* c = mgs_controls_get();
+    float dx = 0.0f, dy = 0.0f, vx, vy;
+
+    *out_x = 128u;
+    *out_y = 128u;
+    if (!c->mouse.enabled) {
+        s_mouse_acc_x = 0.0f;
+        s_mouse_acc_y = 0.0f;
+        return;
+    }
+    SDL_GetRelativeMouseState(&dx, &dy);
+    if (SDL_GetKeyboardFocus() == s_window) {
+        s_mouse_acc_x += dx * 0.02f * c->mouse.sensitivity;
+        s_mouse_acc_y += dy * 0.02f * c->mouse.sensitivity
+                       * (c->mouse.invert_y ? -1.0f : 1.0f);
+    }
+    s_mouse_acc_x *= 0.75f;
+    s_mouse_acc_y *= 0.75f;
+    if (s_mouse_acc_x > 1.0f) s_mouse_acc_x = 1.0f;
+    if (s_mouse_acc_x < -1.0f) s_mouse_acc_x = -1.0f;
+    if (s_mouse_acc_y > 1.0f) s_mouse_acc_y = 1.0f;
+    if (s_mouse_acc_y < -1.0f) s_mouse_acc_y = -1.0f;
+    vx = s_mouse_acc_x;
+    vy = s_mouse_acc_y;
+    if (vx > -0.05f && vx < 0.05f) vx = 0.0f;
+    if (vy > -0.05f && vy < 0.05f) vy = 0.0f;
+    *out_x = (uint8_t)(128 + (int)(vx * 100.0f));
+    *out_y = (uint8_t)(128 - (int)(vy * 100.0f));
+}
+
 
 /* Events only: no conversion, no upload, no present.
  *

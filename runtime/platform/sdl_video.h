@@ -15,6 +15,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MGS_XFB_WIDTH  640
 #define MGS_XFB_HEIGHT 480
 
@@ -36,11 +40,21 @@ int  mgs_video_pump(void);
  * every field and wants to know what is down now. */
 uint16_t mgs_video_pad(void);
 
+/* The mouse as the C-stick, as PADStatus substick bytes (128 = centred,
+ * the same packing the gamepad path produces). Call once per frame: it
+ * drains the relative-motion accumulator, and the deflection decays, so
+ * a still mouse centres the stick again. */
+void mgs_video_mouse_substick(uint8_t* out_x, uint8_t* out_y);
+
 /* Minimal drawing, enough for a boot overlay. A real font is not the point;
  * legible hex and short labels are.
  */
 void mgs_video_clear(uint32_t argb);
 void mgs_video_text(int x, int y, uint32_t argb, const char* text);
 void mgs_video_rect(int x, int y, int w, int h, uint32_t argb);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

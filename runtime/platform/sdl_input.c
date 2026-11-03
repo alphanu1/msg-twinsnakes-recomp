@@ -9,6 +9,7 @@
  * SDL exists, on the guest-input side.
  */
 #include "../pad/pad.h"
+#include "controls.h"
 
 #include <SDL3/SDL.h>
 #include <string.h>
@@ -77,8 +78,11 @@ static float axis_norm(SDL_Gamepad* pad, SDL_GamepadAxis axis)
     /* SDL axes are signed 16-bit. Dividing by 32767 rather than 32768 so a
      * full deflection reaches exactly 1.0 instead of 0.99997, which would
      * otherwise stop the stick one unit short of the SDK's range.
-     */
-    return (float)SDL_GetGamepadAxis(pad, axis) / 32767.0f;
+     * The player's dead zone (controls.ini) flattens the centre. */
+    float v = (float)SDL_GetGamepadAxis(pad, axis) / 32767.0f;
+    float dz = mgs_controls_get()->deadzone;
+    if (v > -dz && v < dz) v = 0.0f;
+    return v;
 }
 
 static float trigger_norm(SDL_Gamepad* pad, SDL_GamepadAxis axis)
@@ -100,18 +104,26 @@ void mgs_input_read(unsigned port, MgsPadState* out)
     pad = s_input.pads[port];
     if (!pad) return;
 
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH))          src |= MGS_SRC_A;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST))           src |= MGS_SRC_B;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_WEST))           src |= MGS_SRC_X;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_NORTH))          src |= MGS_SRC_Y;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START))          src |= MGS_SRC_START;
-    /* Z has no natural home on a modern pad; the right shoulder is the least
-     * surprising, since the GameCube's own R is the analog trigger. */
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) src |= MGS_SRC_Z;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_UP))        src |= MGS_SRC_DUP;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_DOWN))      src |= MGS_SRC_DDOWN;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT))      src |= MGS_SRC_DLEFT;
-    if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT))     src |= MGS_SRC_DRIGHT;
+    /* Which pad button feeds which GameCube button is the player's
+     * (controls.ini); the defaults are the layout commented below. L and
+     * R have no entry: they ride the analog triggers into pad_map, whose
+     * click point sets those bits, as the hardware does it. */
+    {
+        static const uint16_t s_input_src_bit[MGS_BTN_COUNT] = {
+            MGS_SRC_A, MGS_SRC_B, MGS_SRC_X, MGS_SRC_Y,
+            0u, 0u,   /* L, R: analog, see above */
+            MGS_SRC_Z, MGS_SRC_START,
+            MGS_SRC_DUP, MGS_SRC_DDOWN, MGS_SRC_DLEFT, MGS_SRC_DRIGHT,
+        };
+        const MgsControls* ctl = mgs_controls_get();
+        int b;
+        for (b = 0; b < MGS_BTN_COUNT; ++b) {
+            int pb = ctl->pad[b];
+            if (pb >= 0 && s_input_src_bit[b] &&
+                SDL_GetGamepadButton(pad, (SDL_GamepadButton)pb))
+                src |= s_input_src_bit[b];
+        }
+    }
 
     mgs_pad_map(out,
                 axis_norm(pad, SDL_GAMEPAD_AXIS_LEFTX),

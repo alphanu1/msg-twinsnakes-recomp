@@ -35,6 +35,12 @@ add_executable(test_pad test_pad.c)
 target_link_libraries(test_pad PRIVATE mgs_runtime m)
 add_test(NAME pad COMMAND test_pad)
 
+if(SDL3_FOUND)
+  add_executable(test_controls test_controls.c)
+  target_link_libraries(test_controls PRIVATE mgs_runtime m)
+  add_test(NAME controls COMMAND test_controls)
+endif()
+
 add_executable(test_launcher test_launcher.c ${CMAKE_SOURCE_DIR}/host/sha1.c
                ${CMAKE_SOURCE_DIR}/host/launcher_core.c)
 target_link_libraries(test_launcher PRIVATE mgs_runtime)
@@ -51,6 +57,8 @@ endif()
 if(SDL3_FOUND)
   add_executable(pad_probe ${CMAKE_SOURCE_DIR}/tools/probes/pad_probe.c)
   target_link_libraries(pad_probe PRIVATE mgs_runtime m)
+  add_executable(kb_probe ${CMAKE_SOURCE_DIR}/tools/probes/kb_probe.c)
+  target_link_libraries(kb_probe PRIVATE mgs_runtime m)
 endif()
 
 add_executable(test_efb test_efb.c)
