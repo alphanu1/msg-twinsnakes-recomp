@@ -210,13 +210,20 @@ if(NOT MSVC)
                                             -fno-semantic-interposition)
 endif()
 
+# _fltused (see fltused.c): referenced by some DolRecomp generations
+# (GGSJA4 REL: 7988 objects; GGSEA4: none), defined by nothing else in
+# this link. Its own static library, so the linker pulls it only when an
+# object actually references it and builds that do not are unchanged.
+add_library(mgs_fltused STATIC fltused.c)
+
 # --whole-archive: the chunk functions are only ever reached through the
 # dispatch tables, never by a direct reference, so a normal static link would
 # drop every one of them as unused.
 target_link_libraries(mgs_module PRIVATE
   -Wl,--whole-archive mgs_dol_code mgs_rel_code -Wl,--no-whole-archive
   $<TARGET_OBJECTS:mgs_dispatch>
-  m)   # the generated float paths call fmod/sqrt; libm is not implicit here
+  m   # the generated float paths call fmod/sqrt; libm is not implicit here
+  mgs_fltused)
 set_target_properties(mgs_module PROPERTIES
   OUTPUT_NAME "g${MGS_GAME_ID}_recomp" PREFIX ""
   LINK_FLAGS "-Wl,--wrap=ppc_fp_available -Wl,--wrap=ppc_fp_raise_unavailable")
