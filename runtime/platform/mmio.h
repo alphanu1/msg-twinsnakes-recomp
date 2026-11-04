@@ -169,6 +169,8 @@ typedef struct MgsMmio {
     uint64_t field_count;
     uint32_t pad_script_frame[128];  /* MGS_PAD_SCRIPT */
     uint16_t pad_script_btn[128];
+    uint8_t  pad_script_sx[128];   /* optional :sx:sy stick bytes (hex) */
+    uint8_t  pad_script_sy[128];
     unsigned pad_script_n;
     uint32_t pad_frame;
     uint16_t pad_reported;

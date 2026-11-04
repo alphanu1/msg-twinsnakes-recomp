@@ -374,6 +374,15 @@ void mgs_mmio_init(MgsMmio* m)
                 m->pad_script_frame[m->pad_script_n] = (uint32_t)fr;
                 m->pad_script_btn[m->pad_script_n] =
                     (uint16_t)strtoul(q, &end, 16);
+                m->pad_script_sx[m->pad_script_n] = 0x80u;
+                m->pad_script_sy[m->pad_script_n] = 0x80u;
+                if (*end == ':') {   /* optional :sx:sy stick bytes */
+                    m->pad_script_sx[m->pad_script_n] =
+                        (uint8_t)strtoul(end + 1, &end, 16);
+                    if (*end == ':')
+                        m->pad_script_sy[m->pad_script_n] =
+                            (uint8_t)strtoul(end + 1, &end, 16);
+                }
                 ++m->pad_script_n;
                 q = (*end == ',') ? end + 1 : end;
             }
@@ -1240,10 +1249,16 @@ void mgs_mmio_tick_frame(MgsMmio* m)
     if (m->pad_script_n) {
         unsigned i;
         uint16_t held = 0u;
+        uint8_t held_sx = 0x80u, held_sy = 0x80u;
         for (i = 0; i < m->pad_script_n; ++i)
-            if (m->pad_frame >= m->pad_script_frame[i])
+            if (m->pad_frame >= m->pad_script_frame[i]) {
                 held = m->pad_script_btn[i];
+                held_sx = m->pad_script_sx[i];
+                held_sy = m->pad_script_sy[i];
+            }
         m->pad_forced = held;
+        m->pad_stick_x = held_sx;
+        m->pad_stick_y = held_sy;
         ++m->pad_frame;
     }
 
