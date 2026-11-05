@@ -35,6 +35,10 @@ add_executable(test_pad_script test_pad_script.c)
 target_link_libraries(test_pad_script PRIVATE mgs_runtime)
 add_test(NAME pad_script COMMAND test_pad_script)
 
+add_executable(test_poll_reply test_poll_reply.c)
+target_link_libraries(test_poll_reply PRIVATE mgs_runtime)
+add_test(NAME poll_reply COMMAND test_poll_reply)
+
 add_executable(test_pad test_pad.c)
 target_link_libraries(test_pad PRIVATE mgs_runtime m)
 add_test(NAME pad COMMAND test_pad)
