@@ -374,6 +374,15 @@ void mgs_mmio_init(MgsMmio* m)
                 m->pad_script_frame[m->pad_script_n] = (uint32_t)fr;
                 m->pad_script_btn[m->pad_script_n] =
                     (uint16_t)strtoul(q, &end, 16);
+                m->pad_script_sx[m->pad_script_n] = 0x80u;
+                m->pad_script_sy[m->pad_script_n] = 0x80u;
+                if (*end == ':') {   /* optional :sx:sy stick bytes */
+                    m->pad_script_sx[m->pad_script_n] =
+                        (uint8_t)strtoul(end + 1, &end, 16);
+                    if (*end == ':')
+                        m->pad_script_sy[m->pad_script_n] =
+                            (uint8_t)strtoul(end + 1, &end, 16);
+                }
                 ++m->pad_script_n;
                 q = (*end == ',') ? end + 1 : end;
             }
@@ -686,6 +695,13 @@ static int si_reply(MgsMmio* m, unsigned chan, uint8_t cmd, unsigned inlen)
             buf[0] = (uint8_t)(m->pad_buttons >> 8);
             buf[1] = (uint8_t)(m->pad_buttons);
             if (cmd == 0x40u) {
+                /* A real controller sets bit 0x80 of the second reply
+                 * byte in every poll response. The SDK's PAD conversion
+                 * treats a poll without it as "no analog data" and
+                 * zeroes both sticks (it also latches a recalibrate
+                 * request), so leaving it clear silently kills all
+                 * stick input while buttons keep working. */
+                buf[1] |= 0x80u;
                 buf[2] = m->pad_stick_x; buf[3] = m->pad_stick_y;
                 buf[4] = m->pad_sub_x;   buf[5] = m->pad_sub_y;
                 buf[6] = m->pad_trig_l;  buf[7] = m->pad_trig_r;
@@ -704,6 +720,27 @@ static int si_reply(MgsMmio* m, unsigned chan, uint8_t cmd, unsigned inlen)
 
     if (n > inlen) n = inlen;
     for (i = 0; i < n; ++i) io[i] = buf[i];
+
+    /* Diagnostic (MGS_TRACE_SI): prove what the host handed the guest on
+     * every reply path. Interesting replies only - a poll with buttons
+     * down or the stick off centre, plus every origin/type reply - and
+     * throttled, since polls arrive once per field. */
+    if (m->trace_si && chan == 0u) {
+        static unsigned s_reply_seen, s_reply_shown;
+        int interesting = (cmd != 0x40u) ||
+            buf[0] || buf[1] || buf[2] != 0x80u || buf[3] != 0x80u;
+        if (interesting) {
+            ++s_reply_seen;
+            if (s_reply_shown < 40u || (s_reply_seen % 200u) == 0u) {
+                ++s_reply_shown;
+                fprintf(stderr,
+                        "[si] reply cmd=0x%02X btn=%02X%02X stick=%02X,%02X "
+                        "field=%llu\n",
+                        cmd, buf[0], buf[1], buf[2], buf[3],
+                        (unsigned long long)m->field_count);
+            }
+        }
+    }
     return 1;
 }
 
@@ -724,6 +761,13 @@ static void si_consume_read(MgsMmio* m, uint32_t addr)
     off = addr - MMIO_SI;
     ch  = off / SI_CHAN_STRIDE;
     if (off % SI_CHAN_STRIDE != SI_CHAN_INBUFH) return;
+
+    if (m->trace_si) {
+        fprintf(stderr, "[si] INBUF ch%u H=0x%08X L=0x%08X field=%llu\n",
+                ch, si_reg(m, ch * SI_CHAN_STRIDE + SI_CHAN_INBUFH),
+                si_reg(m, ch * SI_CHAN_STRIDE + SI_CHAN_INBUFL),
+                (unsigned long long)m->field_count);
+    }
 
     st = si_reg(m, SI_STATUS);
     if (!(st & SI_RDST(ch))) return;
@@ -1240,10 +1284,16 @@ void mgs_mmio_tick_frame(MgsMmio* m)
     if (m->pad_script_n) {
         unsigned i;
         uint16_t held = 0u;
+        uint8_t held_sx = 0x80u, held_sy = 0x80u;
         for (i = 0; i < m->pad_script_n; ++i)
-            if (m->pad_frame >= m->pad_script_frame[i])
+            if (m->pad_frame >= m->pad_script_frame[i]) {
                 held = m->pad_script_btn[i];
+                held_sx = m->pad_script_sx[i];
+                held_sy = m->pad_script_sy[i];
+            }
         m->pad_forced = held;
+        m->pad_stick_x = held_sx;
+        m->pad_stick_y = held_sy;
         ++m->pad_frame;
     }
 
